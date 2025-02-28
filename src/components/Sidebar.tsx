@@ -37,7 +37,7 @@ const Sidebar: React.FC = () => {
             </li>
             <li>
               <a
-                href="#"
+                href="/patient-entry"
                 className="flex items-center p-2 rounded-md transition duration-200 hover:bg-blue-500 hover:text-white"
               >
                 <svg
@@ -58,7 +58,7 @@ const Sidebar: React.FC = () => {
             </li>
             <li>
               <a
-                href="#"
+                href="/createbloodtest"
                 className="flex items-center p-2 rounded-md transition duration-200 hover:bg-blue-500 hover:text-white"
               >
                 <svg
@@ -80,7 +80,7 @@ const Sidebar: React.FC = () => {
                     d="M9 21V9h6v12"
                   />
                 </svg>
-                Test Orders
+               Add Test
               </a>
             </li>
             <li>
