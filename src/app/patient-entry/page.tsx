@@ -1,10 +1,16 @@
 "use client";
 
 import React from "react";
-import { useForm, SubmitHandler } from "react-hook-form";
+import { useForm, useFieldArray, SubmitHandler } from "react-hook-form";
 import { database } from "../../firebase";
 import { ref, push, set, get, child } from "firebase/database";
 import { UserCircleIcon, PhoneIcon } from "@heroicons/react/24/outline";
+
+interface BloodTestSelection {
+  testId: string;
+  testName: string;
+  price: number;
+}
 
 interface IFormInput {
   name: string;
@@ -14,6 +20,11 @@ interface IFormInput {
   address?: string;
   email?: string;
   doctorName?: string;
+  // Updated bloodTests field now stores selected testId plus its details.
+  bloodTests: BloodTestSelection[];
+  discountPercentage: number;
+  amountPaid: number;
+  paymentMode: "online" | "offline";
 }
 
 const PatientEntryPage: React.FC = () => {
@@ -22,12 +33,31 @@ const PatientEntryPage: React.FC = () => {
     handleSubmit,
     watch,
     setValue,
+    control,
     formState: { errors, isSubmitting },
-    reset
-  } = useForm<IFormInput>();
+    reset,
+  } = useForm<IFormInput>({
+    defaultValues: {
+      name: "",
+      contact: "",
+      age: 0,
+      gender: "",
+      address: "",
+      email: "",
+      doctorName: "",
+      bloodTests: [{ testId: "", testName: "", price: 0 }],
+      discountPercentage: 0,
+      amountPaid: 0,
+      paymentMode: "online",
+    },
+  });
 
   // State to hold previously used doctor names
   const [doctorNames, setDoctorNames] = React.useState<string[]>([]);
+  // State to hold available blood tests from the database
+  const [availableBloodTests, setAvailableBloodTests] = React.useState<
+    { id: string; testName: string; price: number }[]
+  >([]);
 
   // Fetch unique doctor names from previous patient entries in Firebase
   React.useEffect(() => {
@@ -53,15 +83,61 @@ const PatientEntryPage: React.FC = () => {
     fetchDoctorNames();
   }, []);
 
+  // Fetch available blood tests from the "bloodTests" node in the database
+  React.useEffect(() => {
+    const fetchBloodTests = async () => {
+      try {
+        const testsRef = ref(database, "bloodTests");
+        const snapshot = await get(testsRef);
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          // Convert the bloodTests object to an array of { id, testName, price }
+          const testsArray = Object.keys(data).map((key) => ({
+            id: key,
+            testName: data[key].testName,
+            price: Number(data[key].price),
+          }));
+          setAvailableBloodTests(testsArray);
+        }
+      } catch (error) {
+        console.error("Error fetching blood tests: ", error);
+      }
+    };
+
+    fetchBloodTests();
+  }, []);
+
   // Watch the doctorName field to provide auto-suggestions
   const watchDoctorName = watch("doctorName", "");
 
   const filteredSuggestions = React.useMemo(() => {
     if (!watchDoctorName || watchDoctorName.trim().length === 0) return [];
-    return doctorNames.filter(name =>
+    return doctorNames.filter((name) =>
       name.toLowerCase().startsWith(watchDoctorName.toLowerCase())
     );
   }, [watchDoctorName, doctorNames]);
+
+  // Blood Tests field array for dynamic blood test selection
+  const {
+    fields: bloodTestFields,
+    append: appendBloodTest,
+    remove: removeBloodTest,
+  } = useFieldArray({
+    control,
+    name: "bloodTests",
+  });
+
+  // Watch blood tests, discount, and amount paid to compute totals
+  const bloodTests = watch("bloodTests");
+  const discountPercentage = watch("discountPercentage", 0);
+  const amountPaid = watch("amountPaid", 0);
+
+  const totalAmount = bloodTests.reduce(
+    (acc, test) => acc + (Number(test.price) || 0),
+    0
+  );
+  const discountValue = totalAmount * (Number(discountPercentage) / 100);
+  const remainingAmount = totalAmount - discountValue - Number(amountPaid);
 
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     try {
@@ -91,7 +167,9 @@ const PatientEntryPage: React.FC = () => {
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-gray-700">Patient Information</h3>
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Full Name</label>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Full Name
+                </label>
                 <div className="relative">
                   <input
                     {...register("name", { required: "Name is required" })}
@@ -100,11 +178,15 @@ const PatientEntryPage: React.FC = () => {
                   />
                   <UserCircleIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
-                {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>}
+                {errors.name && (
+                  <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Contact Number</label>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Contact Number
+                </label>
                 <div className="relative">
                   <input
                     {...register("contact")}
@@ -117,20 +199,26 @@ const PatientEntryPage: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">Age</label>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    Age
+                  </label>
                   <input
                     type="number"
                     {...register("age", {
                       required: "Age is required",
-                      min: { value: 0, message: "Age must be positive" }
+                      min: { value: 0, message: "Age must be positive" },
                     })}
                     className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
                   />
-                  {errors.age && <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>}
+                  {errors.age && (
+                    <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">Gender</label>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    Gender
+                  </label>
                   <select
                     {...register("gender", { required: "Gender is required" })}
                     className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -140,16 +228,22 @@ const PatientEntryPage: React.FC = () => {
                     <option value="Female">Female</option>
                     <option value="Other">Other</option>
                   </select>
-                  {errors.gender && <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>}
+                  {errors.gender && (
+                    <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* Additional Information Section (Optional) */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-gray-700">Additional Information (Optional)</h3>
+              <h3 className="text-lg font-semibold text-gray-700">
+                Additional Information (Optional)
+              </h3>
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Address</label>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Address
+                </label>
                 <input
                   {...register("address")}
                   className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -158,7 +252,9 @@ const PatientEntryPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Email</label>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Email
+                </label>
                 <input
                   type="email"
                   {...register("email")}
@@ -170,9 +266,13 @@ const PatientEntryPage: React.FC = () => {
 
             {/* Doctor Referral Section */}
             <div className="space-y-4 relative">
-              <h3 className="text-lg font-semibold text-gray-700">Doctor Referral</h3>
+              <h3 className="text-lg font-semibold text-gray-700">
+                Doctor Referral
+              </h3>
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Doctor Name</label>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Doctor Name
+                </label>
                 <input
                   {...register("doctorName")}
                   className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -193,6 +293,197 @@ const PatientEntryPage: React.FC = () => {
                   ))}
                 </ul>
               )}
+            </div>
+
+            {/* Blood Test & Payment Details Section */}
+            <div className="space-y-4 border-t pt-6">
+              <h3 className="text-lg font-semibold text-gray-700">
+                Blood Test Selection & Payment Details
+              </h3>
+
+              {/* Blood Test Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Select Blood Tests
+                </label>
+                <div className="space-y-4">
+                  {bloodTestFields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="flex flex-col sm:flex-row sm:space-x-4 items-start sm:items-end border p-4 rounded-lg"
+                    >
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">
+                          Test Name
+                        </label>
+                        <select
+                          {...register(`bloodTests.${index}.testId` as const, {
+                            required: "Blood test is required",
+                          })}
+                          onChange={(e) => {
+                            const selectedId = e.target.value;
+                            const selectedTest = availableBloodTests.find(
+                              (t) => t.id === selectedId
+                            );
+                            if (selectedTest) {
+                              // Set the testName and price based on the selected test
+                              setValue(
+                                `bloodTests.${index}.testName`,
+                                selectedTest.testName
+                              );
+                              setValue(
+                                `bloodTests.${index}.price`,
+                                selectedTest.price
+                              );
+                            } else {
+                              // Reset if no test is selected
+                              setValue(`bloodTests.${index}.testName`, "");
+                              setValue(`bloodTests.${index}.price`, 0);
+                            }
+                          }}
+                          className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">Select a test</option>
+                          {availableBloodTests.map((test) => (
+                            <option key={test.id} value={test.id}>
+                              {test.testName}
+                            </option>
+                          ))}
+                        </select>
+                        {errors.bloodTests?.[index]?.testId && (
+                          <p className="text-red-500 text-xs mt-1">
+                            {errors.bloodTests[index]?.testId?.message}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex-1 mt-4 sm:mt-0">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">
+                          Price (Rs.)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          {...register(`bloodTests.${index}.price` as const, {
+                            required: "Price is required",
+                            valueAsNumber: true,
+                          })}
+                          className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Auto-filled"
+                          readOnly
+                        />
+                        {errors.bloodTests?.[index]?.price && (
+                          <p className="text-red-500 text-xs mt-1">
+                            {errors.bloodTests[index]?.price?.message}
+                          </p>
+                        )}
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => removeBloodTest(index)}
+                          className="text-red-500 hover:text-red-700 text-sm mt-4 sm:mt-0"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    appendBloodTest({ testId: "", testName: "", price: 0 })
+                  }
+                  className="mt-4 inline-flex items-center px-4 py-2 border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
+                >
+                  Add Blood Test
+                </button>
+              </div>
+
+              {/* Payment Details */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    Discount (%)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    {...register("discountPercentage", {
+                      required: "Discount is required",
+                      valueAsNumber: true,
+                    })}
+                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter discount percentage"
+                  />
+                  {errors.discountPercentage && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.discountPercentage.message}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    Amount Paid (Rs.)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    {...register("amountPaid", {
+                      required: "Amount paid is required",
+                      valueAsNumber: true,
+                    })}
+                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter amount paid"
+                  />
+                  {errors.amountPaid && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.amountPaid.message}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {/* Display computed totals */}
+              <div className="space-y-2">
+                <p className="text-sm text-gray-700">
+                  Total Amount: <strong>Rs. {totalAmount.toFixed(2)}</strong>
+                </p>
+                <p className="text-sm text-gray-700">
+                  Discount: <strong>Rs. {discountValue.toFixed(2)}</strong>
+                </p>
+                <p className="text-sm text-gray-700">
+                  Remaining Amount:{" "}
+                  <strong>Rs. {remainingAmount.toFixed(2)}</strong>
+                </p>
+              </div>
+
+              {/* Payment Mode */}
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Payment Mode
+                </label>
+                <div className="flex space-x-6">
+                  <label className="inline-flex items-center">
+                    <input
+                      type="radio"
+                      value="online"
+                      {...register("paymentMode", { required: true })}
+                      className="form-radio text-blue-600"
+                      defaultChecked
+                    />
+                    <span className="ml-2">Online</span>
+                  </label>
+                  <label className="inline-flex items-center">
+                    <input
+                      type="radio"
+                      value="offline"
+                      {...register("paymentMode", { required: true })}
+                      className="form-radio text-blue-600"
+                    />
+                    <span className="ml-2">Offline</span>
+                  </label>
+                </div>
+              </div>
             </div>
 
             <button

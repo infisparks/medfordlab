@@ -7,8 +7,7 @@ import { database } from "../../../firebase";
 import { ref, push, set } from "firebase/database";
 import {
   BeakerIcon,
-  DocumentTextIcon,
-  UserCircleIcon,
+ 
   CalendarIcon,
   XMarkIcon,
 } from "@heroicons/react/24/outline";
@@ -25,7 +24,8 @@ interface ReportFormInput {
 
 export default function ReportForm() {
   const router = useRouter();
-  const { register, handleSubmit, formState: { errors } } = useForm<ReportFormInput>();
+  const { register, handleSubmit } = useForm<ReportFormInput>();
+
 
   const onSubmit: SubmitHandler<ReportFormInput> = async (data) => {
     try {

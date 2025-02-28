@@ -7,11 +7,17 @@ import { database } from "../firebase";
 import { ref, onValue } from "firebase/database";
 import {
   UserIcon,
-  DocumentPlusIcon,
   ChartBarIcon,
   ClockIcon,
   UserGroupIcon,
+  DocumentPlusIcon,
 } from "@heroicons/react/24/outline";
+
+interface BloodTest {
+  testId: string;
+  testName: string;
+  price: number;
+}
 
 interface Patient {
   id: string;
@@ -19,7 +25,8 @@ interface Patient {
   age: number;
   gender: string;
   contact?: string;
-  createdAt: string; // Use createdAt instead of appointmentDate
+  createdAt: string;
+  bloodTests?: BloodTest[]; // Contains the selected blood tests for the patient
 }
 
 export default function Dashboard() {
@@ -40,7 +47,7 @@ export default function Dashboard() {
           id: key,
           ...data[key],
         }));
-        // Sort so that latest entries appear first using createdAt timestamp
+        // Sort so that the latest entries (by createdAt) appear first
         const sortedPatients = patientList.sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
@@ -145,6 +152,7 @@ export default function Dashboard() {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Patient</th>
+                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Tests</th>
                     <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Entry Date</th>
                     <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Status</th>
                     <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Actions</th>
@@ -156,8 +164,21 @@ export default function Dashboard() {
                       <td className="px-6 py-4">
                         <div>
                           <p className="font-medium">{patient.name}</p>
-                          <p className="text-sm text-gray-500">{patient.age}y • {patient.gender}</p>
+                          <p className="text-sm text-gray-500">
+                            {patient.age}y • {patient.gender}
+                          </p>
                         </div>
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        {patient.bloodTests && patient.bloodTests.length > 0 ? (
+                          <ul className="list-disc pl-4">
+                            {patient.bloodTests.map((test) => (
+                              <li key={test.testId}>{test.testName}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <span className="text-gray-400">No tests</span>
+                        )}
                       </td>
                       <td className="px-6 py-4 text-sm">
                         {new Date(patient.createdAt).toLocaleDateString()}
@@ -169,11 +190,11 @@ export default function Dashboard() {
                       </td>
                       <td className="px-6 py-4">
                         <Link
-                          href={`/reports/new?patientId=${patient.id}`}
+                          href={`/blood-values/new?patientId=${patient.id}`}
                           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                         >
                           <DocumentPlusIcon className="h-4 w-4 mr-2" />
-                          Add Report
+                          Add Value
                         </Link>
                       </td>
                     </tr>
