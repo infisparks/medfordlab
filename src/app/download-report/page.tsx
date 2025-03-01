@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
 import { ref as dbRef, get } from "firebase/database";
@@ -43,7 +43,7 @@ const loadImageAsCompressedJPEG = async (
   });
 };
 
-export default function DownloadReport() {
+function DownloadReport() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const patientId = searchParams.get("patientId");
@@ -277,8 +277,8 @@ export default function DownloadReport() {
         doc.addImage(stampBase64, "JPEG", stampX, stampY, stampWidth, stampHeight);
 
         // Instead of auto-downloading, store the generated PDF as a Blob
-        const pdfBlob = doc.output("blob");
-        setPdfBlob(pdfBlob);
+        const generatedPdfBlob = doc.output("blob");
+        setPdfBlob(generatedPdfBlob);
       } catch (error) {
         console.error("Error generating report:", error);
         alert("Error generating report. Please try again.");
@@ -428,5 +428,14 @@ export default function DownloadReport() {
         )}
       </div>
     </div>
+  );
+}
+
+// Wrap the component in a Suspense boundary so that useSearchParams() is rendered safely
+export default function DownloadReportPage() {
+  return (
+    <Suspense fallback={<div>Loading Report...</div>}>
+      <DownloadReport />
+    </Suspense>
   );
 }
