@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { database } from "../../firebase";
-import { ref, get, update} from "firebase/database";
+import { ref, get, update, remove as dbRemove } from "firebase/database";
 import { useForm, useFieldArray, SubmitHandler } from "react-hook-form";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -67,7 +67,8 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
     },
   });
 
-  const { fields, append, remove } = useFieldArray({
+  // Rename the field array's remove to avoid conflict with Firebase's remove
+  const { fields, append, remove: removeField } = useFieldArray({
     control,
     name: "parameters",
   });
@@ -92,7 +93,7 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
     if (!window.confirm("Are you sure you want to delete this test?")) return;
     try {
       const testRef = ref(database, `bloodTests/${testData.key}`);
-      await remove(testRef);
+      await dbRemove(testRef);
       alert("Test deleted successfully!");
       onTestDeleted();
       onClose();
@@ -196,7 +197,7 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
                   </span>
                   <button
                     type="button"
-                    onClick={() => remove(index)}
+                    onClick={() => removeField(index)}
                     className="text-red-400 hover:text-red-600 text-sm"
                   >
                     <FontAwesomeIcon icon={faTrash} />
