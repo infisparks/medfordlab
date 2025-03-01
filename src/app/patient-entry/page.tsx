@@ -14,13 +14,12 @@ interface BloodTestSelection {
 
 interface IFormInput {
   name: string;
-  contact?: string;
+  contact: string; // Mandatory, 10-digit
   age: number;
   gender: string;
   address?: string;
   email?: string;
   doctorName?: string;
-  // Updated bloodTests field now stores selected testId plus its details.
   bloodTests: BloodTestSelection[];
   discountPercentage: number;
   amountPaid: number;
@@ -54,12 +53,12 @@ const PatientEntryPage: React.FC = () => {
 
   // State to hold previously used doctor names
   const [doctorNames, setDoctorNames] = React.useState<string[]>([]);
-  // State to hold available blood tests from the database
+  // State to hold available blood tests
   const [availableBloodTests, setAvailableBloodTests] = React.useState<
     { id: string; testName: string; price: number }[]
   >([]);
 
-  // Fetch unique doctor names from previous patient entries in Firebase
+  // Fetch unique doctor names from previous entries
   React.useEffect(() => {
     const fetchDoctorNames = async () => {
       try {
@@ -83,7 +82,7 @@ const PatientEntryPage: React.FC = () => {
     fetchDoctorNames();
   }, []);
 
-  // Fetch available blood tests from the "bloodTests" node in the database
+  // Fetch available blood tests from the "bloodTests" node
   React.useEffect(() => {
     const fetchBloodTests = async () => {
       try {
@@ -91,7 +90,6 @@ const PatientEntryPage: React.FC = () => {
         const snapshot = await get(testsRef);
         if (snapshot.exists()) {
           const data = snapshot.val();
-          // Convert the bloodTests object to an array of { id, testName, price }
           const testsArray = Object.keys(data).map((key) => ({
             id: key,
             testName: data[key].testName,
@@ -107,9 +105,8 @@ const PatientEntryPage: React.FC = () => {
     fetchBloodTests();
   }, []);
 
-  // Watch the doctorName field to provide auto-suggestions
+  // Watch the doctorName field for auto-suggestions
   const watchDoctorName = watch("doctorName", "");
-
   const filteredSuggestions = React.useMemo(() => {
     if (!watchDoctorName || watchDoctorName.trim().length === 0) return [];
     return doctorNames.filter((name) =>
@@ -117,7 +114,7 @@ const PatientEntryPage: React.FC = () => {
     );
   }, [watchDoctorName, doctorNames]);
 
-  // Blood Tests field array for dynamic blood test selection
+  // Field array for dynamic blood test selection
   const {
     fields: bloodTestFields,
     append: appendBloodTest,
@@ -127,7 +124,7 @@ const PatientEntryPage: React.FC = () => {
     name: "bloodTests",
   });
 
-  // Watch blood tests, discount, and amount paid to compute totals
+  // Compute totals
   const bloodTests = watch("bloodTests");
   const discountPercentage = watch("discountPercentage", 0);
   const amountPaid = watch("amountPaid", 0);
@@ -139,17 +136,51 @@ const PatientEntryPage: React.FC = () => {
   const discountValue = totalAmount * (Number(discountPercentage) / 100);
   const remainingAmount = totalAmount - discountValue - Number(amountPaid);
 
+  // Handle form submission
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     try {
+      // 1. Save to Firebase
       const patientsRef = ref(database, "patients");
       const newPatientRef = push(patientsRef);
-      // Add current timestamp to the data before saving
       await set(newPatientRef, { ...data, createdAt: new Date().toISOString() });
-      alert("Patient information saved successfully!");
+
+      // 2. Construct the WhatsApp message
+      const testNames = data.bloodTests.map((test) => test.testName).join(", ");
+      // Only show discount line if discount > 0
+      const discountLine =
+        data.discountPercentage > 0
+          ? `Discount: ${data.discountPercentage}%\n`
+          : "";
+
+      const message = `Dear ${data.name},\n
+Thank you for choosing our services. We have received your request for the following test(s): ${testNames}.\n
+Total Amount: Rs. ${totalAmount.toFixed(2)}
+${discountLine}Amount Paid: Rs. ${data.amountPaid.toFixed(2)}
+Remaining Amount: Rs. ${remainingAmount.toFixed(
+        2
+      )}\n
+We appreciate your trust in us. If you have any questions, please reach out to our support team.\n
+Regards,
+MedBliss`;
+
+      // 3. Send WhatsApp message via API
+      await fetch("https://wa.medblisss.com/send-text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          token: "9958399157", // Fixed token
+          number: `91${data.contact}`, // Prefix '91'
+          message,
+        }),
+      });
+
+      alert("Patient information saved and WhatsApp message sent successfully!");
       reset();
     } catch (error) {
-      console.error("Error saving patient information: ", error);
-      alert("Failed to save patient information. Please try again later.");
+      console.error("Error:", error);
+      alert("Failed to save patient information or send WhatsApp message.");
     }
   };
 
@@ -163,9 +194,10 @@ const PatientEntryPage: React.FC = () => {
           </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-            {/* Patient Information Section */}
+            {/* Patient Information */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-gray-700">Patient Information</h3>
+              {/* Name */}
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   Full Name
@@ -183,20 +215,33 @@ const PatientEntryPage: React.FC = () => {
                 )}
               </div>
 
+              {/* Contact Number */}
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   Contact Number
                 </label>
                 <div className="relative">
                   <input
-                    {...register("contact")}
+                    {...register("contact", {
+                      required: "Phone number is required",
+                      pattern: {
+                        value: /^[0-9]{10}$/,
+                        message: "Phone number must be 10 digits",
+                      },
+                    })}
                     className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="+1 234 567 890"
+                    placeholder="Enter 10-digit mobile number"
                   />
                   <PhoneIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
+                {errors.contact && (
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.contact.message}
+                  </p>
+                )}
               </div>
 
+              {/* Age & Gender */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-600 mb-1">
@@ -206,7 +251,7 @@ const PatientEntryPage: React.FC = () => {
                     type="number"
                     {...register("age", {
                       required: "Age is required",
-                      min: { value: 0, message: "Age must be positive" },
+                      min: { value: 1, message: "Age must be positive" },
                     })}
                     className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
                   />
@@ -235,11 +280,12 @@ const PatientEntryPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Additional Information Section (Optional) */}
+            {/* Additional Information */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-gray-700">
                 Additional Information (Optional)
               </h3>
+              {/* Address */}
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   Address
@@ -251,6 +297,7 @@ const PatientEntryPage: React.FC = () => {
                 />
               </div>
 
+              {/* Email */}
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   Email
@@ -264,11 +311,9 @@ const PatientEntryPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Doctor Referral Section */}
+            {/* Doctor Referral */}
             <div className="space-y-4 relative">
-              <h3 className="text-lg font-semibold text-gray-700">
-                Doctor Referral
-              </h3>
+              <h3 className="text-lg font-semibold text-gray-700">Doctor Referral</h3>
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   Doctor Name
@@ -279,7 +324,7 @@ const PatientEntryPage: React.FC = () => {
                   placeholder="Type doctor's name..."
                 />
               </div>
-              {/* Auto-suggestion dropdown */}
+              {/* Suggestions */}
               {filteredSuggestions.length > 0 && (
                 <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-1 rounded-md max-h-40 overflow-y-auto">
                   {filteredSuggestions.map((suggestion, index) => (
@@ -295,7 +340,7 @@ const PatientEntryPage: React.FC = () => {
               )}
             </div>
 
-            {/* Blood Test & Payment Details Section */}
+            {/* Blood Test & Payment Details */}
             <div className="space-y-4 border-t pt-6">
               <h3 className="text-lg font-semibold text-gray-700">
                 Blood Test Selection & Payment Details
@@ -312,6 +357,7 @@ const PatientEntryPage: React.FC = () => {
                       key={field.id}
                       className="flex flex-col sm:flex-row sm:space-x-4 items-start sm:items-end border p-4 rounded-lg"
                     >
+                      {/* Test Name */}
                       <div className="flex-1">
                         <label className="block text-xs font-medium text-gray-500 mb-1">
                           Test Name
@@ -326,7 +372,6 @@ const PatientEntryPage: React.FC = () => {
                               (t) => t.id === selectedId
                             );
                             if (selectedTest) {
-                              // Set the testName and price based on the selected test
                               setValue(
                                 `bloodTests.${index}.testName`,
                                 selectedTest.testName
@@ -356,6 +401,8 @@ const PatientEntryPage: React.FC = () => {
                           </p>
                         )}
                       </div>
+
+                      {/* Price */}
                       <div className="flex-1 mt-4 sm:mt-0">
                         <label className="block text-xs font-medium text-gray-500 mb-1">
                           Price (Rs.)
@@ -377,6 +424,8 @@ const PatientEntryPage: React.FC = () => {
                           </p>
                         )}
                       </div>
+
+                      {/* Remove Button */}
                       <div>
                         <button
                           type="button"
@@ -422,6 +471,7 @@ const PatientEntryPage: React.FC = () => {
                     </p>
                   )}
                 </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-600 mb-1">
                     Amount Paid (Rs.)
@@ -443,7 +493,8 @@ const PatientEntryPage: React.FC = () => {
                   )}
                 </div>
               </div>
-              {/* Display computed totals */}
+
+              {/* Computed Totals */}
               <div className="space-y-2">
                 <p className="text-sm text-gray-700">
                   Total Amount: <strong>Rs. {totalAmount.toFixed(2)}</strong>
@@ -486,6 +537,7 @@ const PatientEntryPage: React.FC = () => {
               </div>
             </div>
 
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={isSubmitting}

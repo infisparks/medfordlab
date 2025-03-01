@@ -36,7 +36,7 @@ export default function ReportForm() {
         createdAt: new Date().toISOString(),
         status: "completed",
       });
-      router.push("/dashboard");
+      router.push("/");
     } catch (error) {
       console.error("Error saving report: ", error);
     }
@@ -55,7 +55,7 @@ export default function ReportForm() {
               <p className="text-gray-500 mt-2">Fill in the test results and observations</p>
             </div>
             <button
-              onClick={() => router.push("/dashboard")}
+              onClick={() => router.push("/")}
               className="text-gray-400 hover:text-gray-600"
             >
               <XMarkIcon className="h-6 w-6" />
@@ -121,7 +121,7 @@ export default function ReportForm() {
               <div className="flex justify-end space-x-4">
                 <button
                   type="button"
-                  onClick={() => router.push("/dashboard")}
+                  onClick={() => router.push("/")}
                   className="px-6 py-2 border rounded-lg text-gray-600 hover:bg-gray-50"
                 >
                   Cancel
