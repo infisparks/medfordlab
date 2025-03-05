@@ -201,7 +201,7 @@ MedBliss`;
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          token: "9958399157", // Fixed token
+          token: "99583991572", // Fixed token
           number: `91${data.contact}`, // Prefix '91'
           message,
         }),
