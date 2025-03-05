@@ -15,8 +15,8 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     >
       <div className="p-6">
         <div className="mb-10 px-2">
-          <h1 className="text-2xl font-bold text-blue-400">LabFlow</h1>
-          <p className="text-sm text-slate-400 mt-1">Diagnostic Dashboard</p>
+          <h1 className="text-2xl font-bold text-blue-400">Medford</h1>
+          <p className="text-sm text-slate-400 mt-1">Diagnostic Center</p>
         </div>
 
         <nav>
