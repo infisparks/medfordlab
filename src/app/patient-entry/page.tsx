@@ -23,7 +23,14 @@ interface IFormInput {
   bloodTests: BloodTestSelection[];
   discountPercentage: number;
   amountPaid: number;
-  paymentMode: "online" | "offline";
+  paymentMode: "online" | "cash";
+}
+
+interface PackageType {
+  id: string;
+  packageName: string;
+  tests: BloodTestSelection[];
+  discountPercentage: number;
 }
 
 const PatientEntryPage: React.FC = () => {
@@ -57,6 +64,8 @@ const PatientEntryPage: React.FC = () => {
   const [availableBloodTests, setAvailableBloodTests] = React.useState<
     { id: string; testName: string; price: number }[]
   >([]);
+  // State to hold available packages
+  const [availablePackages, setAvailablePackages] = React.useState<PackageType[]>([]);
 
   // Fetch unique doctor names from previous entries
   React.useEffect(() => {
@@ -103,6 +112,30 @@ const PatientEntryPage: React.FC = () => {
     };
 
     fetchBloodTests();
+  }, []);
+
+  // Fetch available packages from the "packages" node
+  React.useEffect(() => {
+    const fetchPackages = async () => {
+      try {
+        const packagesRef = ref(database, "packages");
+        const snapshot = await get(packagesRef);
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const packagesArray: PackageType[] = Object.keys(data).map((key) => ({
+            id: key,
+            packageName: data[key].packageName,
+            tests: data[key].tests,
+            discountPercentage: Number(data[key].discountPercentage),
+          }));
+          setAvailablePackages(packagesArray);
+        }
+      } catch (error) {
+        console.error("Error fetching packages:", error);
+      }
+    };
+
+    fetchPackages();
   }, []);
 
   // Watch the doctorName field for auto-suggestions
@@ -156,9 +189,7 @@ const PatientEntryPage: React.FC = () => {
 Thank you for choosing our services. We have received your request for the following test(s): ${testNames}.\n
 Total Amount: Rs. ${totalAmount.toFixed(2)}
 ${discountLine}Amount Paid: Rs. ${data.amountPaid.toFixed(2)}
-Remaining Amount: Rs. ${remainingAmount.toFixed(
-        2
-      )}\n
+Remaining Amount: Rs. ${remainingAmount.toFixed(2)}\n
 We appreciate your trust in us. If you have any questions, please reach out to our support team.\n
 Regards,
 MedBliss`;
@@ -340,13 +371,42 @@ MedBliss`;
               )}
             </div>
 
-            {/* Blood Test & Payment Details */}
+            {/* Package, Blood Test & Payment Details */}
             <div className="space-y-4 border-t pt-6">
               <h3 className="text-lg font-semibold text-gray-700">
-                Blood Test Selection & Payment Details
+                Package / Blood Test Selection & Payment Details
               </h3>
 
-              {/* Blood Test Selection */}
+              {/* Package Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Select Package (Optional)
+                </label>
+                <select
+                  onChange={(e) => {
+                    const selectedPackageId = e.target.value;
+                    if (selectedPackageId === "") return;
+                    const selectedPackage = availablePackages.find(
+                      (pkg) => pkg.id === selectedPackageId
+                    );
+                    if (selectedPackage) {
+                      // Auto-fill tests and package discount
+                      setValue("bloodTests", selectedPackage.tests);
+                      setValue("discountPercentage", selectedPackage.discountPercentage);
+                    }
+                  }}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">No Package Selected</option>
+                  {availablePackages.map((pkg) => (
+                    <option key={pkg.id} value={pkg.id}>
+                      {pkg.packageName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Blood Test Selection (Manual or Auto-filled) */}
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   Select Blood Tests
@@ -381,7 +441,6 @@ MedBliss`;
                                 selectedTest.price
                               );
                             } else {
-                              // Reset if no test is selected
                               setValue(`bloodTests.${index}.testName`, "");
                               setValue(`bloodTests.${index}.price`, 0);
                             }
@@ -527,11 +586,11 @@ MedBliss`;
                   <label className="inline-flex items-center">
                     <input
                       type="radio"
-                      value="offline"
+                      value="cash"
                       {...register("paymentMode", { required: true })}
                       className="form-radio text-blue-600"
                     />
-                    <span className="ml-2">Offline</span>
+                    <span className="ml-2">Cash</span>
                   </label>
                 </div>
               </div>

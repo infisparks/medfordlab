@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
 import { ref as dbRef, get } from "firebase/database";
-import { database } from "../../firebase";
+import { database } from "../../firebase"; // Adjust path to your firebase.ts if needed
 import {
   getStorage,
   ref as storageRef,
@@ -16,7 +16,9 @@ import firstpage from "../../../public/fisrt.png";
 import stamp from "../../../public/stamp.png";
 import JsBarcode from "jsbarcode";
 
-// Helper to load and compress an image as JPEG
+// ====================
+// Helper: Compress image as JPEG
+// ====================
 const loadImageAsCompressedJPEG = async (
   url: string,
   quality: number = 0.5
@@ -48,16 +50,16 @@ function DownloadReport() {
   const searchParams = useSearchParams();
   const patientId = searchParams.get("patientId");
 
-  // To prevent duplicate execution
+  // To prevent duplicate PDF generation
   const pdfGenerated = useRef(false);
 
-  // Store fetched patient data and generated PDF blob
   const [patientData, setPatientData] = useState<any>(null);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
-  // New state for handling WhatsApp send loading
   const [isSending, setIsSending] = useState(false);
 
-  // Function to generate PDF report
+  // ====================
+  // Fetch data & Generate PDF
+  // ====================
   useEffect(() => {
     if (!patientId || pdfGenerated.current) {
       return;
@@ -66,7 +68,7 @@ function DownloadReport() {
 
     const fetchDataAndGenerateReport = async () => {
       try {
-        // Fetch patient data from Firebase
+        // 1. Fetch patient data from Firebase
         const patientRef = dbRef(database, `patients/${patientId}`);
         const snapshot = await get(patientRef);
         if (!snapshot.exists()) {
@@ -75,17 +77,19 @@ function DownloadReport() {
         }
         const data = snapshot.val();
         setPatientData(data);
+
+        // 2. Check if there's any `bloodtest` data
         if (!data.bloodtest) {
           alert("No report found for this patient.");
           return;
         }
 
-        // Initialize jsPDF
+        // 3. Create PDF doc
         const doc = new jsPDF("p", "mm", "a4");
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
 
-        // Helper to add cover page using firstpage template
+        // Helper to add cover page
         const addCoverPage = async () => {
           try {
             const coverBase64 = await loadImageAsCompressedJPEG(firstpage.src, 0.5);
@@ -95,7 +99,7 @@ function DownloadReport() {
           }
         };
 
-        // Helper to add letterhead background for content pages
+        // Helper to add letterhead to each content page
         const addLetterhead = async () => {
           try {
             const letterheadBase64 = await loadImageAsCompressedJPEG(letterhead.src, 0.5);
@@ -105,26 +109,30 @@ function DownloadReport() {
           }
         };
 
-        // Add cover page
+        // 4. Add cover page
         await addCoverPage();
 
-        // Add new page for content
+        // 5. Add next page (with letterhead) for the actual report content
         doc.addPage();
         await addLetterhead();
 
-        // Set initial margins and starting y-position
+        // Some coordinates for text positioning
         const leftMargin = 30;
         const topMargin = 30;
         let yPosition = topMargin;
 
-        // Report Header
+        // 6. Header info
         doc.setFont("helvetica", "bold");
         doc.setFontSize(22);
         doc.setTextColor(0, 51, 102);
         yPosition += 12;
+
+        // Switch font for details
         doc.setFont("helvetica", "normal");
         doc.setFontSize(12);
         doc.setTextColor(0, 0, 0);
+
+        // Basic info
         if (data.name) {
           doc.text(`Name: ${data.name}`, leftMargin, yPosition);
           yPosition += 7;
@@ -134,9 +142,11 @@ function DownloadReport() {
           yPosition += 7;
         }
         const currentDate = new Date().toLocaleDateString();
-        doc.text(`Date: ${currentDate}`, pageWidth - leftMargin, topMargin + 12, { align: "right" });
+        doc.text(`Date: ${currentDate}`, pageWidth - leftMargin, topMargin + 12, {
+          align: "right",
+        });
 
-        // Generate barcode for patientId
+        // 7. Generate Barcode from patientId
         const canvas = document.createElement("canvas");
         JsBarcode(canvas, patientId, {
           format: "CODE128",
@@ -160,49 +170,59 @@ function DownloadReport() {
         );
         yPosition = Math.max(yPosition, barcodeY + barcodeHeight + 10);
 
-        // Horizontal separator
+        // Horizontal line
         doc.setDrawColor(0, 51, 102);
         doc.setLineWidth(0.5);
         doc.line(leftMargin, yPosition, pageWidth - leftMargin, yPosition);
         yPosition += 10;
 
-        // Loop through each test in bloodtest
+        // 8. Loop over each test in `data.bloodtest`
         for (const testKey in data.bloodtest) {
           const test = data.bloodtest[testKey];
+
+          // Check if we need a fresh page
           if (yPosition > pageHeight - 50) {
             doc.addPage();
             await addLetterhead();
             yPosition = 40;
           }
+
+          // Test title
           doc.setFont("helvetica", "bold");
           doc.setFontSize(16);
           doc.setTextColor(0, 51, 102);
           doc.text(` ${testKey.toUpperCase()}`, leftMargin, yPosition);
           yPosition += 8;
 
-          // Table header for parameters
+          // Table header (smaller)
           const col1X = leftMargin;
           const col2X = pageWidth / 2;
           const col3X = pageWidth - leftMargin;
-          const headerHeight = 8;
+          const headerHeight = 6; // reduced header height
+
+          // Possibly add new page if needed
           if (yPosition + headerHeight > pageHeight - 50) {
             doc.addPage();
             await addLetterhead();
             yPosition = 40;
           }
+
+          // Header color background
           doc.setFillColor(0, 51, 102);
           doc.rect(leftMargin, yPosition, pageWidth - 2 * leftMargin, headerHeight, "F");
           doc.setTextColor(255, 255, 255);
-          doc.setFontSize(12);
+          doc.setFontSize(10); // smaller header font
           doc.text("Parameter", col1X + 2, yPosition + headerHeight - 2);
           doc.text("Value", col2X, yPosition + headerHeight - 2, { align: "center" });
           doc.text("Unit", col3X - 2, yPosition + headerHeight - 2, { align: "right" });
-          yPosition += headerHeight + 4;
+          yPosition += headerHeight + 3; // reduced gap
+
+          // Table rows (smaller content)
           doc.setFont("helvetica", "normal");
-          doc.setFontSize(11);
+          doc.setFontSize(9); // smaller font for parameter rows
           doc.setTextColor(0, 0, 0);
 
-          // Loop over parameters
+          // Each parameter row
           for (const param of test.parameters) {
             if (yPosition > pageHeight - 50) {
               doc.addPage();
@@ -213,55 +233,79 @@ function DownloadReport() {
             doc.setLineWidth(0.1);
             doc.line(leftMargin, yPosition, pageWidth - leftMargin, yPosition);
 
-            doc.text(param.name, col1X + 2, yPosition + 5);
+            // Parameter name
+            doc.text(param.name, col1X + 2, yPosition + 4);
+
+            // Parameter value
             const valueStr = param.value !== "" ? String(param.value) : "-";
             let valueColor: [number, number, number] = [0, 0, 0];
+
             const valueNum = parseFloat(param.value);
+            // If the value is outside normal range, show in red
             if (param.value !== "" && !isNaN(valueNum)) {
               if (valueNum < param.normalRangeStart || valueNum > param.normalRangeEnd) {
                 valueColor = [255, 0, 0];
               }
             }
             doc.setTextColor(...valueColor);
-            doc.text(valueStr, col2X, yPosition + 5, { align: "center" });
-            doc.setTextColor(0, 0, 0);
-            doc.text(param.unit, col3X - 2, yPosition + 5, { align: "right" });
-            yPosition += 10;
+            doc.text(valueStr, col2X, yPosition + 4, { align: "center" });
 
+            // Parameter unit
+            doc.setTextColor(0, 0, 0);
+            doc.text(param.unit, col3X - 2, yPosition + 4, { align: "right" });
+            yPosition += 8; // reduced row height
+
+            // Normal range (smaller font)
             doc.setTextColor(80, 80, 80);
-            doc.setFontSize(10);
+            doc.setFontSize(8);
             const normalRangeText = `Normal Range: ${param.normalRangeStart} - ${param.normalRangeEnd}`;
             doc.text(normalRangeText, col1X + 2, yPosition);
-            yPosition += 4;
+            yPosition += 3; // less gap
 
-            // Draw range graph (optional)
-            const graphWidth = 40;
-            const graphHeight = 4;
+            // Quick range graph using modern progress bar design (smaller graph)
+            const graphWidth = 80;
+            const graphHeight = 6; // smaller graph height
             const graphX = col1X + 2;
             const graphY = yPosition;
+
+            // Draw a background bar with rounded corners
+            doc.setFillColor(230, 230, 230); // light grey background
+            doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "F");
+
+            // Calculate the relative fill based on the parameter's normal range
+            const minRange = param.normalRangeStart;
+            const maxRange = param.normalRangeEnd;
+            let relative = 0;
+            if (!isNaN(valueNum)) {
+              const clampedValue = Math.min(Math.max(valueNum, minRange), maxRange);
+              relative = (clampedValue - minRange) / (maxRange - minRange);
+            }
+            const filledWidth = relative * graphWidth;
+
+            // Choose the fill color based on whether the value is normal or abnormal
+            if (valueNum < minRange || valueNum > maxRange) {
+              doc.setFillColor(244, 67, 54); // red for abnormal values
+            } else {
+              doc.setFillColor(76, 175, 80); // green for normal values
+            }
+
+            // Draw the filled portion with rounded corners
+            doc.roundedRect(graphX, graphY, filledWidth, graphHeight, 2, 2, "F");
+
+            // Draw a border around the entire graph
             doc.setDrawColor(150, 150, 150);
             doc.setLineWidth(0.2);
-            doc.rect(graphX, graphY, graphWidth, graphHeight);
-            if (!isNaN(valueNum)) {
-              let relative = (valueNum - 10) / 90;
-              if (relative < 0) relative = 0;
-              if (relative > 1) relative = 1;
-              const markerX = graphX + relative * graphWidth;
-              const markerColor: [number, number, number] = (valueNum < 10 || valueNum > 100)
-                ? [244, 67, 54]
-                : [76, 175, 80];
-              doc.setDrawColor(...markerColor);
-              doc.setLineWidth(1);
-              doc.line(markerX, graphY, markerX, graphY + graphHeight);
-            }
-            yPosition += graphHeight + 4;
-            doc.setFontSize(11);
+            doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "S");
+
+            yPosition += graphHeight + 3; // reduced spacing after graph
+
+            doc.setFontSize(9);
             doc.setTextColor(0, 0, 0);
           }
           yPosition += 10;
         }
 
-        // Footer and stamp
+        // 9. Stamp/Footer if needed
         if (yPosition > pageHeight - 50) {
           doc.addPage();
           await addLetterhead();
@@ -276,7 +320,7 @@ function DownloadReport() {
         const stampBase64 = await loadImageAsCompressedJPEG(stamp.src, 0.5);
         doc.addImage(stampBase64, "JPEG", stampX, stampY, stampWidth, stampHeight);
 
-        // Instead of auto-downloading, store the generated PDF as a Blob
+        // 10. Convert to Blob for further usage (download or upload)
         const generatedPdfBlob = doc.output("blob");
         setPdfBlob(generatedPdfBlob);
       } catch (error) {
@@ -288,7 +332,9 @@ function DownloadReport() {
     fetchDataAndGenerateReport();
   }, [patientId, router]);
 
-  // Function to download the PDF report
+  // ====================
+  // Download PDF
+  // ====================
   const downloadReport = () => {
     if (!pdfBlob || !patientData) return;
     const url = URL.createObjectURL(pdfBlob);
@@ -299,33 +345,47 @@ function DownloadReport() {
     URL.revokeObjectURL(url);
   };
 
-  // Function to send the report on WhatsApp with loading state
+  // ====================
+  // Send PDF to WhatsApp
+  // ====================
   const sendReportOnWhatsApp = async () => {
     if (!pdfBlob || !patientData) return;
     setIsSending(true);
+
     try {
+      // 1. Upload the PDF to Firebase Storage
       const storage = getStorage();
       const storageRefInstance = storageRef(storage, `reports/${patientData.name}.pdf`);
       const snapshot = await uploadBytes(storageRefInstance, pdfBlob);
       const downloadURL = await getDownloadURL(snapshot.ref);
-      // Build the payload
-      const contact = patientData.contact;
-      const token = contact; // Using contact as token
+
+      // 2. Build the WhatsApp message payload
+      const token = "99583991572"; 
+      const contact = patientData.contact; 
       const number = "91" + contact;
+
       const payload = {
         token,
         number,
         imageUrl: downloadURL,
-        caption: `Dear ${patientData.name},\n\nYour blood test report is now available. Please click the link below to view and download your report.\n\nReport URL: ${downloadURL}\n\nThank you for choosing our services.\n\nRegards,\nMEDFORD Team`
+        caption: `Dear ${patientData.name},\n\nYour blood test report is now available. Please click the link below to view/download.\n\nReport URL: ${downloadURL}\n\nThank you for choosing our services.\n\nRegards,\nMEDFORD Team`,
       };
 
+      // 3. Send via your WhatsApp API endpoint
       const response = await fetch("https://wa.medblisss.com/send-image-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      await response.json();
-      alert("Report sent on WhatsApp successfully!");
+
+      const jsonResponse = await response.json();
+
+      if (response.ok) {
+        alert("Report sent on WhatsApp successfully!");
+      } else {
+        console.error("WhatsApp API Error:", jsonResponse);
+        alert("Failed to send the report on WhatsApp. Check logs or token.");
+      }
     } catch (error) {
       console.error("Error sending report:", error);
       alert("Error sending report. Please try again.");
@@ -334,6 +394,9 @@ function DownloadReport() {
     }
   };
 
+  // ====================
+  // Render
+  // ====================
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full space-y-6">
@@ -343,7 +406,7 @@ function DownloadReport() {
               <h2 className="text-3xl font-bold text-gray-800 text-center mb-6">
                 Report Ready
               </h2>
-              
+
               <button
                 onClick={downloadReport}
                 className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-4 rounded-xl font-medium transition-all duration-300"
@@ -390,7 +453,7 @@ function DownloadReport() {
                         d="M12 4v4m0 0v4m0-4h4m-4 0H8m6.364 2.364l-2.828 2.828m0 0l-2.828-2.828m2.828 2.828V12"
                       />
                     </svg>
-                    <span>Generating report and sending on WhatsApp...</span>
+                    <span>Sending on WhatsApp...</span>
                   </>
                 ) : (
                   <>
@@ -422,7 +485,7 @@ function DownloadReport() {
               </span>
             </div>
             <p className="mt-4 text-sm text-gray-500">
-              This may take a few moments. Please dont close this page.
+              This may take a few moments. Please don't close this page.
             </p>
           </div>
         )}
@@ -431,7 +494,9 @@ function DownloadReport() {
   );
 }
 
-// Wrap the component in a Suspense boundary so that useSearchParams() is rendered safely
+// ====================
+// Suspense Wrapper (if needed)
+// ====================
 export default function DownloadReportPage() {
   return (
     <Suspense fallback={<div>Loading Report...</div>}>

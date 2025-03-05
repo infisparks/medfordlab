@@ -32,6 +32,8 @@ interface Patient {
   amountPaid: number;
   bloodTests?: BloodTest[];
   bloodtest?: Record<string, any>;
+  // Optional legacy flag (not used for status anymore)
+  report?: boolean;
 }
 
 export default function Dashboard() {
@@ -47,7 +49,7 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
 
-  // Filter patients based on search term and date
+  // Filter patients based on search term and date.
   const filteredPatients = useMemo(() => {
     return patients.filter((patient) => {
       const matchesSearch = patient.name
@@ -60,7 +62,7 @@ export default function Dashboard() {
     });
   }, [patients, searchTerm, selectedDate]);
 
-  // Calculate billing amounts for a patient
+  // Calculate billing amounts for a patient.
   const calculateAmounts = (patient: Patient) => {
     const testTotal =
       patient.bloodTests?.reduce((acc, bt) => acc + bt.price, 0) || 0;
@@ -69,7 +71,9 @@ export default function Dashboard() {
     return { testTotal, discountValue, remaining };
   };
 
-  // Fetch patients from Firebase and convert object to array
+  // Fetch patients from Firebase, convert the object to an array,
+  // then sort so that patients with a report (bloodtest exists) appear first and,
+  // within each group, the latest entries (by createdAt) appear first.
   useEffect(() => {
     const patientsRef = ref(database, "patients");
     const unsubscribe = onValue(patientsRef, (snapshot) => {
@@ -80,19 +84,32 @@ export default function Dashboard() {
           ...data[key],
           age: Number(data[key].age),
         }));
-        // Sort so that the latest entries (by createdAt) appear first
-        const sortedPatients = patientList.sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
+        const sortedPatients = patientList.sort((a, b) => {
+          const aComplete =
+            a.bloodtest && Object.keys(a.bloodtest).length > 0;
+          const bComplete =
+            b.bloodtest && Object.keys(b.bloodtest).length > 0;
+          if (aComplete && !bComplete) return -1;
+          if (!aComplete && bComplete) return 1;
+          return (
+            new Date(b.createdAt).getTime() -
+            new Date(a.createdAt).getTime()
+          );
+        });
+        // Adjust the slice if you want to show more than just the top 5.
         setPatients(sortedPatients.slice(0, 5));
 
-        // Calculate metrics
+        // Calculate metrics based on report availability.
         const total = patientList.length;
-        const pending = patientList.filter((p: any) => !p.report).length;
+        const completed = patientList.filter(
+          (p: any) =>
+            p.bloodtest && Object.keys(p.bloodtest).length > 0
+        ).length;
+        const pending = total - completed;
         setMetrics({
           totalTests: total,
           pendingReports: pending,
-          completedTests: total - pending,
+          completedTests: completed,
         });
       }
     });
@@ -100,14 +117,25 @@ export default function Dashboard() {
     return () => unsubscribe();
   }, []);
 
-  // Handler to update the amountPaid by adding the new payment
+  // Handler to update the amountPaid by adding the new payment.
+  // If the payment covers the full remaining amount (within a small threshold),
+  // then mark the patient as completed (legacy flag update).
   const handleUpdateAmount = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPatient) return;
     try {
       const updatedAmount = selectedPatient.amountPaid + newAmountPaid;
+      const { testTotal, discountValue } = calculateAmounts(selectedPatient);
+      const newRemaining = testTotal - discountValue - updatedAmount;
+
       const patientRef = ref(database, `patients/${selectedPatient.id}`);
-      await update(patientRef, { amountPaid: updatedAmount });
+      // Set a threshold (epsilon) for rounding differences, e.g., 1 rupee.
+      const epsilon = 1;
+      const isComplete = newRemaining <= epsilon;
+      await update(patientRef, {
+        amountPaid: updatedAmount,
+        report: isComplete,
+      });
       alert("Amount updated successfully!");
       setSelectedPatient(null);
       setNewAmountPaid(0);
@@ -152,7 +180,9 @@ export default function Dashboard() {
           </button>
           <div className="flex items-center space-x-4">
             <div className="text-right">
-              <p className="text-sm font-medium text-gray-600">Dr. Sarah Johnson</p>
+              <p className="text-sm font-medium text-gray-600">
+                Dr. Sarah Johnson
+              </p>
               <p className="text-xs text-gray-400">Pathologist</p>
             </div>
             <Image
@@ -233,11 +263,21 @@ export default function Dashboard() {
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Patient</th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Tests</th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Entry Date</th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Status</th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">Actions</th>
+                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                      Patient
+                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                      Tests
+                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                      Entry Date
+                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -246,7 +286,9 @@ export default function Dashboard() {
                       <td className="px-6 py-4">
                         <div>
                           <p className="font-medium">{patient.name}</p>
-                          <p className="text-sm text-gray-500">{patient.age}y • {patient.gender}</p>
+                          <p className="text-sm text-gray-500">
+                            {patient.age}y • {patient.gender}
+                          </p>
                         </div>
                       </td>
                       <td className="px-6 py-4 text-sm">
@@ -264,12 +306,20 @@ export default function Dashboard() {
                         {new Date(patient.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4">
-                        <span className="px-3 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800">
-                          Pending Report
-                        </span>
+                        {patient.bloodtest &&
+                        Object.keys(patient.bloodtest).length > 0 ? (
+                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">
+                            Completed
+                          </span>
+                        ) : (
+                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800">
+                            Pending Report
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4 space-x-2">
-                        {patient.bloodtest && Object.keys(patient.bloodtest).length > 0 ? (
+                        {patient.bloodtest &&
+                        Object.keys(patient.bloodtest).length > 0 ? (
                           <Link
                             href={`/download-report?patientId=${patient.id}`}
                             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 transition-colors"
@@ -320,26 +370,39 @@ export default function Dashboard() {
             >
               ✕
             </button>
-            <h3 className="text-xl font-semibold mb-4">Update Payment for {selectedPatient.name}</h3>
+            <h3 className="text-xl font-semibold mb-4">
+              Update Payment for {selectedPatient.name}
+            </h3>
             {(() => {
-              const { testTotal, discountValue, remaining } = calculateAmounts(selectedPatient);
+              const { testTotal, discountValue, remaining } =
+                calculateAmounts(selectedPatient);
               return (
                 <div className="mb-4 space-y-2">
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Test Total:</span>
-                    <span className="text-sm font-medium">₹{testTotal.toFixed(2)}</span>
+                    <span className="text-sm font-medium">
+                      ₹{testTotal.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Discount:</span>
-                    <span className="text-sm font-medium">₹{discountValue.toFixed(2)}</span>
+                    <span className="text-sm font-medium">
+                      ₹{discountValue.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Current Paid:</span>
-                    <span className="text-sm font-medium">₹{selectedPatient.amountPaid.toFixed(2)}</span>
+                    <span className="text-sm text-gray-600">
+                      Current Paid:
+                    </span>
+                    <span className="text-sm font-medium">
+                      ₹{selectedPatient.amountPaid.toFixed(2)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Remaining:</span>
-                    <span className="text-sm font-medium">₹{remaining.toFixed(2)}</span>
+                    <span className="text-sm font-medium">
+                      ₹{remaining.toFixed(2)}
+                    </span>
                   </div>
                 </div>
               );
