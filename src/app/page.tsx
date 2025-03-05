@@ -21,6 +21,7 @@ interface BloodTest {
   price: number;
 }
 
+// Make `report` a definite boolean (not optional):
 interface Patient {
   id: string;
   name: string;
@@ -32,12 +33,11 @@ interface Patient {
   amountPaid: number;
   bloodTests?: BloodTest[];
   bloodtest?: Record<string, any>;
-  // Optional legacy flag (not used for status anymore)
-  report?: boolean;
+  report: boolean; // changed from `report?: boolean;`
 }
 
 export default function Dashboard() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [metrics, setMetrics] = useState({
     totalTests: 0,
@@ -46,10 +46,10 @@ export default function Dashboard() {
   });
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [newAmountPaid, setNewAmountPaid] = useState<number>(0);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedDate, setSelectedDate] = useState("");
+  const [searchTerm, setSearchTerm] = useState<string>("");
+  const [selectedDate, setSelectedDate] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  // Filter patients based on search term and date.
   const filteredPatients = useMemo(() => {
     return patients.filter((patient) => {
       const matchesSearch = patient.name
@@ -58,11 +58,18 @@ export default function Dashboard() {
       const matchesDate = selectedDate
         ? patient.createdAt.startsWith(selectedDate)
         : true;
-      return matchesSearch && matchesDate;
+      let matchesStatus = true;
+      if (statusFilter === "completed") {
+        matchesStatus = Boolean(patient.bloodtest && Object.keys(patient.bloodtest).length > 0);
+      } else if (statusFilter === "pending") {
+        matchesStatus = !(
+            patient.bloodtest && Object.keys(patient.bloodtest).length > 0
+          );
+      }
+      return matchesSearch && matchesDate && matchesStatus;
     });
-  }, [patients, searchTerm, selectedDate]);
+  }, [patients, searchTerm, selectedDate, statusFilter]);
 
-  // Calculate billing amounts for a patient.
   const calculateAmounts = (patient: Patient) => {
     const testTotal =
       patient.bloodTests?.reduce((acc, bt) => acc + bt.price, 0) || 0;
@@ -71,39 +78,41 @@ export default function Dashboard() {
     return { testTotal, discountValue, remaining };
   };
 
-  // Fetch patients from Firebase, convert the object to an array,
-  // then sort so that patients with a report (bloodtest exists) appear first and,
-  // within each group, the latest entries (by createdAt) appear first.
   useEffect(() => {
     const patientsRef = ref(database, "patients");
     const unsubscribe = onValue(patientsRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
-        const patientList = Object.keys(data).map((key) => ({
+
+        // Convert the raw object into a typed array of Patients
+        const patientList: Patient[] = Object.keys(data).map((key) => ({
           id: key,
           ...data[key],
+          // Make sure these fields are numeric/boolean as needed
           age: Number(data[key].age),
+          report: Boolean(data[key].report),
         }));
+
+        // Sort so that completed patients appear first, then by date descending
         const sortedPatients = patientList.sort((a, b) => {
-          const aComplete =
-            a.bloodtest && Object.keys(a.bloodtest).length > 0;
-          const bComplete =
-            b.bloodtest && Object.keys(b.bloodtest).length > 0;
+          const aComplete = a.bloodtest && Object.keys(a.bloodtest).length > 0;
+          const bComplete = b.bloodtest && Object.keys(b.bloodtest).length > 0;
+
           if (aComplete && !bComplete) return -1;
           if (!aComplete && bComplete) return 1;
+
           return (
-            new Date(b.createdAt).getTime() -
-            new Date(a.createdAt).getTime()
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
         });
-        // Adjust the slice if you want to show more than just the top 5.
+
+        // Show only the most recent 5 on the dashboard
         setPatients(sortedPatients.slice(0, 5));
 
-        // Calculate metrics based on report availability.
+        // Compute metrics
         const total = patientList.length;
         const completed = patientList.filter(
-          (p: any) =>
-            p.bloodtest && Object.keys(p.bloodtest).length > 0
+          (p) => p.bloodtest && Object.keys(p.bloodtest).length > 0
         ).length;
         const pending = total - completed;
         setMetrics({
@@ -117,25 +126,24 @@ export default function Dashboard() {
     return () => unsubscribe();
   }, []);
 
-  // Handler to update the amountPaid by adding the new payment.
-  // If the payment covers the full remaining amount (within a small threshold),
-  // then mark the patient as completed (legacy flag update).
   const handleUpdateAmount = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPatient) return;
+
     try {
       const updatedAmount = selectedPatient.amountPaid + newAmountPaid;
       const { testTotal, discountValue } = calculateAmounts(selectedPatient);
       const newRemaining = testTotal - discountValue - updatedAmount;
-
       const patientRef = ref(database, `patients/${selectedPatient.id}`);
-      // Set a threshold (epsilon) for rounding differences, e.g., 1 rupee.
       const epsilon = 1;
-      const isComplete = newRemaining <= epsilon;
+      const isComplete = newRemaining <= epsilon; // boolean
+
+      // Update in Firebase
       await update(patientRef, {
         amountPaid: updatedAmount,
         report: isComplete,
       });
+
       alert("Amount updated successfully!");
       setSelectedPatient(null);
       setNewAmountPaid(0);
@@ -147,18 +155,11 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen flex bg-gray-50">
-      {/* Sidebar */}
-      <div
-        className={`fixed z-50 md:static ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        } md:translate-x-0`}
-      >
-        <Sidebar />
-      </div>
+      {/* Pass the open prop to Sidebar */}
+      <Sidebar open={sidebarOpen} />
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col ml-0 md:ml-64">
-        {/* Header */}
         <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -211,6 +212,15 @@ export default function Dashboard() {
               onChange={(e) => setSelectedDate(e.target.value)}
               className="p-2 border rounded-md"
             />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="p-2 border rounded-md"
+            >
+              <option value="all">All</option>
+              <option value="pending">Pending</option>
+              <option value="completed">Completed</option>
+            </select>
           </div>
 
           {/* Metrics Grid */}
@@ -222,35 +232,47 @@ export default function Dashboard() {
                 </div>
                 <div>
                   <p className="text-sm text-gray-500 mb-1">Total Tests</p>
-                  <p className="text-2xl font-semibold">{metrics.totalTests}</p>
+                  <p className="text-2xl font-semibold">
+                    {metrics.totalTests}
+                  </p>
                 </div>
               </div>
             </div>
+
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
               <div className="flex items-center space-x-4">
                 <div className="p-3 bg-yellow-50 rounded-lg">
                   <ClockIcon className="h-6 w-6 text-yellow-600" />
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500 mb-1">Pending Reports</p>
-                  <p className="text-2xl font-semibold">{metrics.pendingReports}</p>
+                  <p className="text-sm text-gray-500 mb-1">
+                    Pending Reports
+                  </p>
+                  <p className="text-2xl font-semibold">
+                    {metrics.pendingReports}
+                  </p>
                 </div>
               </div>
             </div>
+
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
               <div className="flex items-center space-x-4">
                 <div className="p-3 bg-green-50 rounded-lg">
                   <UserGroupIcon className="h-6 w-6 text-green-600" />
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500 mb-1">Completed Tests</p>
-                  <p className="text-2xl font-semibold">{metrics.completedTests}</p>
+                  <p className="text-sm text-gray-500 mb-1">
+                    Completed Tests
+                  </p>
+                  <p className="text-2xl font-semibold">
+                    {metrics.completedTests}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Recent Patients Card */}
+          {/* Recent Patients */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100">
             <div className="p-6 border-b border-gray-100">
               <h2 className="text-lg font-semibold flex items-center">
@@ -258,7 +280,6 @@ export default function Dashboard() {
                 Recent Patients
               </h2>
             </div>
-
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50">
@@ -360,7 +381,7 @@ export default function Dashboard() {
         </main>
       </div>
 
-      {/* Modal Popup for Updating Amount */}
+      {/* Modal for Payment Update */}
       {selectedPatient && (
         <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">

@@ -5,8 +5,6 @@ import { useForm, SubmitHandler } from "react-hook-form";
 import { useSearchParams, useRouter } from "next/navigation";
 import { database } from "../../../firebase";
 import { ref, get, set } from "firebase/database";
-import { jsPDF } from "jspdf";
-import letterhead from "./../../../../public/letterhead.png";
 import {
   FiDroplet,
   FiUser,
@@ -33,18 +31,6 @@ interface BloodValuesFormInputs {
   patientId: string;
   tests: TestValueEntry[];
 }
-
-// Helper function to convert an image URL to a base64 string
-const loadImageAsBase64 = async (url: string): Promise<string> => {
-  const response = await fetch(url);
-  const blob = await response.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-};
 
 const BloodValuesForm: React.FC = () => {
   const searchParams = useSearchParams();
@@ -117,131 +103,9 @@ const BloodValuesForm: React.FC = () => {
     fetchPatientData();
   }, [patientId, reset]);
 
-  /**
-   * Generates a professional PDF report using a modern table structure.
-   * Each test section displays a colored header row with columns for:
-   * - Parameter name (left aligned)
-   * - Value (center aligned)
-   * - Unit (right aligned)
-   */
-  const generatePDF = async (data: BloodValuesFormInputs) => {
-    const doc = new jsPDF("p", "mm", "a4");
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const margin = 20;
-    let yPosition = margin;
-
-    // Load letterhead as full-page background
-    try {
-      const letterheadBase64 = await loadImageAsBase64(letterhead.src);
-      doc.addImage(letterheadBase64, "PNG", 0, 0, pageWidth, pageHeight);
-    } catch (error) {
-      console.error("Error loading letterhead image:", error);
-    }
-
-    // Report Title
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
-    doc.setTextColor(0, 51, 102); // dark blue
-    doc.text("Blood Test Report", pageWidth / 2, yPosition, { align: "center" });
-    yPosition += 12;
-
-    // Patient details
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(12);
-    doc.setTextColor(0, 0, 0);
-    doc.text(`Patient ID: ${data.patientId}`, margin, yPosition);
-    const currentDate = new Date().toLocaleDateString();
-    doc.text(`Date: ${currentDate}`, pageWidth - margin, yPosition, { align: "right" });
-    yPosition += 12;
-
-    // For each test, print a section with a modern table layout
-    data.tests.forEach((test) => {
-      yPosition += 6;
-      // Test Title
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
-      doc.setTextColor(0, 51, 102);
-      doc.text(`Test: ${test.testName}`, margin, yPosition);
-      yPosition += 8;
-
-      // Draw a separator line
-      doc.setDrawColor(0, 51, 102);
-      doc.setLineWidth(0.5);
-      doc.line(margin, yPosition, pageWidth - margin, yPosition);
-      yPosition += 4;
-
-      // Define column positions for table header
-      const col1X = margin;
-      const col2X = pageWidth / 2;
-      const col3X = pageWidth - margin;
-      const headerHeight = 8;
-
-      // Table header background
-      doc.setFillColor(0, 51, 102); // dark blue
-      doc.rect(margin, yPosition, pageWidth - 2 * margin, headerHeight, "F");
-
-      // Table header text (white)
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(12);
-      doc.text("Parameter", col1X + 2, yPosition + headerHeight - 2);
-      doc.text("Value", col2X, yPosition + headerHeight - 2, { align: "center" });
-      doc.text("Unit", col3X - 2, yPosition + headerHeight - 2, { align: "right" });
-      yPosition += headerHeight + 2;
-
-      // Reset text styles for table rows
-      doc.setTextColor(0, 0, 0);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(11);
-
-      // Table rows for each parameter
-      test.parameters.forEach((param) => {
-        if (yPosition > pageHeight - margin - 15) {
-          doc.addPage();
-          yPosition = margin;
-        }
-        // Parameter name (left aligned)
-        doc.text(param.name, col1X + 2, yPosition);
-        // Value (center aligned)
-        const valueStr = param.value === "" ? "-" : String(param.value);
-        doc.text(valueStr, col2X, yPosition, { align: "center" });
-        // Unit (right aligned)
-        doc.text(param.unit, col3X - 2, yPosition, { align: "right" });
-        yPosition += 7;
-
-        // Normal range info in a lighter gray
-        doc.setTextColor(80, 80, 80);
-        doc.setFontSize(10);
-        doc.text(
-          `Normal Range: ${param.normalRangeStart} - ${param.normalRangeEnd}`,
-          col1X + 2,
-          yPosition
-        );
-        // Reset styling
-        doc.setTextColor(0, 0, 0);
-        doc.setFontSize(11);
-        yPosition += 7;
-      });
-
-      // Add spacing after each test section
-      yPosition += 4;
-    });
-
-    // Footer
-    if (yPosition > pageHeight - margin - 10) {
-      doc.addPage();
-      yPosition = margin;
-    }
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(10);
-    doc.text("Report generated by HealthCare System", margin, pageHeight - 10);
-
-    doc.save("blood-test-report.pdf");
-  };
-
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
     try {
-      // Save test data at a static Firebase reference based on test name
+      // Save each test's parameters in Firebase under the "bloodtest" node
       for (const test of data.tests) {
         const testKey = test.testName.toLowerCase();
         const testRef = ref(database, `patients/${data.patientId}/bloodtest/${testKey}`);
@@ -251,8 +115,8 @@ const BloodValuesForm: React.FC = () => {
         });
       }
       alert("Blood test values saved successfully!");
-      await generatePDF(data);
-      router.push("/");
+      // Redirect to the download-report page with the patientId as query param
+      router.push(`/download-report?patientId=${data.patientId}`);
     } catch (error) {
       console.error("Error saving blood test values:", error);
       alert("Failed to save blood test values. Please try again.");

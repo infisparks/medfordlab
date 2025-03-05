@@ -4,16 +4,19 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
 import { ref as dbRef, get } from "firebase/database";
-import { database } from "../../firebase"; // Adjust path to your firebase.ts if needed
+import { database } from "../../firebase"; // ← Adjust path if needed
 import {
   getStorage,
   ref as storageRef,
   uploadBytes,
   getDownloadURL,
 } from "firebase/storage";
+
+// Make sure these images are imported correctly (import paths might differ in your setup)
 import letterhead from "../../../public/letterhead.png";
 import firstpage from "../../../public/fisrt.png";
 import stamp from "../../../public/stamp.png";
+
 import JsBarcode from "jsbarcode";
 
 // ====================
@@ -57,9 +60,6 @@ function DownloadReport() {
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [isSending, setIsSending] = useState(false);
 
-  // ====================
-  // Fetch data & Generate PDF
-  // ====================
   useEffect(() => {
     if (!patientId || pdfGenerated.current) {
       return;
@@ -89,7 +89,7 @@ function DownloadReport() {
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
 
-        // Helper to add cover page
+        // Helper: Add cover page
         const addCoverPage = async () => {
           try {
             const coverBase64 = await loadImageAsCompressedJPEG(firstpage.src, 0.5);
@@ -99,13 +99,32 @@ function DownloadReport() {
           }
         };
 
-        // Helper to add letterhead to each content page
+        // Helper: Add letterhead to a page
         const addLetterhead = async () => {
           try {
             const letterheadBase64 = await loadImageAsCompressedJPEG(letterhead.src, 0.5);
             doc.addImage(letterheadBase64, "JPEG", 0, 0, pageWidth, pageHeight);
           } catch (error) {
             console.error("Error loading letterhead image:", error);
+          }
+        };
+
+        // We track the y-position and whether we are on the first content page
+        let yPosition = 0;
+        let isFirstContentPage = true;
+
+        // Helper: Check if there's enough vertical space, or else add new page
+        const checkOverflow = async (extraSpace = 0) => {
+          if (yPosition + extraSpace > pageHeight - 50) {
+            doc.addPage();
+            await addLetterhead();
+            // After the very first content page, all subsequent pages should have a top margin of 60
+            if (isFirstContentPage) {
+              yPosition = 40; 
+              isFirstContentPage = false;
+            } else {
+              yPosition = 60;
+            }
           }
         };
 
@@ -116,10 +135,15 @@ function DownloadReport() {
         doc.addPage();
         await addLetterhead();
 
-        // Some coordinates for text positioning
+        // For the very first content page, margin top = 40
+        if (isFirstContentPage) {
+          yPosition = 40;
+          isFirstContentPage = false;
+        } else {
+          yPosition = 60;
+        }
+
         const leftMargin = 30;
-        const topMargin = 30;
-        let yPosition = topMargin;
 
         // 6. Header info
         doc.setFont("helvetica", "bold");
@@ -142,24 +166,23 @@ function DownloadReport() {
           yPosition += 7;
         }
         const currentDate = new Date().toLocaleDateString();
-        doc.text(`Date: ${currentDate}`, pageWidth - leftMargin, topMargin + 12, {
+        doc.text(`Date: ${currentDate}`, pageWidth - leftMargin, 40 + 12, {
           align: "right",
         });
 
         // 7. Generate Barcode from patientId
         const canvas = document.createElement("canvas");
-        JsBarcode(canvas, patientId, {
+        JsBarcode(canvas, patientId || "", {
           format: "CODE128",
           displayValue: false,
           fontSize: 14,
           width: 2,
           height: 40,
-          margin: 10,
         });
         const barcodeDataUrl = canvas.toDataURL("image/png");
         const barcodeWidth = 40;
         const barcodeHeight = 15;
-        const barcodeY = topMargin + 20;
+        const barcodeY = 40 + 14;
         doc.addImage(
           barcodeDataUrl,
           "PNG",
@@ -168,67 +191,55 @@ function DownloadReport() {
           barcodeWidth,
           barcodeHeight
         );
-        yPosition = Math.max(yPosition, barcodeY + barcodeHeight + 10);
+        // Ensure yPosition at least goes below the barcode
+        yPosition = Math.max(yPosition, barcodeY + barcodeHeight + 1);
 
         // Horizontal line
         doc.setDrawColor(0, 51, 102);
         doc.setLineWidth(0.5);
         doc.line(leftMargin, yPosition, pageWidth - leftMargin, yPosition);
-        yPosition += 10;
+        yPosition += 13;
 
         // 8. Loop over each test in `data.bloodtest`
         for (const testKey in data.bloodtest) {
+          // Check overflow before adding the test title
+          await checkOverflow(20);
           const test = data.bloodtest[testKey];
-
-          // Check if we need a fresh page
-          if (yPosition > pageHeight - 50) {
-            doc.addPage();
-            await addLetterhead();
-            yPosition = 40;
-          }
 
           // Test title
           doc.setFont("helvetica", "bold");
           doc.setFontSize(16);
           doc.setTextColor(0, 51, 102);
           doc.text(` ${testKey.toUpperCase()}`, leftMargin, yPosition);
-          yPosition += 8;
+          yPosition += 2;
 
-          // Table header (smaller)
+          // Table header
+          await checkOverflow(10);
           const col1X = leftMargin;
           const col2X = pageWidth / 2;
           const col3X = pageWidth - leftMargin;
-          const headerHeight = 6; // reduced header height
-
-          // Possibly add new page if needed
-          if (yPosition + headerHeight > pageHeight - 50) {
-            doc.addPage();
-            await addLetterhead();
-            yPosition = 40;
-          }
+          const headerHeight = 6;
 
           // Header color background
           doc.setFillColor(0, 51, 102);
           doc.rect(leftMargin, yPosition, pageWidth - 2 * leftMargin, headerHeight, "F");
           doc.setTextColor(255, 255, 255);
-          doc.setFontSize(10); // smaller header font
+          doc.setFontSize(10);
           doc.text("Parameter", col1X + 2, yPosition + headerHeight - 2);
           doc.text("Value", col2X, yPosition + headerHeight - 2, { align: "center" });
           doc.text("Unit", col3X - 2, yPosition + headerHeight - 2, { align: "right" });
-          yPosition += headerHeight + 3; // reduced gap
+          yPosition += headerHeight + 3;
 
-          // Table rows (smaller content)
+          // Table rows
           doc.setFont("helvetica", "normal");
-          doc.setFontSize(9); // smaller font for parameter rows
+          doc.setFontSize(9);
           doc.setTextColor(0, 0, 0);
 
-          // Each parameter row
+          // Each parameter
           for (const param of test.parameters) {
-            if (yPosition > pageHeight - 50) {
-              doc.addPage();
-              await addLetterhead();
-              yPosition = 40;
-            }
+            // Check if next row will overflow
+            await checkOverflow(15);
+
             doc.setDrawColor(200, 200, 200);
             doc.setLineWidth(0.1);
             doc.line(leftMargin, yPosition, pageWidth - leftMargin, yPosition);
@@ -238,9 +249,9 @@ function DownloadReport() {
 
             // Parameter value
             const valueStr = param.value !== "" ? String(param.value) : "-";
+            const valueNum = parseFloat(param.value);
             let valueColor: [number, number, number] = [0, 0, 0];
 
-            const valueNum = parseFloat(param.value);
             // If the value is outside normal range, show in red
             if (param.value !== "" && !isNaN(valueNum)) {
               if (valueNum < param.normalRangeStart || valueNum > param.normalRangeEnd) {
@@ -253,26 +264,26 @@ function DownloadReport() {
             // Parameter unit
             doc.setTextColor(0, 0, 0);
             doc.text(param.unit, col3X - 2, yPosition + 4, { align: "right" });
-            yPosition += 8; // reduced row height
+            yPosition += 8;
 
             // Normal range (smaller font)
             doc.setTextColor(80, 80, 80);
             doc.setFontSize(8);
             const normalRangeText = `Normal Range: ${param.normalRangeStart} - ${param.normalRangeEnd}`;
             doc.text(normalRangeText, col1X + 2, yPosition);
-            yPosition += 3; // less gap
+            yPosition += 3;
 
-            // Quick range graph using modern progress bar design (smaller graph)
+            // Quick range bar
             const graphWidth = 80;
-            const graphHeight = 6; // smaller graph height
+            const graphHeight = 6;
             const graphX = col1X + 2;
             const graphY = yPosition;
 
-            // Draw a background bar with rounded corners
-            doc.setFillColor(230, 230, 230); // light grey background
+            // Draw background bar
+            doc.setFillColor(230, 230, 230);
             doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "F");
 
-            // Calculate the relative fill based on the parameter's normal range
+            // Calculate the relative fill
             const minRange = param.normalRangeStart;
             const maxRange = param.normalRangeEnd;
             let relative = 0;
@@ -282,45 +293,44 @@ function DownloadReport() {
             }
             const filledWidth = relative * graphWidth;
 
-            // Choose the fill color based on whether the value is normal or abnormal
+            // Choose fill color (red if abnormal, green if normal)
             if (valueNum < minRange || valueNum > maxRange) {
-              doc.setFillColor(244, 67, 54); // red for abnormal values
+              doc.setFillColor(244, 67, 54); // red
             } else {
-              doc.setFillColor(76, 175, 80); // green for normal values
+              doc.setFillColor(76, 175, 80); // green
             }
 
-            // Draw the filled portion with rounded corners
+            // Draw filled portion
             doc.roundedRect(graphX, graphY, filledWidth, graphHeight, 2, 2, "F");
 
-            // Draw a border around the entire graph
+            // Border around graph
             doc.setDrawColor(150, 150, 150);
             doc.setLineWidth(0.2);
             doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "S");
 
-            yPosition += graphHeight + 3; // reduced spacing after graph
+            yPosition += graphHeight + 3;
 
+            // Reset font
             doc.setFontSize(9);
             doc.setTextColor(0, 0, 0);
           }
+
           yPosition += 10;
         }
 
-        // 9. Stamp/Footer if needed
-        if (yPosition > pageHeight - 50) {
-          doc.addPage();
-          await addLetterhead();
-          yPosition = 40;
-        }
+        // 9. Stamp/Footer
+        await checkOverflow(60); // Enough space for stamp
+
         doc.setFont("helvetica", "italic");
         doc.setFontSize(10);
-        const stampWidth = 60;
-        const stampHeight = 60;
+        const stampWidth = 40;
+        const stampHeight = 40;
         const stampX = pageWidth - leftMargin - stampWidth;
         const stampY = pageHeight - stampHeight - 30;
         const stampBase64 = await loadImageAsCompressedJPEG(stamp.src, 0.5);
         doc.addImage(stampBase64, "JPEG", stampX, stampY, stampWidth, stampHeight);
 
-        // 10. Convert to Blob for further usage (download or upload)
+        // 10. Convert to Blob
         const generatedPdfBlob = doc.output("blob");
         setPdfBlob(generatedPdfBlob);
       } catch (error) {
@@ -360,9 +370,9 @@ function DownloadReport() {
       const downloadURL = await getDownloadURL(snapshot.ref);
 
       // 2. Build the WhatsApp message payload
-      const token = "99583991572"; 
-      const contact = patientData.contact; 
-      const number = "91" + contact;
+      const token = "99583991572"; // Example token; adjust to real config
+      const contact = patientData.contact; // e.g. "9876543210"
+      const number = "91" + contact; // For India, for instance
 
       const payload = {
         token,
@@ -464,7 +474,7 @@ function DownloadReport() {
                       viewBox="0 0 24 24"
                       fill="currentColor"
                     >
-                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
                     </svg>
                     <span>Send via WhatsApp</span>
                   </>
@@ -485,7 +495,7 @@ function DownloadReport() {
               </span>
             </div>
             <p className="mt-4 text-sm text-gray-500">
-              This may take a few moments. Please dont close this page.
+              This may take a few moments. Please don’t close this page.
             </p>
           </div>
         )}
@@ -495,7 +505,7 @@ function DownloadReport() {
 }
 
 // ====================
-// Suspense Wrapper (if needed)
+// Suspense Wrapper
 // ====================
 export default function DownloadReportPage() {
   return (
