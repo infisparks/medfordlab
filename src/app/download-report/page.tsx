@@ -485,7 +485,7 @@ function DownloadReport() {
               </span>
             </div>
             <p className="mt-4 text-sm text-gray-500">
-              This may take a few moments. Please don't close this page.
+              This may take a few moments. Please dont close this page.
             </p>
           </div>
         )}
