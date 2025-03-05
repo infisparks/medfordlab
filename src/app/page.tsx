@@ -14,7 +14,7 @@ import {
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 import Image from "next/image";
-
+import Banner from "./../../public/banner.jpeg"
 interface BloodTest {
   testId: string;
   testName: string;
@@ -182,7 +182,7 @@ export default function Dashboard() {
           <div className="flex items-center space-x-4">
             <div className="text-right">
               <p className="text-sm font-medium text-gray-600">
-                Dr. Sarah Johnson
+                Dr.mudassir
               </p>
               <p className="text-xs text-gray-400">Pathologist</p>
             </div>
