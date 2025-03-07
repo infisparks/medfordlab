@@ -17,8 +17,9 @@ interface TestParameterValue {
   name: string;
   unit: string;
   value: number | "";
-  normalRangeStart: number;
-  normalRangeEnd: number;
+  // The range string to display; for common ranges, it comes from range.range.
+  // For separate ranges, it is selected based on the patient’s gender and age group.
+  range: string;
 }
 
 interface TestValueEntry {
@@ -37,6 +38,7 @@ const BloodValuesForm: React.FC = () => {
   const router = useRouter();
   const patientId = searchParams.get("patientId");
   const [loading, setLoading] = useState(true);
+  const [patientGender, setPatientGender] = useState<string>("");
 
   const {
     register,
@@ -59,21 +61,78 @@ const BloodValuesForm: React.FC = () => {
         const patientSnapshot = await get(patientRef);
         if (patientSnapshot.exists()) {
           const patientData = patientSnapshot.val();
+          setPatientGender(patientData.gender || "");
           const patientTests = patientData.bloodTests || [];
+          // Retrieve stored test values if they exist.
+          const storedBloodTests = patientData.bloodtest || {};
+          // Convert patient age to a number.
+          const patientAge = Number(patientData.age);
+
           const testsData: TestValueEntry[] = await Promise.all(
             patientTests.map(async (test: { testId: string; testName: string }) => {
               const testRef = ref(database, `bloodTests/${test.testId}`);
               const testSnapshot = await get(testRef);
               if (testSnapshot.exists()) {
                 const testDetail = testSnapshot.val();
+                // Create a normalized key (lowercase, underscores) to check stored values.
+                const normalizedTestKey = test.testName.toLowerCase().replace(/\s+/g, "_");
+                const storedTest = storedBloodTests[normalizedTestKey];
                 const parameters: TestParameterValue[] = testDetail.parameters.map(
-                  (param: any) => ({
-                    name: param.name,
-                    unit: param.unit,
-                    value: "",
-                    normalRangeStart: param.normalRangeStart,
-                    normalRangeEnd: param.normalRangeEnd,
-                  })
+                  (param: any) => {
+                    let rangeStr = "";
+                    // If the parameter uses age-group–specific ranges,
+                    // determine the correct range based on patient's age and gender.
+                    if (param.agegroup) {
+                      let ageGroup = "";
+                      if (patientAge < 18) {
+                        ageGroup = "child";
+                      } else if (patientAge < 60) {
+                        ageGroup = "adult";
+                      } else {
+                        ageGroup = "older";
+                      }
+                      if (param.genderSpecific) {
+                        // For common range in an age group
+                        rangeStr = param.range?.[ageGroup] || "";
+                      } else {
+                        // For separate ranges based on gender in an age group.
+                        if (
+                          patientData.gender &&
+                          patientData.gender.toLowerCase() === "male"
+                        ) {
+                          rangeStr = param.range?.[ageGroup + "male"] || "";
+                        } else {
+                          rangeStr = param.range?.[ageGroup + "female"] || "";
+                        }
+                      }
+                    } else {
+                      // Non–age-group parameters.
+                      if (param.genderSpecific) {
+                        // For common range, use the "range" key.
+                        rangeStr = param.range?.range || "";
+                      } else {
+                        // For separate ranges, choose based on patient's gender.
+                        if (
+                          patientData.gender &&
+                          patientData.gender.toLowerCase() === "male"
+                        ) {
+                          rangeStr = param.range?.male || "";
+                        } else {
+                          rangeStr = param.range?.female || "";
+                        }
+                      }
+                    }
+                    // If stored test exists, try to find a stored value for this parameter.
+                    const storedParam = storedTest
+                      ? storedTest.parameters.find((p: any) => p.name === param.name)
+                      : null;
+                    return {
+                      name: param.name,
+                      unit: param.unit,
+                      value: storedParam ? storedParam.value : "",
+                      range: rangeStr,
+                    };
+                  }
                 );
                 return {
                   testId: test.testId,
@@ -105,9 +164,10 @@ const BloodValuesForm: React.FC = () => {
 
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
     try {
-      // Save each test's parameters in Firebase under the "bloodtest" node
+      // Save each test's parameter values in Firebase under the "bloodtest" node
       for (const test of data.tests) {
-        const testKey = test.testName.toLowerCase();
+        // Create a key from test name (lowercase and spaces replaced)
+        const testKey = test.testName.toLowerCase().replace(/\s+/g, "_");
         const testRef = ref(database, `patients/${data.patientId}/bloodtest/${testKey}`);
         await set(testRef, {
           parameters: test.parameters,
@@ -115,7 +175,6 @@ const BloodValuesForm: React.FC = () => {
         });
       }
       alert("Blood test values saved successfully!");
-      // Redirect to the download-report page with the patientId as query param
       router.push(`/download-report?patientId=${data.patientId}`);
     } catch (error) {
       console.error("Error saving blood test values:", error);
@@ -203,9 +262,7 @@ const BloodValuesForm: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-2 text-sm">
                         <span className="text-gray-500">Normal Range:</span>
-                        <span className="font-medium text-green-600">
-                          {param.normalRangeStart} - {param.normalRangeEnd}
-                        </span>
+                        <span className="font-medium text-green-600">{param.range}</span>
                       </div>
                       {errors.tests?.[index]?.parameters?.[paramIndex]?.value && (
                         <p className="text-red-500 text-sm flex items-center gap-2">

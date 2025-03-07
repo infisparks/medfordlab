@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
 import { ref as dbRef, get } from "firebase/database";
-import { database } from "../../firebase"; // ← Adjust path if needed
+import { database } from "../../firebase"; // Adjust path if needed
 import {
   getStorage,
   ref as storageRef,
@@ -12,22 +12,70 @@ import {
   getDownloadURL,
 } from "firebase/storage";
 
-// Make sure these images are imported correctly (import paths might differ in your setup)
+// Import images – adjust paths as needed
 import letterhead from "../../../public/letterhead.png";
 import firstpage from "../../../public/fisrt.png";
 import stamp from "../../../public/stamp.png";
 
 import JsBarcode from "jsbarcode";
 
-// ====================
+// -----------------------------
+// Type Definitions
+// -----------------------------
+interface Parameter {
+  name: string;
+  value: string | number;
+  unit: string;
+  range?: any; // If you have a known structure, replace 'any' with it
+  agegroup?: boolean;
+  genderSpecific?: boolean;
+}
+
+interface BloodTestData {
+  parameters: Parameter[];
+  // You can add more fields if your structure has them
+}
+
+interface BloodTestsDefinitionParameter {
+  name: string;
+  agegroup?: boolean;
+  genderSpecific?: boolean;
+  range?: {
+    [key: string]: string; // e.g. child, adult, older, male, female, etc.
+  };
+}
+
+interface BloodTestDefinition {
+  parameters: BloodTestsDefinitionParameter[];
+  // Add other fields from your definitions if needed
+}
+
+interface FirestoreBloodTestItem {
+  testName: string;
+  testId: string;
+}
+
+interface PatientData {
+  name: string;
+  age: string | number;
+  gender: string;
+  patientId: string;
+  createdAt: string;
+  contact: string;
+  bloodTests?: FirestoreBloodTestItem[];
+  bloodtest?: Record<string, BloodTestData>;
+}
+
+// -----------------------------
 // Helper: Compress image as JPEG
-// ====================
+// -----------------------------
 const loadImageAsCompressedJPEG = async (
   url: string,
-  quality: number = 0.5
+  quality = 0.5
 ): Promise<string> => {
   const response = await fetch(url);
   const blob = await response.blob();
+
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -53,10 +101,11 @@ function DownloadReport() {
   const searchParams = useSearchParams();
   const patientId = searchParams.get("patientId");
 
-  // To prevent duplicate PDF generation
+  // Prevent duplicate PDF generation
   const pdfGenerated = useRef(false);
 
-  const [patientData, setPatientData] = useState<any>(null);
+  // typed states
+  const [patientData, setPatientData] = useState<PatientData | null>(null);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [isSending, setIsSending] = useState(false);
 
@@ -75,25 +124,35 @@ function DownloadReport() {
           alert("Patient not found");
           return;
         }
-        const data = snapshot.val();
+        const data = snapshot.val() as PatientData;
         setPatientData(data);
 
-        // 2. Check if there's any `bloodtest` data
         if (!data.bloodtest) {
           alert("No report found for this patient.");
           return;
         }
 
-        // 3. Create PDF doc
+        // 2. Build mapping from normalized test name to test id
+        const testMapping: Record<string, string> = {};
+        if (data.bloodTests) {
+          data.bloodTests.forEach((t: FirestoreBloodTestItem) => {
+            const normalized = t.testName.toLowerCase().replace(/\s+/g, "_");
+            testMapping[normalized] = t.testId;
+          });
+        }
+
+        // 3. Create PDF document (Professional Report)
         const doc = new jsPDF("p", "mm", "a4");
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
+        const leftMargin = 30;
 
         // Helper: Add cover page
         const addCoverPage = async () => {
           try {
             const coverBase64 = await loadImageAsCompressedJPEG(firstpage.src, 0.5);
-            doc.addImage(coverBase64, "JPEG", 0, 0, pageWidth, pageHeight);
+            // Cast to string to appease jsPDF typing
+            doc.addImage(coverBase64 as string, "JPEG", 0, 0, pageWidth, pageHeight);
           } catch (error) {
             console.error("Error loading cover page template:", error);
           }
@@ -102,163 +161,248 @@ function DownloadReport() {
         // Helper: Add letterhead to a page
         const addLetterhead = async () => {
           try {
-            const letterheadBase64 = await loadImageAsCompressedJPEG(letterhead.src, 0.5);
-            doc.addImage(letterheadBase64, "JPEG", 0, 0, pageWidth, pageHeight);
+            const letterheadBase64 = await loadImageAsCompressedJPEG(
+              letterhead.src,
+              0.5
+            );
+            doc.addImage(
+              letterheadBase64 as string,
+              "JPEG",
+              0,
+              0,
+              pageWidth,
+              pageHeight
+            );
           } catch (error) {
             console.error("Error loading letterhead image:", error);
           }
         };
 
-        // We track the y-position and whether we are on the first content page
-        let yPosition = 0;
-        let isFirstContentPage = true;
-
-        // Helper: Check if there's enough vertical space, or else add new page
-        const checkOverflow = async (extraSpace = 0) => {
-          if (yPosition + extraSpace > pageHeight - 50) {
-            doc.addPage();
-            await addLetterhead();
-            // After the very first content page, all subsequent pages should have a top margin of 60
-            if (isFirstContentPage) {
-              yPosition = 40; 
-              isFirstContentPage = false;
-            } else {
-              yPosition = 60;
-            }
-          }
+        // Helper: Add header on each test page
+        // Left: Name, Age, Gender; Right: Registration On, Reported On (current time), Patient ID.
+        // A top margin of 60mm is maintained before printing user details.
+        const addHeader = () => {
+          let y = 50; // start printing after ~50mm top margin
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(10);
+          doc.setTextColor(0, 0, 0);
+          // Left side header
+          doc.text(`Name: ${data.name}`, leftMargin, y);
+          y += 7;
+          doc.text(`Age: ${data.age}`, leftMargin, y);
+          y += 7;
+          doc.text(`Gender: ${data.gender}`, leftMargin, y);
+          // Right side header
+          doc.text(
+            `Registration On: ${new Date(data.createdAt).toLocaleString()}`,
+            pageWidth - leftMargin,
+            50,
+            { align: "right" }
+          );
+          doc.text(
+            `Reported On: ${new Date().toLocaleString()}`,
+            pageWidth - leftMargin,
+            57,
+            { align: "right" }
+          );
+          doc.text(`Patient ID: ${data.patientId}`, pageWidth - leftMargin, 64, {
+            align: "right",
+          });
+          return Math.max(y, 74) + 10; // return y position after header area
         };
 
-        // 4. Add cover page
+        // 4. Create cover page
         await addCoverPage();
 
-        // 5. Add next page (with letterhead) for the actual report content
-        doc.addPage();
-        await addLetterhead();
+        // 5. Loop over each test in bloodtest – one test per page
+        const bloodtest = data.bloodtest; // typed as Record<string, BloodTestData>
 
-        // For the very first content page, margin top = 40
-        if (isFirstContentPage) {
-          yPosition = 40;
-          isFirstContentPage = false;
-        } else {
-          yPosition = 60;
-        }
+        for (const testKey in bloodtest) {
+          // For each test, add a new page with letterhead
+          doc.addPage();
+          await addLetterhead();
 
-        const leftMargin = 30;
+          // Add header info on this test page
+          let yPosition = addHeader();
 
-        // 6. Header info
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(22);
-        doc.setTextColor(0, 51, 102);
-        yPosition += 12;
+          // 6. Generate Barcode from patientId and add it below header
+          // Place barcode starting at current yPosition
+          const canvas = document.createElement("canvas");
+          JsBarcode(canvas, patientId || "", {
+            format: "CODE128",
+            displayValue: false,
+            fontSize: 14,
+            width: 2,
+            height: 40,
+          });
+          const barcodeDataUrl = canvas.toDataURL("image/png");
+          const barcodeWidth = 30;
+          const barcodeHeight = 10;
+          const barcodeY = 65; // print barcode after header
+          doc.addImage(
+            barcodeDataUrl as string,
+            "PNG",
+            pageWidth - leftMargin - barcodeWidth,
+            barcodeY,
+            barcodeWidth,
+            barcodeHeight
+          );
+          yPosition = Math.max(yPosition, barcodeY + barcodeHeight + 1);
 
-        // Switch font for details
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(12);
-        doc.setTextColor(0, 0, 0);
+          // Horizontal line under header
+          doc.setDrawColor(0, 51, 102);
+          doc.setLineWidth(0.5);
+          doc.line(leftMargin, 76, pageWidth - leftMargin, 76);
+          yPosition += 1;
 
-        // Basic info
-        if (data.name) {
-          doc.text(`Name: ${data.name}`, leftMargin, yPosition);
-          yPosition += 7;
-        }
-        if (data.contact) {
-          doc.text(`Contact: ${data.contact}`, leftMargin, yPosition);
-          yPosition += 7;
-        }
-        const currentDate = new Date().toLocaleDateString();
-        doc.text(`Date: ${currentDate}`, pageWidth - leftMargin, 40 + 12, {
-          align: "right",
-        });
+          // Compute patient's age and gender (if needed later)
+          const patientAge = Number(data.age);
+          const patientGender = data.gender ? data.gender.toLowerCase() : "";
 
-        // 7. Generate Barcode from patientId
-        const canvas = document.createElement("canvas");
-        JsBarcode(canvas, patientId || "", {
-          format: "CODE128",
-          displayValue: false,
-          fontSize: 14,
-          width: 2,
-          height: 40,
-        });
-        const barcodeDataUrl = canvas.toDataURL("image/png");
-        const barcodeWidth = 40;
-        const barcodeHeight = 15;
-        const barcodeY = 40 + 14;
-        doc.addImage(
-          barcodeDataUrl,
-          "PNG",
-          pageWidth - leftMargin - barcodeWidth,
-          barcodeY,
-          barcodeWidth,
-          barcodeHeight
-        );
-        // Ensure yPosition at least goes below the barcode
-        yPosition = Math.max(yPosition, barcodeY + barcodeHeight + 1);
-
-        // Horizontal line
-        doc.setDrawColor(0, 51, 102);
-        doc.setLineWidth(0.5);
-        doc.line(leftMargin, yPosition, pageWidth - leftMargin, yPosition);
-        yPosition += 13;
-
-        // 8. Loop over each test in `data.bloodtest`
-        for (const testKey in data.bloodtest) {
-          // Check overflow before adding the test title
-          await checkOverflow(20);
-          const test = data.bloodtest[testKey];
+          // 7. Fetch test definition if available
+          let testDefinition: BloodTestDefinition | null = null;
+          if (testMapping[testKey]) {
+            const defRef = dbRef(database, `bloodTests/${testMapping[testKey]}`);
+            const defSnapshot = await get(defRef);
+            if (defSnapshot.exists()) {
+              testDefinition = defSnapshot.val() as BloodTestDefinition;
+            }
+          }
 
           // Test title
           doc.setFont("helvetica", "bold");
           doc.setFontSize(16);
           doc.setTextColor(0, 51, 102);
           doc.text(` ${testKey.toUpperCase()}`, leftMargin, yPosition);
-          yPosition += 2;
+          yPosition += 4;
 
           // Table header
-          await checkOverflow(10);
           const col1X = leftMargin;
           const col2X = pageWidth / 2;
           const col3X = pageWidth - leftMargin;
           const headerHeight = 6;
-
-          // Header color background
           doc.setFillColor(0, 51, 102);
           doc.rect(leftMargin, yPosition, pageWidth - 2 * leftMargin, headerHeight, "F");
           doc.setTextColor(255, 255, 255);
-          doc.setFontSize(10);
+          doc.setFontSize(8);
           doc.text("Parameter", col1X + 2, yPosition + headerHeight - 2);
           doc.text("Value", col2X, yPosition + headerHeight - 2, { align: "center" });
-          doc.text("Unit", col3X - 2, yPosition + headerHeight - 2, { align: "right" });
+          doc.text("Unit", col3X - 2, yPosition + headerHeight - 2, {
+            align: "right",
+          });
           yPosition += headerHeight + 3;
 
-          // Table rows
+          // Table rows for test parameters
           doc.setFont("helvetica", "normal");
-          doc.setFontSize(9);
+          doc.setFontSize(7);
           doc.setTextColor(0, 0, 0);
 
-          // Each parameter
-          for (const param of test.parameters) {
-            // Check if next row will overflow
-            await checkOverflow(15);
+          const parameters = bloodtest[testKey].parameters;
 
+          for (const param of parameters) {
+            // Determine the range string based on test definition if available
+            let rangeStr = "";
+            if (testDefinition) {
+              const paramDef = testDefinition.parameters.find(
+                (p) => p.name === param.name
+              );
+              if (paramDef) {
+                if (paramDef.agegroup) {
+                  let ageGroup = "";
+                  if (patientAge < 18) {
+                    ageGroup = "child";
+                  } else if (patientAge < 60) {
+                    ageGroup = "adult";
+                  } else {
+                    ageGroup = "older";
+                  }
+
+                  if (paramDef.genderSpecific) {
+                    // If the param is gender-specific, we assume paramDef.range has male/female keys
+                    rangeStr =
+                      patientGender === "male"
+                        ? paramDef.range?.[`${ageGroup}male`] || ""
+                        : paramDef.range?.[`${ageGroup}female`] || "";
+                  } else {
+                    rangeStr = paramDef.range?.[ageGroup] || "";
+                  }
+                } else {
+                  // not agegroup
+                  if (paramDef.genderSpecific) {
+                    // Then there's probably one range, e.g. paramDef.range?.range
+                    rangeStr = paramDef.range?.range || "";
+                  } else {
+                    // assume separate male/female keys
+                    rangeStr =
+                      patientGender === "male"
+                        ? paramDef.range?.male || ""
+                        : paramDef.range?.female || "";
+                  }
+                }
+              } else {
+                // fallback if param not found
+                if (typeof param.range === "string") {
+                  rangeStr = param.range;
+                }
+              }
+            } else {
+              // Fallback if test definition is not available
+              if (param.range && typeof param.range === "string") {
+                rangeStr = param.range;
+              } else if (param.agegroup) {
+                let ageGroup = "";
+                if (patientAge < 18) {
+                  ageGroup = "child";
+                } else if (patientAge < 60) {
+                  ageGroup = "adult";
+                } else {
+                  ageGroup = "older";
+                }
+                if (param.genderSpecific) {
+                  rangeStr = param.range?.[ageGroup] || "";
+                } else {
+                  rangeStr =
+                    patientGender === "male"
+                      ? param.range?.[`${ageGroup}male`] || ""
+                      : param.range?.[`${ageGroup}female`] || "";
+                }
+              } else if (param.genderSpecific) {
+                rangeStr = param.range?.range || "";
+              } else {
+                const genderKey = patientGender === "male" ? "male" : "female";
+                rangeStr = param.range?.[genderKey] || "";
+              }
+            }
+
+            let minRange = 0,
+              maxRange = 0;
+            if (rangeStr) {
+              const parts = rangeStr.split("-");
+              if (parts.length === 2) {
+                minRange = parseFloat(parts[0].trim());
+                maxRange = parseFloat(parts[1].trim());
+              }
+            }
+
+            // Draw a light horizontal line for each row
             doc.setDrawColor(200, 200, 200);
             doc.setLineWidth(0.1);
             doc.line(leftMargin, yPosition, pageWidth - leftMargin, yPosition);
 
             // Parameter name
+            doc.setTextColor(0, 0, 0);
             doc.text(param.name, col1X + 2, yPosition + 4);
 
             // Parameter value
             const valueStr = param.value !== "" ? String(param.value) : "-";
-            const valueNum = parseFloat(param.value);
+            const valueNum = parseFloat(String(param.value));
             let valueColor: [number, number, number] = [0, 0, 0];
-
-            // If the value is outside normal range, show in red
-            if (param.value !== "" && !isNaN(valueNum)) {
-              if (valueNum < param.normalRangeStart || valueNum > param.normalRangeEnd) {
-                valueColor = [255, 0, 0];
+            if (rangeStr && param.value !== "" && !isNaN(valueNum)) {
+              if (valueNum < minRange || valueNum > maxRange) {
+                valueColor = [255, 0, 0]; // out of range => red
               }
             }
-            doc.setTextColor(...valueColor);
+            doc.setTextColor(valueColor[0], valueColor[1], valueColor[2]);
             doc.text(valueStr, col2X, yPosition + 4, { align: "center" });
 
             // Parameter unit
@@ -266,71 +410,68 @@ function DownloadReport() {
             doc.text(param.unit, col3X - 2, yPosition + 4, { align: "right" });
             yPosition += 8;
 
-            // Normal range (smaller font)
+            // Normal range text (font size reduced)
             doc.setTextColor(80, 80, 80);
-            doc.setFontSize(8);
-            const normalRangeText = `Normal Range: ${param.normalRangeStart} - ${param.normalRangeEnd}`;
+            doc.setFontSize(6);
+            const normalRangeText = `Normal Range: ${rangeStr}`;
             doc.text(normalRangeText, col1X + 2, yPosition);
             yPosition += 3;
 
-            // Quick range bar
+            // Quick range bar (graph)
             const graphWidth = 80;
-            const graphHeight = 6;
+            const graphHeight = 4;
             const graphX = col1X + 2;
             const graphY = yPosition;
-
-            // Draw background bar
             doc.setFillColor(230, 230, 230);
             doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "F");
 
-            // Calculate the relative fill
-            const minRange = param.normalRangeStart;
-            const maxRange = param.normalRangeEnd;
             let relative = 0;
-            if (!isNaN(valueNum)) {
+            if (!isNaN(valueNum) && maxRange > minRange) {
               const clampedValue = Math.min(Math.max(valueNum, minRange), maxRange);
               relative = (clampedValue - minRange) / (maxRange - minRange);
             }
             const filledWidth = relative * graphWidth;
-
-            // Choose fill color (red if abnormal, green if normal)
-            if (valueNum < minRange || valueNum > maxRange) {
+            if (!isNaN(valueNum) && (valueNum < minRange || valueNum > maxRange)) {
               doc.setFillColor(244, 67, 54); // red
             } else {
               doc.setFillColor(76, 175, 80); // green
             }
+            doc.roundedRect(
+              graphX,
+              graphY,
+              filledWidth,
+              graphHeight,
+              2,
+              2,
+              "F"
+            );
 
-            // Draw filled portion
-            doc.roundedRect(graphX, graphY, filledWidth, graphHeight, 2, 2, "F");
-
-            // Border around graph
             doc.setDrawColor(150, 150, 150);
             doc.setLineWidth(0.2);
             doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "S");
 
             yPosition += graphHeight + 3;
-
-            // Reset font
-            doc.setFontSize(9);
+            doc.setFontSize(7);
             doc.setTextColor(0, 0, 0);
           }
-
-          yPosition += 10;
         }
 
-        // 9. Stamp/Footer
-        await checkOverflow(60); // Enough space for stamp
-
-        doc.setFont("helvetica", "italic");
-        doc.setFontSize(10);
+        // 8. Add stamp/footer on the last page
         const stampWidth = 40;
         const stampHeight = 40;
         const stampX = pageWidth - leftMargin - stampWidth;
         const stampY = pageHeight - stampHeight - 30;
         const stampBase64 = await loadImageAsCompressedJPEG(stamp.src, 0.5);
-        doc.addImage(stampBase64, "JPEG", stampX, stampY, stampWidth, stampHeight);
+        doc.addImage(
+          stampBase64 as string,
+          "JPEG",
+          stampX,
+          stampY,
+          stampWidth,
+          stampHeight
+        );
 
-        // 10. Convert to Blob
+        // 9. Convert to Blob and update state for download/send
         const generatedPdfBlob = doc.output("blob");
         setPdfBlob(generatedPdfBlob);
       } catch (error) {
@@ -342,9 +483,7 @@ function DownloadReport() {
     fetchDataAndGenerateReport();
   }, [patientId, router]);
 
-  // ====================
-  // Download PDF
-  // ====================
+  // Download Professional PDF
   const downloadReport = () => {
     if (!pdfBlob || !patientData) return;
     const url = URL.createObjectURL(pdfBlob);
@@ -355,41 +494,30 @@ function DownloadReport() {
     URL.revokeObjectURL(url);
   };
 
-  // ====================
-  // Send PDF to WhatsApp
-  // ====================
+  // Send Professional PDF to WhatsApp
   const sendReportOnWhatsApp = async () => {
     if (!pdfBlob || !patientData) return;
     setIsSending(true);
-
     try {
-      // 1. Upload the PDF to Firebase Storage
       const storage = getStorage();
       const storageRefInstance = storageRef(storage, `reports/${patientData.name}.pdf`);
       const snapshot = await uploadBytes(storageRefInstance, pdfBlob);
       const downloadURL = await getDownloadURL(snapshot.ref);
-
-      // 2. Build the WhatsApp message payload
-      const token = "99583991572"; // Example token; adjust to real config
-      const contact = patientData.contact; // e.g. "9876543210"
-      const number = "91" + contact; // For India, for instance
-
+      const token = "99583991572"; // Adjust as needed
+      const contact = patientData.contact;
+      const number = "91" + contact;
       const payload = {
         token,
         number,
         imageUrl: downloadURL,
         caption: `Dear ${patientData.name},\n\nYour blood test report is now available. Please click the link below to view/download.\n\nReport URL: ${downloadURL}\n\nThank you for choosing our services.\n\nRegards,\nMEDFORD Team`,
       };
-
-      // 3. Send via your WhatsApp API endpoint
       const response = await fetch("https://wa.medblisss.com/send-image-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
       const jsonResponse = await response.json();
-
       if (response.ok) {
         alert("Report sent on WhatsApp successfully!");
       } else {
@@ -404,9 +532,6 @@ function DownloadReport() {
     }
   };
 
-  // ====================
-  // Render
-  // ====================
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full space-y-6">
@@ -416,7 +541,6 @@ function DownloadReport() {
               <h2 className="text-3xl font-bold text-gray-800 text-center mb-6">
                 Report Ready
               </h2>
-
               <button
                 onClick={downloadReport}
                 className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-4 rounded-xl font-medium transition-all duration-300"
@@ -437,7 +561,6 @@ function DownloadReport() {
                 </svg>
                 <span>Download PDF Report</span>
               </button>
-
               <button
                 onClick={sendReportOnWhatsApp}
                 disabled={isSending}
@@ -481,7 +604,6 @@ function DownloadReport() {
                 )}
               </button>
             </div>
-
             <p className="text-center text-sm text-gray-500 mt-4">
               Report generated for {patientData.name}
             </p>
@@ -504,9 +626,6 @@ function DownloadReport() {
   );
 }
 
-// ====================
-// Suspense Wrapper
-// ====================
 export default function DownloadReportPage() {
   return (
     <Suspense fallback={<div>Loading Report...</div>}>

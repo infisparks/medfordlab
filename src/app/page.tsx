@@ -14,7 +14,8 @@ import {
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 import Image from "next/image";
-import Banner from "./../../public/banner.jpeg"
+import Banner from "./../../public/banner.jpeg";
+
 interface BloodTest {
   testId: string;
   testName: string;
@@ -33,7 +34,8 @@ interface Patient {
   amountPaid: number;
   bloodTests?: BloodTest[];
   bloodtest?: Record<string, any>;
-  report: boolean; // changed from `report?: boolean;`
+  report: boolean;
+  paymentHistory?: { amount: number; paymentMode: string; time: string }[];
 }
 
 export default function Dashboard() {
@@ -46,6 +48,7 @@ export default function Dashboard() {
   });
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [newAmountPaid, setNewAmountPaid] = useState<number>(0);
+  const [paymentMode, setPaymentMode] = useState<string>("online");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -60,11 +63,13 @@ export default function Dashboard() {
         : true;
       let matchesStatus = true;
       if (statusFilter === "completed") {
-        matchesStatus = Boolean(patient.bloodtest && Object.keys(patient.bloodtest).length > 0);
+        matchesStatus = Boolean(
+          patient.bloodtest && Object.keys(patient.bloodtest).length > 0
+        );
       } else if (statusFilter === "pending") {
         matchesStatus = !(
-            patient.bloodtest && Object.keys(patient.bloodtest).length > 0
-          );
+          patient.bloodtest && Object.keys(patient.bloodtest).length > 0
+        );
       }
       return matchesSearch && matchesDate && matchesStatus;
     });
@@ -95,14 +100,17 @@ export default function Dashboard() {
 
         // Sort so that completed patients appear first, then by date descending
         const sortedPatients = patientList.sort((a, b) => {
-          const aComplete = a.bloodtest && Object.keys(a.bloodtest).length > 0;
-          const bComplete = b.bloodtest && Object.keys(b.bloodtest).length > 0;
+          const aComplete =
+            a.bloodtest && Object.keys(a.bloodtest).length > 0;
+          const bComplete =
+            b.bloodtest && Object.keys(b.bloodtest).length > 0;
 
           if (aComplete && !bComplete) return -1;
           if (!aComplete && bComplete) return 1;
 
           return (
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            new Date(b.createdAt).getTime() -
+            new Date(a.createdAt).getTime()
           );
         });
 
@@ -138,15 +146,24 @@ export default function Dashboard() {
       const epsilon = 1;
       const isComplete = newRemaining <= epsilon; // boolean
 
-      // Update in Firebase
+      // Update in Firebase: update amountPaid, report status and add paymentHistory entry
       await update(patientRef, {
         amountPaid: updatedAmount,
         report: isComplete,
+        paymentHistory: [
+          ...(selectedPatient.paymentHistory || []),
+          {
+            amount: newAmountPaid,
+            paymentMode: paymentMode, // use selected payment mode
+            time: new Date().toISOString(),
+          },
+        ],
       });
 
       alert("Amount updated successfully!");
       setSelectedPatient(null);
       setNewAmountPaid(0);
+      setPaymentMode("online");
     } catch (error) {
       console.error("Error updating amount:", error);
       alert("Error updating amount. Please try again.");
@@ -155,7 +172,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen flex bg-gray-50">
-      {/* Pass the open prop to Sidebar */}
+      {/* Sidebar */}
       <Sidebar open={sidebarOpen} />
 
       {/* Main Content */}
@@ -297,6 +314,9 @@ export default function Dashboard() {
                       Status
                     </th>
                     <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                      Remaining
+                    </th>
+                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
                       Actions
                     </th>
                   </tr>
@@ -338,16 +358,32 @@ export default function Dashboard() {
                           </span>
                         )}
                       </td>
+                      <td className="px-6 py-4 text-sm">
+                        {(() => {
+                          const { remaining } = calculateAmounts(patient);
+                          return remaining > 0
+                            ? `₹${remaining.toFixed(2)}`
+                            : "0";
+                        })()}
+                      </td>
                       <td className="px-6 py-4 space-x-2">
                         {patient.bloodtest &&
                         Object.keys(patient.bloodtest).length > 0 ? (
-                          <Link
-                            href={`/download-report?patientId=${patient.id}`}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 transition-colors"
-                          >
-                            <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                            Download Report
-                          </Link>
+                          <>
+                            <Link
+                              href={`/download-report?patientId=${patient.id}`}
+                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 transition-colors"
+                            >
+                              <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                              Download Report
+                            </Link>
+                            <Link
+                              href={`/blood-values/new?patientId=${patient.id}`}
+                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 transition-colors"
+                            >
+                              Edit Test
+                            </Link>
+                          </>
                         ) : (
                           <Link
                             href={`/blood-values/new?patientId=${patient.id}`}
@@ -412,9 +448,7 @@ export default function Dashboard() {
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">
-                      Current Paid:
-                    </span>
+                    <span className="text-sm text-gray-600">Current Paid:</span>
                     <span className="text-sm font-medium">
                       ₹{selectedPatient.amountPaid.toFixed(2)}
                     </span>
@@ -442,6 +476,20 @@ export default function Dashboard() {
                   placeholder="Enter additional payment"
                   required
                 />
+              </div>
+              {/* Payment Mode Selector */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700">
+                  Payment Mode
+                </label>
+                <select
+                  value={paymentMode}
+                  onChange={(e) => setPaymentMode(e.target.value)}
+                  className="mt-1 block w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="online">Online</option>
+                </select>
               </div>
               <button
                 type="submit"

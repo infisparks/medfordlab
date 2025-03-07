@@ -1,30 +1,46 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { database } from "../../firebase";
-import { ref, get, update, remove as dbRemove } from "firebase/database";
-import { useForm, useFieldArray, SubmitHandler } from "react-hook-form";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { database } from "../../firebase"; // or wherever your firebase config is
+import { ref, get, update, remove } from "firebase/database";
+import { useForm, useFieldArray } from "react-hook-form";
 import {
-  faFlask,
-  faEdit,
-  faTrash,
-  faRupeeSign,
-  faPlusCircle,
-  faTimes,
-  faChartLine,
-  faListOl,
-  faCalendar,
-} from "@fortawesome/free-solid-svg-icons";
+  FaEdit,
+  FaTrash,
+  FaRupeeSign,
+  FaFlask,
+  FaSave,
+  FaPlus,
+} from "react-icons/fa";
 
-// ------------------------------------------
+// -----------------------------
 // INTERFACES
-// ------------------------------------------
+// -----------------------------
 interface Parameter {
   name: string;
   unit: string;
-  normalRangeStart: number;
-  normalRangeEnd: number;
+  // When true: use common range for both genders.
+  // When false: specify separate ranges.
+  genderSpecific: boolean;
+  // When true: use age-group specific fields.
+  agegroup?: boolean;
+  range: {
+    // Without age groups:
+    range?: string; // for common range
+    male?: string;
+    female?: string;
+    // With age groups and common range:
+    child?: string;
+    adult?: string;
+    older?: string;
+    // With age groups and separate ranges:
+    childmale?: string;
+    childfemale?: string;
+    adultmale?: string;
+    adultfemale?: string;
+    oldermale?: string;
+    olderfemale?: string;
+  };
 }
 
 interface BloodTestFormInputs {
@@ -38,42 +54,89 @@ interface TestData extends BloodTestFormInputs {
   createdAt: string;
 }
 
+// -----------------------------
+// EDIT TEST MODAL
+// -----------------------------
 interface EditTestModalProps {
   testData: TestData;
   onClose: () => void;
   onTestUpdated: () => void;
-  onTestDeleted: () => void;
 }
 
-// ------------------------------------------
-// EDIT MODAL COMPONENT
-// ------------------------------------------
 const EditTestModal: React.FC<EditTestModalProps> = ({
   testData,
   onClose,
   onTestUpdated,
-  onTestDeleted,
 }) => {
+  // Preprocess parameters so that each has the proper range structure.
+  const preppedParams = testData.parameters.map((param) => {
+    if (param.agegroup) {
+      if (param.genderSpecific) {
+        // Age group with common range per group
+        return {
+          ...param,
+          range: {
+            child: param.range?.child || "",
+            adult: param.range?.adult || "",
+            older: param.range?.older || "",
+          },
+        };
+      } else {
+        // Age group with separate ranges for male and female
+        return {
+          ...param,
+          range: {
+            childmale: param.range?.childmale || "",
+            childfemale: param.range?.childfemale || "",
+            adultmale: param.range?.adultmale || "",
+            adultfemale: param.range?.adultfemale || "",
+            oldermale: param.range?.oldermale || "",
+            olderfemale: param.range?.olderfemale || "",
+          },
+        };
+      }
+    } else {
+      // Not using age groups
+      if (param.genderSpecific) {
+        return {
+          ...param,
+          range: {
+            range: param.range?.range || "",
+          },
+        };
+      } else {
+        return {
+          ...param,
+          range: {
+            male: param.range?.male || "",
+            female: param.range?.female || "",
+          },
+        };
+      }
+    }
+  });
+
   const {
     register,
     handleSubmit,
     control,
+    watch,
     formState: { errors },
   } = useForm<BloodTestFormInputs>({
     defaultValues: {
       testName: testData.testName,
       price: testData.price,
-      parameters: testData.parameters || [],
+      parameters: preppedParams,
     },
   });
 
-  // Rename the field array's remove to avoid conflict with Firebase's remove
-  const { fields, append, remove: removeField } = useFieldArray({
+  const { fields, append, remove } = useFieldArray({
     control,
     name: "parameters",
   });
 
-  const onSubmit: SubmitHandler<BloodTestFormInputs> = async (data) => {
+  // Called on "Save Changes"
+  const onSubmit = async (data: BloodTestFormInputs) => {
     try {
       const testRef = ref(database, `bloodTests/${testData.key}`);
       await update(testRef, {
@@ -89,13 +152,14 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
     }
   };
 
+  // Called on "Delete Test"
   const handleDelete = async () => {
     if (!window.confirm("Are you sure you want to delete this test?")) return;
     try {
       const testRef = ref(database, `bloodTests/${testData.key}`);
-      await dbRemove(testRef);
+      await remove(testRef);
       alert("Test deleted successfully!");
-      onTestDeleted();
+      onTestUpdated();
       onClose();
     } catch (error) {
       console.error("Error deleting test:", error);
@@ -104,47 +168,38 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
   };
 
   return (
-    // The modal overlay now covers only the main content area
-    <div
-      className="fixed top-0 bottom-0 right-0 left-[256px] z-50 flex items-center justify-end bg-black bg-opacity-40 backdrop-blur-sm"
-    >
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-6 mx-4 transition-all duration-300 ease-out max-h-[80vh] overflow-y-auto">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-gray-800">
-            <FontAwesomeIcon icon={faEdit} className="mr-2 text-indigo-600" />
-            Edit Blood Test
+    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+      {/* Make the modal scrollable */}
+      <div className="bg-white p-6 rounded-lg w-full max-w-3xl max-h-[85vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold flex items-center">
+            <FaEdit className="mr-2" /> Edit Blood Test
           </h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <FontAwesomeIcon icon={faTimes} className="text-xl" />
+          <button onClick={onClose} className="text-gray-600 hover:text-gray-800">
+            Close
           </button>
         </div>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           {/* Test Name */}
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-            <label className="block text-sm font-medium text-gray-600 mb-2">
-              <FontAwesomeIcon icon={faFlask} className="mr-2 text-indigo-500" />
-              Test Name
-            </label>
+          <div>
+            <label className="block text-sm font-medium">Test Name</label>
             <input
               type="text"
-              {...register("testName", { required: "Test Name is required" })}
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+              {...register("testName", { required: "Test name is required" })}
+              className="w-full border rounded px-3 py-2"
             />
             {errors.testName && (
-              <p className="text-red-500 text-sm mt-1">
-                {errors.testName.message}
-              </p>
+              <p className="text-red-500 text-xs">{errors.testName.message}</p>
             )}
           </div>
 
           {/* Price */}
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-            <label className="block text-sm font-medium text-gray-600 mb-2">
-              <FontAwesomeIcon icon={faRupeeSign} className="mr-2 text-green-500" />
+          <div>
+            <label className="block text-sm font-medium">
               Price (Rs.)
+              <FaRupeeSign className="inline-block ml-1 text-green-600" />
             </label>
             <input
               type="number"
@@ -153,146 +208,381 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
                 required: "Price is required",
                 valueAsNumber: true,
               })}
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+              className="w-full border rounded px-3 py-2"
             />
             {errors.price && (
-              <p className="text-red-500 text-sm mt-1">
-                {errors.price.message}
-              </p>
+              <p className="text-red-500 text-xs">{errors.price.message}</p>
             )}
           </div>
 
           {/* Parameters */}
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-            <div className="flex justify-between items-center mb-4">
-              <label className="block text-sm font-medium text-gray-600">
-                <FontAwesomeIcon icon={faListOl} className="mr-2 text-purple-500" />
-                Parameters
-              </label>
-              <button
-                type="button"
-                onClick={() =>
-                  append({
-                    name: "",
-                    unit: "",
-                    normalRangeStart: 0,
-                    normalRangeEnd: 0,
-                  })
-                }
-                className="text-indigo-600 hover:text-indigo-800 font-medium text-sm"
-              >
-                <FontAwesomeIcon icon={faPlusCircle} className="mr-2" />
-                Add Parameter
-              </button>
-            </div>
+          <div>
+            <label className="block text-sm font-medium">Parameters</label>
+            {fields.map((field, index) => {
+              const useCommonRange =
+                watch(`parameters.${index}.genderSpecific`) === true;
+              const useAgeGroup = watch(`parameters.${index}.agegroup`) === true;
 
-            {fields.map((field, index) => (
-              <div
-                key={field.id}
-                className="bg-white p-4 rounded-lg shadow-sm mb-4 border border-gray-100"
-              >
-                <div className="flex justify-between items-center mb-3">
-                  <span className="text-xs font-semibold text-gray-500">
-                    Parameter #{index + 1}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeField(index)}
-                    className="text-red-400 hover:text-red-600 text-sm"
-                  >
-                    <FontAwesomeIcon icon={faTrash} />
-                  </button>
-                </div>
+              return (
+                <div key={field.id} className="border p-4 rounded mb-2 bg-gray-50">
+                  {/* Header row */}
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">
+                      Parameter #{index + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => remove(index)}
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      <FaTrash />
+                    </button>
+                  </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Name
-                    </label>
+                  {/* Parameter Name */}
+                  <div className="mt-2">
+                    <label className="block text-xs">Parameter Name</label>
                     <input
                       type="text"
                       {...register(`parameters.${index}.name`, {
                         required: "Required",
                       })}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-md focus:ring-1 focus:ring-indigo-500"
-                      placeholder="Hemoglobin"
+                      className="w-full border rounded px-2 py-1"
+                      placeholder="e.g., Hemoglobin"
                     />
                     {errors.parameters?.[index]?.name && (
-                      <p className="text-red-500 text-xs mt-1">
+                      <p className="text-red-500 text-xs">
                         {errors.parameters[index]?.name?.message}
                       </p>
                     )}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Unit
-                    </label>
+                  {/* Parameter Unit */}
+                  <div className="mt-2">
+                    <label className="block text-xs">Unit</label>
                     <input
                       type="text"
                       {...register(`parameters.${index}.unit`, {
                         required: "Required",
                       })}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-md focus:ring-1 focus:ring-indigo-500"
-                      placeholder="g/dL"
+                      className="w-full border rounded px-2 py-1"
+                      placeholder="e.g., g/dL"
                     />
                     {errors.parameters?.[index]?.unit && (
-                      <p className="text-red-500 text-xs mt-1">
+                      <p className="text-red-500 text-xs">
                         {errors.parameters[index]?.unit?.message}
                       </p>
                     )}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Normal Range Start
+                  {/* Gender-Specific Checkbox */}
+                  <div className="mt-2">
+                    <label className="inline-flex items-center">
+                      <input
+                        type="checkbox"
+                        {...register(`parameters.${index}.genderSpecific`)}
+                        className="mr-2"
+                      />
+                      Same range for both genders?
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      {...register(`parameters.${index}.normalRangeStart`, {
-                        required: "Required",
-                        valueAsNumber: true,
-                      })}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-md focus:ring-1 focus:ring-indigo-500"
-                    />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Normal Range End
+                  {/* Age Group Checkbox */}
+                  <div className="mt-2">
+                    <label className="inline-flex items-center">
+                      <input
+                        type="checkbox"
+                        {...register(`parameters.${index}.agegroup`)}
+                        className="mr-2"
+                      />
+                      Different range for different age groups?
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      {...register(`parameters.${index}.normalRangeEnd`, {
-                        required: "Required",
-                        valueAsNumber: true,
-                      })}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-md focus:ring-1 focus:ring-indigo-500"
-                    />
+                  </div>
+
+                  {/* Render range inputs based on options */}
+                  <div className="mt-2">
+                    {!useAgeGroup ? (
+                      // Without age group: Use existing logic
+                      useCommonRange ? (
+                        <div>
+                          <label className="block text-xs">
+                            Common Range (e.g., 20-10)
+                          </label>
+                          <input
+                            type="text"
+                            {...register(`parameters.${index}.range.range`, {
+                              required: "Required",
+                            })}
+                            className="w-full border rounded px-2 py-1"
+                            placeholder="e.g., 20-10"
+                          />
+                          {errors.parameters?.[index]?.range?.range && (
+                            <p className="text-red-500 text-xs">
+                              {errors.parameters[index]?.range?.range?.message}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-xs">
+                              Male Range (e.g., Less thane 18)
+                            </label>
+                            <input
+                              type="text"
+                              {...register(`parameters.${index}.range.male`, {
+                                required: "Required",
+                              })}
+                              className="w-full border rounded px-2 py-1"
+                              placeholder="e.g., Less thane 18"
+                            />
+                            {errors.parameters?.[index]?.range?.male && (
+                              <p className="text-red-500 text-xs">
+                                {errors.parameters[index]?.range?.male?.message}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="block text-xs">
+                              Female Range (e.g., Less thane 18)
+                            </label>
+                            <input
+                              type="text"
+                              {...register(`parameters.${index}.range.female`, {
+                                required: "Required",
+                              })}
+                              className="w-full border rounded px-2 py-1"
+                              placeholder="e.g., Less thane 18"
+                            />
+                            {errors.parameters?.[index]?.range?.female && (
+                              <p className="text-red-500 text-xs">
+                                {errors.parameters[index]?.range?.female?.message}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    ) : (
+                      // With age group
+                      useCommonRange ? (
+                        // Age group with common range per group
+                        <div className="grid grid-cols-1 gap-2">
+                          <div>
+                            <label className="block text-xs">
+                              Child Range (e.g., 12-23)
+                            </label>
+                            <input
+                              type="text"
+                              {...register(`parameters.${index}.range.child`, {
+                                required: "Required",
+                              })}
+                              className="w-full border rounded px-2 py-1"
+                              placeholder="e.g., 12-23"
+                            />
+                            {errors.parameters?.[index]?.range?.child && (
+                              <p className="text-red-500 text-xs">
+                                {errors.parameters[index]?.range?.child?.message}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="block text-xs">
+                              Adult Range (e.g., 12-24)
+                            </label>
+                            <input
+                              type="text"
+                              {...register(`parameters.${index}.range.adult`, {
+                                required: "Required",
+                              })}
+                              className="w-full border rounded px-2 py-1"
+                              placeholder="e.g., 12-24"
+                            />
+                            {errors.parameters?.[index]?.range?.adult && (
+                              <p className="text-red-500 text-xs">
+                                {errors.parameters[index]?.range?.adult?.message}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="block text-xs">
+                              Older Range (e.g., more thane 60)
+                            </label>
+                            <input
+                              type="text"
+                              {...register(`parameters.${index}.range.older`, {
+                                required: "Required",
+                              })}
+                              className="w-full border rounded px-2 py-1"
+                              placeholder="e.g., more thane 60"
+                            />
+                            {errors.parameters?.[index]?.range?.older && (
+                              <p className="text-red-500 text-xs">
+                                {errors.parameters[index]?.range?.older?.message}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        // Age group with separate ranges for male and female
+                        <div className="space-y-2">
+                          {/* Child */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-xs">
+                                Child Male (e.g., Less thane 18)
+                              </label>
+                              <input
+                                type="text"
+                                {...register(`parameters.${index}.range.childmale`, {
+                                  required: "Required",
+                                })}
+                                className="w-full border rounded px-2 py-1"
+                                placeholder="e.g., Less thane 18"
+                              />
+                              {errors.parameters?.[index]?.range?.childmale && (
+                                <p className="text-red-500 text-xs">
+                                  {errors.parameters[index]?.range?.childmale?.message}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block text-xs">
+                                Child Female (e.g., Less thane 18)
+                              </label>
+                              <input
+                                type="text"
+                                {...register(`parameters.${index}.range.childfemale`, {
+                                  required: "Required",
+                                })}
+                                className="w-full border rounded px-2 py-1"
+                                placeholder="e.g., Less thane 18"
+                              />
+                              {errors.parameters?.[index]?.range?.childfemale && (
+                                <p className="text-red-500 text-xs">
+                                  {errors.parameters[index]?.range?.childfemale?.message}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          {/* Adult */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-xs">
+                                Adult Male (e.g., Less thane 60)
+                              </label>
+                              <input
+                                type="text"
+                                {...register(`parameters.${index}.range.adultmale`, {
+                                  required: "Required",
+                                })}
+                                className="w-full border rounded px-2 py-1"
+                                placeholder="e.g., Less thane 60"
+                              />
+                              {errors.parameters?.[index]?.range?.adultmale && (
+                                <p className="text-red-500 text-xs">
+                                  {errors.parameters[index]?.range?.adultmale?.message}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block text-xs">
+                                Adult Female (e.g., Less thane 60)
+                              </label>
+                              <input
+                                type="text"
+                                {...register(`parameters.${index}.range.adultfemale`, {
+                                  required: "Required",
+                                })}
+                                className="w-full border rounded px-2 py-1"
+                                placeholder="e.g., Less thane 60"
+                              />
+                              {errors.parameters?.[index]?.range?.adultfemale && (
+                                <p className="text-red-500 text-xs">
+                                  {errors.parameters[index]?.range?.adultfemale?.message}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          {/* Older */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-xs">
+                                Older Male (e.g., more thane 60)
+                              </label>
+                              <input
+                                type="text"
+                                {...register(`parameters.${index}.range.oldermale`, {
+                                  required: "Required",
+                                })}
+                                className="w-full border rounded px-2 py-1"
+                                placeholder="e.g., more thane 60"
+                              />
+                              {errors.parameters?.[index]?.range?.oldermale && (
+                                <p className="text-red-500 text-xs">
+                                  {errors.parameters[index]?.range?.oldermale?.message}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <label className="block text-xs">
+                                Older Female (e.g., more thane 60)
+                              </label>
+                              <input
+                                type="text"
+                                {...register(`parameters.${index}.range.olderfemale`, {
+                                  required: "Required",
+                                })}
+                                className="w-full border rounded px-2 py-1"
+                                placeholder="e.g., more thane 60"
+                              />
+                              {errors.parameters?.[index]?.range?.olderfemale && (
+                                <p className="text-red-500 text-xs">
+                                  {errors.parameters[index]?.range?.olderfemale?.message}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
+
+            {/* Add parameter button */}
+            <button
+              type="button"
+              onClick={() =>
+                append({
+                  name: "",
+                  unit: "",
+                  genderSpecific: true, // default to common range
+                  agegroup: false, // default to not using age groups
+                  range: { range: "" },
+                })
+              }
+              className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+            >
+              <FaPlus className="mr-1" />
+              Add Parameter
+            </button>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex justify-end space-x-4 mt-8">
+          {/* Footer Buttons */}
+          <div className="flex justify-between items-center mt-4">
             <button
               type="button"
               onClick={handleDelete}
-              className="px-6 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors font-medium"
+              className="inline-flex items-center px-3 py-1 border border-red-600 text-red-600 rounded hover:bg-red-50"
             >
-              <FontAwesomeIcon icon={faTrash} className="mr-2" />
-              Delete Test
+              <FaTrash className="mr-1" /> Delete Test
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+              className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
             >
-              <FontAwesomeIcon icon={faEdit} className="mr-2" />
-              Update Test
+              <FaSave className="mr-1" /> Save Changes
             </button>
           </div>
         </form>
@@ -301,31 +591,34 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
   );
 };
 
-// ------------------------------------------
-// ADMIN TESTS PAGE COMPONENT
-// ------------------------------------------
-const AdminTestsPage: React.FC = () => {
+// -----------------------------
+// MANAGE TESTS PAGE
+// -----------------------------
+const ManageBloodTests: React.FC = () => {
   const [tests, setTests] = useState<TestData[]>([]);
   const [selectedTest, setSelectedTest] = useState<TestData | null>(null);
   const [showModal, setShowModal] = useState<boolean>(false);
 
-  useEffect(() => {
-    const fetchTests = async () => {
-      try {
-        const testsRef = ref(database, "bloodTests");
-        const snapshot = await get(testsRef);
-        if (snapshot.exists()) {
-          const data = snapshot.val();
-          const testsArray: TestData[] = Object.keys(data).map((key) => ({
-            key,
-            ...data[key],
-          }));
-          setTests(testsArray);
-        }
-      } catch (error) {
-        console.error("Error fetching tests:", error);
+  // Fetch from Firebase
+  const fetchTests = async () => {
+    try {
+      const testsRef = ref(database, "bloodTests");
+      const snapshot = await get(testsRef);
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        // Turn the object into an array of { key, ...testData }
+        const testsArray: TestData[] = Object.keys(data).map((key) => ({
+          key,
+          ...data[key],
+        }));
+        setTests(testsArray);
       }
-    };
+    } catch (error) {
+      console.error("Error fetching tests:", error);
+    }
+  };
+
+  useEffect(() => {
     fetchTests();
   }, []);
 
@@ -337,109 +630,68 @@ const AdminTestsPage: React.FC = () => {
   const handleModalClose = () => {
     setShowModal(false);
     setSelectedTest(null);
-    // Optionally refresh tests list if needed.
+    fetchTests(); // refresh the tests after updating/deletion
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="bg-white rounded-2xl shadow-lg p-8">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-800">
-                <FontAwesomeIcon
-                  icon={faFlask}
-                  className="mr-3 text-indigo-600"
-                />
-                Blood Test Management
-              </h1>
-              <p className="text-gray-500 mt-2">
-                Manage and update laboratory test configurations
-              </p>
-            </div>
-          </div>
+    <div className="min-h-screen bg-gray-100 p-8">
+      <div className="max-w-7xl mx-auto bg-white p-6 rounded-lg shadow-lg">
+        <h1 className="text-3xl font-bold mb-6 flex items-center">
+          <FaFlask className="mr-2 text-blue-600" />
+          Manage Blood Tests
+        </h1>
 
-          <div className="overflow-x-auto rounded-xl border border-gray-100 shadow-sm">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-indigo-50">
-                <tr>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-indigo-600">
-                    <FontAwesomeIcon icon={faFlask} className="mr-2" />
-                    Test Name
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-indigo-600">
-                    <FontAwesomeIcon icon={faRupeeSign} className="mr-2" />
-                    Price
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-indigo-600">
-                    <FontAwesomeIcon icon={faChartLine} className="mr-2" />
-                    Parameters
-                  </th>
-                  <th className="px-6 py-4 text-left text-sm font-semibold text-indigo-600">
-                    <FontAwesomeIcon icon={faCalendar} className="mr-2" />
-                    Created Date
-                  </th>
-                  <th className="px-6 py-4 text-sm font-semibold text-indigo-600">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-100">
-                {tests.map((test: TestData) => (
-                  <tr
-                    key={test.key}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+        <table className="min-w-full border-collapse">
+          <thead>
+            <tr className="bg-blue-100">
+              <th className="border px-4 py-2">Test Name</th>
+              <th className="border px-4 py-2">Price (Rs.)</th>
+              <th className="border px-4 py-2">Parameters</th>
+              <th className="border px-4 py-2">Created At</th>
+              <th className="border px-4 py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tests.map((test) => (
+              <tr key={test.key} className="hover:bg-gray-50">
+                <td className="border px-4 py-2">{test.testName}</td>
+                <td className="border px-4 py-2">₹{test.price}</td>
+                <td className="border px-4 py-2">
+                  {test.parameters?.length || 0} parameters
+                </td>
+                <td className="border px-4 py-2">
+                  {new Date(test.createdAt).toLocaleDateString()}
+                </td>
+                <td className="border px-4 py-2">
+                  <button
+                    onClick={() => handleEdit(test)}
+                    className="text-blue-600 hover:text-blue-800"
                   >
-                    <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-800">
-                      {test.testName}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-600">
-                      ₹{test.price}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-600">
-                      <span className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm">
-                        {test.parameters?.length || 0} parameters
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-500">
-                      {new Date(test.createdAt).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <button
-                        onClick={() => handleEdit(test)}
-                        className="text-indigo-600 hover:text-indigo-900 p-2 rounded-lg hover:bg-indigo-50 transition-colors"
-                      >
-                        <FontAwesomeIcon icon={faEdit} className="text-lg" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    <FaEdit />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
-          {tests.length === 0 && (
-            <div className="text-center py-12">
-              <FontAwesomeIcon
-                icon={faFlask}
-                className="text-4xl text-gray-300 mb-4"
-              />
-              <p className="text-gray-500">No blood tests found</p>
-            </div>
-          )}
-        </div>
+        {tests.length === 0 && (
+          <div className="text-center py-8 text-gray-500">
+            No blood tests found.
+          </div>
+        )}
       </div>
 
+      {/* The Edit Modal */}
       {showModal && selectedTest && (
         <EditTestModal
           testData={selectedTest}
           onClose={handleModalClose}
           onTestUpdated={handleModalClose}
-          onTestDeleted={handleModalClose}
         />
       )}
     </div>
   );
 };
 
-export default AdminTestsPage;
+export default ManageBloodTests;
