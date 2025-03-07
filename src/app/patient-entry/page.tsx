@@ -144,7 +144,7 @@ const PatientEntryPage: React.FC = () => {
   }, []);
 
   // 6) Watch fields for dynamic calculations
-  const watchDoctorName = watch("doctorName", "");
+  const watchDoctorName = watch("doctorName") ?? "";
   const filteredSuggestions = React.useMemo(() => {
     if (!watchDoctorName.trim()) return [];
     return doctorNames.filter((name) =>
