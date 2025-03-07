@@ -38,7 +38,6 @@ const BloodValuesForm: React.FC = () => {
   const router = useRouter();
   const patientId = searchParams.get("patientId");
   const [loading, setLoading] = useState(true);
-  const [patientGender, setPatientGender] = useState<string>("");
 
   const {
     register,
@@ -61,7 +60,6 @@ const BloodValuesForm: React.FC = () => {
         const patientSnapshot = await get(patientRef);
         if (patientSnapshot.exists()) {
           const patientData = patientSnapshot.val();
-          setPatientGender(patientData.gender || "");
           const patientTests = patientData.bloodTests || [];
           // Retrieve stored test values if they exist.
           const storedBloodTests = patientData.bloodtest || {};
@@ -75,7 +73,9 @@ const BloodValuesForm: React.FC = () => {
               if (testSnapshot.exists()) {
                 const testDetail = testSnapshot.val();
                 // Create a normalized key (lowercase, underscores) to check stored values.
-                const normalizedTestKey = test.testName.toLowerCase().replace(/\s+/g, "_");
+                const normalizedTestKey = test.testName
+                  .toLowerCase()
+                  .replace(/\s+/g, "_");
                 const storedTest = storedBloodTests[normalizedTestKey];
                 const parameters: TestParameterValue[] = testDetail.parameters.map(
                   (param: any) => {
@@ -228,7 +228,10 @@ const BloodValuesForm: React.FC = () => {
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
           {watch("tests").map((test, index) => (
-            <div key={test.testId} className="border-l-4 border-blue-600 bg-gray-50 p-6 rounded-lg">
+            <div
+              key={test.testId}
+              className="border-l-4 border-blue-600 bg-gray-50 p-6 rounded-lg"
+            >
               <div className="flex items-center gap-3 mb-6">
                 <FiDroplet className="w-6 h-6 text-blue-600" />
                 <h3 className="text-xl font-semibold text-gray-800">{test.testName}</h3>

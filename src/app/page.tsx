@@ -14,7 +14,7 @@ import {
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 import Image from "next/image";
-import Banner from "./../../public/banner.jpeg";
+// import Banner from "./../../public/banner.jpeg";
 
 interface BloodTest {
   testId: string;

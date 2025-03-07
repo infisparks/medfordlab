@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { database } from "../../firebase"; // or wherever your firebase config is
-import { ref, get, update, remove } from "firebase/database";
+import { ref, get, update, remove } from "firebase/database"; // added remove here
 import { useForm, useFieldArray } from "react-hook-form";
 import {
   FaEdit,
@@ -130,7 +130,7 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
     },
   });
 
-  const { fields, append, remove } = useFieldArray({
+  const { fields, append, remove: removeField } = useFieldArray({
     control,
     name: "parameters",
   });
@@ -232,7 +232,7 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
                     </span>
                     <button
                       type="button"
-                      onClick={() => remove(index)}
+                      onClick={() => removeField(index)}
                       className="text-red-500 hover:text-red-700"
                     >
                       <FaTrash />
