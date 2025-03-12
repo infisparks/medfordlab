@@ -3,7 +3,7 @@
 import React from "react";
 import { useForm, useFieldArray, SubmitHandler } from "react-hook-form";
 import { database, auth } from "../../firebase";
-import { ref, push, set, get, child } from "firebase/database";
+import { ref, push, set, get } from "firebase/database";
 import { UserCircleIcon, PhoneIcon } from "@heroicons/react/24/outline";
 
 interface BloodTestSelection {
@@ -16,10 +16,12 @@ interface IFormInput {
   name: string;
   contact: string; // 10-digit
   age: number;
+  dayType: "year" | "month" | "day"; // New field for age unit
   gender: string;
   address?: string;
   email?: string;
-  doctorName?: string;
+  doctorName: string;
+  doctorId: string;
   bloodTests: BloodTestSelection[];
   discountPercentage: number;
   amountPaid: number;
@@ -45,7 +47,7 @@ const PatientEntryPage: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // 3) Define form-related hooks (always called, never skipped)
+  // 3) Define form-related hooks
   const {
     register,
     handleSubmit,
@@ -59,10 +61,12 @@ const PatientEntryPage: React.FC = () => {
       name: "",
       contact: "",
       age: 0,
+      dayType: "year", // Default age unit
       gender: "",
       address: "",
       email: "",
       doctorName: "",
+      doctorId: "",
       bloodTests: [{ testId: "", testName: "", price: 0 }],
       discountPercentage: 0,
       amountPaid: 0,
@@ -70,34 +74,34 @@ const PatientEntryPage: React.FC = () => {
     },
   });
 
-  // 4) Define all other states/hooks at the top level as well
-  const [doctorNames, setDoctorNames] = React.useState<string[]>([]);
+  // 4) Other states/hooks
+  const [doctorList, setDoctorList] = React.useState<
+    { id: string; doctorName: string }[]
+  >([]);
   const [availableBloodTests, setAvailableBloodTests] = React.useState<
     { id: string; testName: string; price: number }[]
   >([]);
   const [availablePackages, setAvailablePackages] = React.useState<PackageType[]>([]);
 
-  // 5) Perform your data-fetching useEffects unconditionally
+  // 5) Data-fetching useEffects
   React.useEffect(() => {
-    const fetchDoctorNames = async () => {
+    const fetchDoctorList = async () => {
       try {
-        const dbRef = ref(database);
-        const snapshot = await get(child(dbRef, "patients"));
+        const doctorRef = ref(database, "doctor");
+        const snapshot = await get(doctorRef);
         if (snapshot.exists()) {
           const data = snapshot.val();
-          const namesSet = new Set<string>();
-          Object.values(data).forEach((patient: any) => {
-            if (patient.doctorName && patient.doctorName.trim() !== "") {
-              namesSet.add(patient.doctorName);
-            }
-          });
-          setDoctorNames(Array.from(namesSet));
+          const doctorsArray = Object.keys(data).map((key) => ({
+            id: key,
+            doctorName: data[key].doctorName,
+          }));
+          setDoctorList(doctorsArray);
         }
       } catch (error) {
-        console.error("Error fetching doctor names:", error);
+        console.error("Error fetching doctor list:", error);
       }
     };
-    fetchDoctorNames();
+    fetchDoctorList();
   }, []);
 
   React.useEffect(() => {
@@ -143,44 +147,65 @@ const PatientEntryPage: React.FC = () => {
     fetchPackages();
   }, []);
 
-  // 6) Watch fields for dynamic calculations
+  // 6) Watch fields for dynamic calculations and doctor referral suggestions
   const watchDoctorName = watch("doctorName") ?? "";
-  const filteredSuggestions = React.useMemo(() => {
+  const filteredDoctorSuggestions = React.useMemo(() => {
     if (!watchDoctorName.trim()) return [];
-    return doctorNames.filter((name) =>
-      name.toLowerCase().startsWith(watchDoctorName.toLowerCase())
+    return doctorList.filter((doctor) =>
+      doctor.doctorName.toLowerCase().startsWith(watchDoctorName.toLowerCase())
     );
-  }, [watchDoctorName, doctorNames]);
+  }, [watchDoctorName, doctorList]);
 
-  // 7) Setup the Field Array for blood tests
+  // 7) Setup Field Array for blood tests
   const { fields: bloodTestFields, append, remove } = useFieldArray({
     control,
     name: "bloodTests",
   });
 
-  // 8) Payment calculations
+  // 8) Payment calculations (unchanged)
   const bloodTests = watch("bloodTests");
   const discountPercentage = watch("discountPercentage");
   const amountPaid = watch("amountPaid");
 
-  const totalAmount = bloodTests.reduce((sum, test) => sum + Number(test.price || 0), 0);
+  const totalAmount = bloodTests.reduce(
+    (sum, test) => sum + Number(test.price || 0),
+    0
+  );
   const discountValue = totalAmount * (Number(discountPercentage) / 100);
   const remainingAmount = totalAmount - discountValue - Number(amountPaid);
 
-  // 9) onSubmit logic with generated patientId
+  // 9) Helper: Generate an 8-digit alphanumeric patient ID
+  const generatePatientId = (length: number = 8): string => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let result = "";
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
+  // 10) onSubmit logic – compute total days based on age unit and save patient record
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     try {
-      // Always check currentUser before saving
       const userEmail = currentUser?.email || "Unknown User";
+      // Generate an 8-character alphanumeric patientId
+      const patientId = generatePatientId();
 
-      // Generate a random 5-digit number as patientId
-      const patientId = Math.floor(10000 + Math.random() * 90000);
+      // Calculate total days based on age unit selected
+      const multiplier =
+        data.dayType === "year"
+          ? 360
+          : data.dayType === "month"
+          ? 30
+          : 1;
+      const total_day = data.age * multiplier;
 
       const patientsRef = ref(database, "patients");
       const newPatientRef = push(patientsRef);
       await set(newPatientRef, {
         ...data,
-        patientId, // Save the generated patientId with the patient record
+        patientId, // Generated patient id
+        total_day, // Computed total days
         enteredBy: userEmail,
         createdAt: new Date().toISOString(),
       });
@@ -219,7 +244,6 @@ MedBliss`;
     }
   };
 
-  // 10) Single return statement with conditional UI
   return (
     <div className="min-h-screen bg-gray-50 p-8">
       {!currentUser ? (
@@ -274,14 +298,12 @@ MedBliss`;
                     <PhoneIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                   </div>
                   {errors.contact && (
-                    <p className="text-red-500 text-sm mt-1">
-                      {errors.contact.message}
-                    </p>
+                    <p className="text-red-500 text-sm mt-1">{errors.contact.message}</p>
                   )}
                 </div>
 
-                {/* Age & Gender */}
-                <div className="grid grid-cols-2 gap-4">
+                {/* Age, Age Unit & Gender */}
+                <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">
                       Age
@@ -298,7 +320,22 @@ MedBliss`;
                       <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>
                     )}
                   </div>
-
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">
+                      Age Unit
+                    </label>
+                    <select
+                      {...register("dayType", { required: "Select age unit" })}
+                      className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="year">Year</option>
+                      <option value="month">Month</option>
+                      <option value="day">Day</option>
+                    </select>
+                    {errors.dayType && (
+                      <p className="text-red-500 text-sm mt-1">{errors.dayType.message}</p>
+                    )}
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">
                       Gender
@@ -313,9 +350,7 @@ MedBliss`;
                       <option value="Other">Other</option>
                     </select>
                     {errors.gender && (
-                      <p className="text-red-500 text-sm mt-1">
-                        {errors.gender.message}
-                      </p>
+                      <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>
                     )}
                   </div>
                 </div>
@@ -326,7 +361,6 @@ MedBliss`;
                 <h3 className="text-lg font-semibold text-gray-700">
                   Additional Information (Optional)
                 </h3>
-                {/* Address */}
                 <div>
                   <label className="block text-sm font-medium text-gray-600 mb-1">
                     Address
@@ -337,7 +371,6 @@ MedBliss`;
                     placeholder="123 Main St, City, Country"
                   />
                 </div>
-                {/* Email */}
                 <div>
                   <label className="block text-sm font-medium text-gray-600 mb-1">
                     Email
@@ -364,15 +397,18 @@ MedBliss`;
                     placeholder="Type doctor's name..."
                   />
                 </div>
-                {filteredSuggestions.length > 0 && (
+                {filteredDoctorSuggestions.length > 0 && (
                   <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-1 rounded-md max-h-40 overflow-y-auto">
-                    {filteredSuggestions.map((suggestion, index) => (
+                    {filteredDoctorSuggestions.map((doctor, index) => (
                       <li
                         key={index}
                         className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
-                        onClick={() => setValue("doctorName", suggestion)}
+                        onClick={() => {
+                          setValue("doctorName", doctor.doctorName);
+                          setValue("doctorId", doctor.id);
+                        }}
                       >
-                        {suggestion}
+                        {doctor.doctorName}
                       </li>
                     ))}
                   </ul>
@@ -425,7 +461,6 @@ MedBliss`;
                         key={field.id}
                         className="flex flex-col sm:flex-row sm:space-x-4 items-start sm:items-end border p-4 rounded-lg"
                       >
-                        {/* Test Name */}
                         <div className="flex-1">
                           <label className="block text-xs font-medium text-gray-500 mb-1">
                             Test Name
@@ -468,8 +503,6 @@ MedBliss`;
                             </p>
                           )}
                         </div>
-
-                        {/* Price */}
                         <div className="flex-1 mt-4 sm:mt-0">
                           <label className="block text-xs font-medium text-gray-500 mb-1">
                             Price (Rs.)
@@ -491,8 +524,6 @@ MedBliss`;
                             </p>
                           )}
                         </div>
-
-                        {/* Remove Button */}
                         <div>
                           <button
                             type="button"
@@ -538,7 +569,6 @@ MedBliss`;
                       </p>
                     )}
                   </div>
-
                   <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">
                       Amount Paid (Rs.)

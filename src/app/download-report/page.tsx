@@ -11,43 +11,33 @@ import {
   uploadBytes,
   getDownloadURL,
 } from "firebase/storage";
+import JsBarcode from "jsbarcode";
 
 // Import images – adjust paths as needed
 import letterhead from "../../../public/letterhead.png";
 import firstpage from "../../../public/fisrt.png";
 import stamp from "../../../public/stamp.png";
 
-import JsBarcode from "jsbarcode";
 
 // -----------------------------
 // Type Definitions
 // -----------------------------
+interface AgeRangeItem {
+  rangeKey: string;
+  rangeValue: string;
+}
+
 interface Parameter {
   name: string;
   value: string | number;
   unit: string;
-  range?: any; // If you have a known structure, replace 'any' with it
-  agegroup?: boolean;
-  genderSpecific?: boolean;
+  // Range can either be a string or an object with arrays for male/female
+  range: string | { male: AgeRangeItem[]; female: AgeRangeItem[] };
+  subparameters?: Parameter[];
 }
 
 interface BloodTestData {
   parameters: Parameter[];
-  // You can add more fields if your structure has them
-}
-
-interface BloodTestsDefinitionParameter {
-  name: string;
-  agegroup?: boolean;
-  genderSpecific?: boolean;
-  range?: {
-    [key: string]: string; // e.g. child, adult, older, male, female, etc.
-  };
-}
-
-interface BloodTestDefinition {
-  parameters: BloodTestsDefinitionParameter[];
-  // Add other fields from your definitions if needed
 }
 
 interface FirestoreBloodTestItem {
@@ -62,6 +52,7 @@ interface PatientData {
   patientId: string;
   createdAt: string;
   contact: string;
+  total_day?: string | number;
   bloodTests?: FirestoreBloodTestItem[];
   bloodtest?: Record<string, BloodTestData>;
 }
@@ -96,6 +87,24 @@ const loadImageAsCompressedJPEG = async (
   });
 };
 
+// -----------------------------
+// Helper: Parse rangeKey into numeric bounds (in days)
+// -----------------------------
+const parseRangeKey = (key: string): { lower: number; upper: number } => {
+  key = key.trim();
+  const suffix = key.slice(-1);
+  let multiplier = 1;
+  if (suffix === "d") multiplier = 1;
+  else if (suffix === "m") multiplier = 30;
+  else if (suffix === "y") multiplier = 365;
+  const rangePart = key.slice(0, -1);
+  const parts = rangePart.split("-");
+  if (parts.length !== 2) return { lower: 0, upper: Infinity };
+  const lower = Number(parts[0]) * multiplier;
+  const upper = Number(parts[1]) * multiplier;
+  return { lower, upper };
+};
+
 function DownloadReport() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -104,20 +113,17 @@ function DownloadReport() {
   // Prevent duplicate PDF generation
   const pdfGenerated = useRef(false);
 
-  // typed states
   const [patientData, setPatientData] = useState<PatientData | null>(null);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
   const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
-    if (!patientId || pdfGenerated.current) {
-      return;
-    }
+    if (!patientId || pdfGenerated.current) return;
     pdfGenerated.current = true;
 
     const fetchDataAndGenerateReport = async () => {
       try {
-        // 1. Fetch patient data from Firebase
+        // 1. Fetch patient data
         const patientRef = dbRef(database, `patients/${patientId}`);
         const snapshot = await get(patientRef);
         if (!snapshot.exists()) {
@@ -126,63 +132,54 @@ function DownloadReport() {
         }
         const data = snapshot.val() as PatientData;
         setPatientData(data);
-
         if (!data.bloodtest) {
           alert("No report found for this patient.");
           return;
         }
 
-        // 2. Build mapping from normalized test name to test id
-        const testMapping: Record<string, string> = {};
-        if (data.bloodTests) {
-          data.bloodTests.forEach((t: FirestoreBloodTestItem) => {
-            const normalized = t.testName.toLowerCase().replace(/\s+/g, "_");
-            testMapping[normalized] = t.testId;
-          });
-        }
+        // 2. Compute patient age in days (use total_day if available)
+        const patientAgeInDays = data.total_day
+          ? Number(data.total_day)
+          : Number(data.age) * 365;
+        const patientGender = data.gender ? data.gender.toLowerCase() : "";
 
-        // 3. Create PDF document (Professional Report)
+        // 3. Create PDF document
         const doc = new jsPDF("p", "mm", "a4");
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
         const leftMargin = 30;
 
+        // --- TABLE COLUMNS SETUP ---
+        const totalTableWidth = pageWidth - 2 * leftMargin;
+        const colWidth = totalTableWidth / 4;
+        const col1X = leftMargin;
+        const col2X = leftMargin + colWidth;
+        const col3X = leftMargin + 2 * colWidth;
+        const col4X = leftMargin + 3 * colWidth;
+
         // Helper: Add cover page
         const addCoverPage = async () => {
           try {
             const coverBase64 = await loadImageAsCompressedJPEG(firstpage.src, 0.5);
-            // Cast to string to appease jsPDF typing
             doc.addImage(coverBase64 as string, "JPEG", 0, 0, pageWidth, pageHeight);
           } catch (error) {
-            console.error("Error loading cover page template:", error);
+            console.error("Error loading cover page:", error);
           }
         };
 
-        // Helper: Add letterhead to a page
+        // Helper: Add letterhead
         const addLetterhead = async () => {
           try {
-            const letterheadBase64 = await loadImageAsCompressedJPEG(
-              letterhead.src,
-              0.5
-            );
-            doc.addImage(
-              letterheadBase64 as string,
-              "JPEG",
-              0,
-              0,
-              pageWidth,
-              pageHeight
-            );
+            const letterheadBase64 = await loadImageAsCompressedJPEG(letterhead.src, 0.5);
+            doc.addImage(letterheadBase64 as string, "JPEG", 0, 0, pageWidth, pageHeight);
           } catch (error) {
-            console.error("Error loading letterhead image:", error);
+            console.error("Error loading letterhead:", error);
           }
         };
 
-        // Helper: Add header on each test page
-        // Left: Name, Age, Gender; Right: Registration On, Reported On (current time), Patient ID.
-        // A top margin of 60mm is maintained before printing user details.
+        // Helper: Add header with patient details
         const addHeader = () => {
-          let y = 50; // start printing after ~50mm top margin
+          let y = 50;
           doc.setFont("helvetica", "normal");
           doc.setFontSize(10);
           doc.setTextColor(0, 0, 0);
@@ -208,25 +205,20 @@ function DownloadReport() {
           doc.text(`Patient ID: ${data.patientId}`, pageWidth - leftMargin, 64, {
             align: "right",
           });
-          return Math.max(y, 74) + 10; // return y position after header area
+          return Math.max(y, 74) + 10;
         };
 
         // 4. Create cover page
         await addCoverPage();
 
-        // 5. Loop over each test in bloodtest – one test per page
-        const bloodtest = data.bloodtest; // typed as Record<string, BloodTestData>
-
+        // 5. Loop over each test (one test per page)
+        const bloodtest = data.bloodtest;
         for (const testKey in bloodtest) {
-          // For each test, add a new page with letterhead
           doc.addPage();
           await addLetterhead();
-
-          // Add header info on this test page
           let yPosition = addHeader();
 
-          // 6. Generate Barcode from patientId and add it below header
-          // Place barcode starting at current yPosition
+          // Generate barcode
           const canvas = document.createElement("canvas");
           JsBarcode(canvas, patientId || "", {
             format: "CODE128",
@@ -238,7 +230,7 @@ function DownloadReport() {
           const barcodeDataUrl = canvas.toDataURL("image/png");
           const barcodeWidth = 30;
           const barcodeHeight = 10;
-          const barcodeY = 65; // print barcode after header
+          const barcodeY = 65;
           doc.addImage(
             barcodeDataUrl as string,
             "PNG",
@@ -255,20 +247,6 @@ function DownloadReport() {
           doc.line(leftMargin, 76, pageWidth - leftMargin, 76);
           yPosition += 1;
 
-          // Compute patient's age and gender (if needed later)
-          const patientAge = Number(data.age);
-          const patientGender = data.gender ? data.gender.toLowerCase() : "";
-
-          // 7. Fetch test definition if available
-          let testDefinition: BloodTestDefinition | null = null;
-          if (testMapping[testKey]) {
-            const defRef = dbRef(database, `bloodTests/${testMapping[testKey]}`);
-            const defSnapshot = await get(defRef);
-            if (defSnapshot.exists()) {
-              testDefinition = defSnapshot.val() as BloodTestDefinition;
-            }
-          }
-
           // Test title
           doc.setFont("helvetica", "bold");
           doc.setFontSize(16);
@@ -276,23 +254,19 @@ function DownloadReport() {
           doc.text(` ${testKey.toUpperCase()}`, leftMargin, yPosition);
           yPosition += 4;
 
-          // Table header
-          const col1X = leftMargin;
-          const col2X = pageWidth / 2;
-          const col3X = pageWidth - leftMargin;
-          const headerHeight = 6;
+          // --- TABLE HEADER ---
           doc.setFillColor(0, 51, 102);
-          doc.rect(leftMargin, yPosition, pageWidth - 2 * leftMargin, headerHeight, "F");
+          doc.rect(leftMargin, yPosition, totalTableWidth, 6, "F");
           doc.setTextColor(255, 255, 255);
           doc.setFontSize(8);
-          doc.text("Parameter", col1X + 2, yPosition + headerHeight - 2);
-          doc.text("Value", col2X, yPosition + headerHeight - 2, { align: "center" });
-          doc.text("Unit", col3X - 2, yPosition + headerHeight - 2, {
-            align: "right",
-          });
-          yPosition += headerHeight + 3;
+          doc.text("Parameter", col1X + 2, yPosition + 5);
+          doc.text("Value", col2X + colWidth / 2, yPosition + 5, { align: "center" });
+          doc.text("Range", col4X + colWidth / 2, yPosition + 5, { align: "center" });
+          doc.text("Unit", col3X + colWidth / 2, yPosition + 5, { align: "center" });
+          
+          yPosition += 6 + 3; // header height plus spacing
 
-          // Table rows for test parameters
+          // Set default font for rows
           doc.setFont("helvetica", "normal");
           doc.setFontSize(7);
           doc.setTextColor(0, 0, 0);
@@ -300,159 +274,62 @@ function DownloadReport() {
           const parameters = bloodtest[testKey].parameters;
 
           for (const param of parameters) {
-            // Determine the range string based on test definition if available
+            // Determine normal range string
             let rangeStr = "";
-            if (testDefinition) {
-              const paramDef = testDefinition.parameters.find(
-                (p) => p.name === param.name
-              );
-              if (paramDef) {
-                if (paramDef.agegroup) {
-                  let ageGroup = "";
-                  if (patientAge < 18) {
-                    ageGroup = "child";
-                  } else if (patientAge < 60) {
-                    ageGroup = "adult";
-                  } else {
-                    ageGroup = "older";
-                  }
-
-                  if (paramDef.genderSpecific) {
-                    // If the param is gender-specific, we assume paramDef.range has male/female keys
-                    rangeStr =
-                      patientGender === "male"
-                        ? paramDef.range?.[`${ageGroup}male`] || ""
-                        : paramDef.range?.[`${ageGroup}female`] || "";
-                  } else {
-                    rangeStr = paramDef.range?.[ageGroup] || "";
-                  }
-                } else {
-                  // not agegroup
-                  if (paramDef.genderSpecific) {
-                    // Then there's probably one range, e.g. paramDef.range?.range
-                    rangeStr = paramDef.range?.range || "";
-                  } else {
-                    // assume separate male/female keys
-                    rangeStr =
-                      patientGender === "male"
-                        ? paramDef.range?.male || ""
-                        : paramDef.range?.female || "";
-                  }
-                }
-              } else {
-                // fallback if param not found
-                if (typeof param.range === "string") {
-                  rangeStr = param.range;
-                }
-              }
+            if (typeof param.range === "string") {
+              rangeStr = param.range;
             } else {
-              // Fallback if test definition is not available
-              if (param.range && typeof param.range === "string") {
-                rangeStr = param.range;
-              } else if (param.agegroup) {
-                let ageGroup = "";
-                if (patientAge < 18) {
-                  ageGroup = "child";
-                } else if (patientAge < 60) {
-                  ageGroup = "adult";
-                } else {
-                  ageGroup = "older";
+              const ranges = (param.range && param.range[patientGender as keyof typeof param.range]) || [];
+              for (const r of ranges) {
+                const { lower, upper } = parseRangeKey(r.rangeKey);
+                if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
+                  rangeStr = r.rangeValue;
+                  break;
                 }
-                if (param.genderSpecific) {
-                  rangeStr = param.range?.[ageGroup] || "";
-                } else {
-                  rangeStr =
-                    patientGender === "male"
-                      ? param.range?.[`${ageGroup}male`] || ""
-                      : param.range?.[`${ageGroup}female`] || "";
-                }
-              } else if (param.genderSpecific) {
-                rangeStr = param.range?.range || "";
-              } else {
-                const genderKey = patientGender === "male" ? "male" : "female";
-                rangeStr = param.range?.[genderKey] || "";
+              }
+              if (!rangeStr && ranges.length > 0) {
+                rangeStr = ranges[ranges.length - 1].rangeValue;
               }
             }
 
-            let minRange = 0,
-              maxRange = 0;
-            if (rangeStr) {
-              const parts = rangeStr.split("-");
-              if (parts.length === 2) {
-                minRange = parseFloat(parts[0].trim());
-                maxRange = parseFloat(parts[1].trim());
-              }
-            }
-
-            // Draw a light horizontal line for each row
-            doc.setDrawColor(200, 200, 200);
-            doc.setLineWidth(0.1);
-            doc.line(leftMargin, yPosition, pageWidth - leftMargin, yPosition);
-
-            // Parameter name
-            doc.setTextColor(0, 0, 0);
+            // Print parameter row with four columns
             doc.text(param.name, col1X + 2, yPosition + 4);
-
-            // Parameter value
             const valueStr = param.value !== "" ? String(param.value) : "-";
-            const valueNum = parseFloat(String(param.value));
-            let valueColor: [number, number, number] = [0, 0, 0];
-            if (rangeStr && param.value !== "" && !isNaN(valueNum)) {
-              if (valueNum < minRange || valueNum > maxRange) {
-                valueColor = [255, 0, 0]; // out of range => red
-              }
-            }
-            doc.setTextColor(valueColor[0], valueColor[1], valueColor[2]);
-            doc.text(valueStr, col2X, yPosition + 4, { align: "center" });
-
-            // Parameter unit
-            doc.setTextColor(0, 0, 0);
-            doc.text(param.unit, col3X - 2, yPosition + 4, { align: "right" });
+            doc.text(valueStr, col2X + colWidth / 2, yPosition + 4, { align: "center" });
+            doc.text(param.unit, col3X + colWidth / 2, yPosition + 4, { align: "center" });
+            doc.text(rangeStr, col4X + colWidth / 2, yPosition + 4, { align: "center" });
             yPosition += 8;
 
-            // Normal range text (font size reduced)
-            doc.setTextColor(80, 80, 80);
-            doc.setFontSize(6);
-            const normalRangeText = `Normal Range: ${rangeStr}`;
-            doc.text(normalRangeText, col1X + 2, yPosition);
-            yPosition += 3;
-
-            // Quick range bar (graph)
-            const graphWidth = 80;
-            const graphHeight = 4;
-            const graphX = col1X + 2;
-            const graphY = yPosition;
-            doc.setFillColor(230, 230, 230);
-            doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "F");
-
-            let relative = 0;
-            if (!isNaN(valueNum) && maxRange > minRange) {
-              const clampedValue = Math.min(Math.max(valueNum, minRange), maxRange);
-              relative = (clampedValue - minRange) / (maxRange - minRange);
+            // Process subparameters if present
+            if (param.subparameters && param.subparameters.length > 0) {
+              for (const subParam of param.subparameters) {
+                let subRangeStr = "";
+                if (typeof subParam.range === "string") {
+                  subRangeStr = subParam.range;
+                } else {
+                  const subRanges = (subParam.range && subParam.range[patientGender as keyof typeof subParam.range]) || [];
+                  for (const sr of subRanges) {
+                    const { lower, upper } = parseRangeKey(sr.rangeKey);
+                    if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
+                      subRangeStr = sr.rangeValue;
+                      break;
+                    }
+                  }
+                  if (!subRangeStr && subRanges.length > 0) {
+                    subRangeStr = subRanges[subRanges.length - 1].rangeValue;
+                  }
+                }
+                const subIndent = col1X + 4;
+                doc.setFont("helvetica", "normal");
+                doc.setFontSize(6);
+                doc.text(subParam.name, subIndent, yPosition + 4);
+                const subValueStr = subParam.value !== "" ? String(subParam.value) : "-";
+                doc.text(subValueStr, col2X + colWidth / 2, yPosition + 4, { align: "center" });
+                doc.text(subParam.unit, col3X + colWidth / 2, yPosition + 4, { align: "center" });
+                doc.text(subRangeStr, col4X + colWidth / 2, yPosition + 4, { align: "center" });
+                yPosition += 8;
+              }
             }
-            const filledWidth = relative * graphWidth;
-            if (!isNaN(valueNum) && (valueNum < minRange || valueNum > maxRange)) {
-              doc.setFillColor(244, 67, 54); // red
-            } else {
-              doc.setFillColor(76, 175, 80); // green
-            }
-            doc.roundedRect(
-              graphX,
-              graphY,
-              filledWidth,
-              graphHeight,
-              2,
-              2,
-              "F"
-            );
-
-            doc.setDrawColor(150, 150, 150);
-            doc.setLineWidth(0.2);
-            doc.roundedRect(graphX, graphY, graphWidth, graphHeight, 2, 2, "S");
-
-            yPosition += graphHeight + 3;
-            doc.setFontSize(7);
-            doc.setTextColor(0, 0, 0);
           }
         }
 
@@ -462,16 +339,9 @@ function DownloadReport() {
         const stampX = pageWidth - leftMargin - stampWidth;
         const stampY = pageHeight - stampHeight - 30;
         const stampBase64 = await loadImageAsCompressedJPEG(stamp.src, 0.5);
-        doc.addImage(
-          stampBase64 as string,
-          "JPEG",
-          stampX,
-          stampY,
-          stampWidth,
-          stampHeight
-        );
+        doc.addImage(stampBase64 as string, "JPEG", stampX, stampY, stampWidth, stampHeight);
 
-        // 9. Convert to Blob and update state for download/send
+        // 9. Convert PDF to Blob and update state
         const generatedPdfBlob = doc.output("blob");
         setPdfBlob(generatedPdfBlob);
       } catch (error) {
@@ -483,7 +353,7 @@ function DownloadReport() {
     fetchDataAndGenerateReport();
   }, [patientId, router]);
 
-  // Download Professional PDF
+  // Download PDF report
   const downloadReport = () => {
     if (!pdfBlob || !patientData) return;
     const url = URL.createObjectURL(pdfBlob);
@@ -494,7 +364,7 @@ function DownloadReport() {
     URL.revokeObjectURL(url);
   };
 
-  // Send Professional PDF to WhatsApp
+  // Send PDF report via WhatsApp
   const sendReportOnWhatsApp = async () => {
     if (!pdfBlob || !patientData) return;
     setIsSending(true);
@@ -597,7 +467,7 @@ function DownloadReport() {
                       viewBox="0 0 24 24"
                       fill="currentColor"
                     >
-                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
                     </svg>
                     <span>Send via WhatsApp</span>
                   </>

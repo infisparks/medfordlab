@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { database } from "../../firebase"; // or wherever your firebase config is
-import { ref, get, update, remove } from "firebase/database"; // added remove here
+import { database } from "../../firebase"; // adjust path as needed
+import { ref, get, update, remove, push, set } from "firebase/database";
 import { useForm, useFieldArray } from "react-hook-form";
 import {
   FaEdit,
@@ -11,149 +11,277 @@ import {
   FaFlask,
   FaSave,
   FaPlus,
+  FaPlusCircle,
 } from "react-icons/fa";
 
 // -----------------------------
 // INTERFACES
 // -----------------------------
-interface Parameter {
-  name: string;
-  unit: string;
-  // When true: use common range for both genders.
-  // When false: specify separate ranges.
-  genderSpecific: boolean;
-  // When true: use age-group specific fields.
-  agegroup?: boolean;
-  range: {
-    // Without age groups:
-    range?: string; // for common range
-    male?: string;
-    female?: string;
-    // With age groups and common range:
-    child?: string;
-    adult?: string;
-    older?: string;
-    // With age groups and separate ranges:
-    childmale?: string;
-    childfemale?: string;
-    adultmale?: string;
-    adultfemale?: string;
-    oldermale?: string;
-    olderfemale?: string;
-  };
+export interface AgeRangeItem {
+  rangeKey: string;
+  rangeValue: string;
 }
 
-interface BloodTestFormInputs {
+export interface Parameter {
+  name: string;
+  unit: string;
+  range: {
+    male: AgeRangeItem[];
+    female: AgeRangeItem[];
+  };
+  // Optional: subparameters can follow the same structure if needed.
+  subparameters?: Parameter[];
+}
+
+export interface BloodTestFormInputs {
   testName: string;
   price: number;
   parameters: Parameter[];
 }
 
-interface TestData extends BloodTestFormInputs {
+export interface TestData extends BloodTestFormInputs {
   key: string;
   createdAt: string;
 }
 
 // -----------------------------
-// EDIT TEST MODAL
+// PARAMETER EDITOR COMPONENT
 // -----------------------------
-interface EditTestModalProps {
-  testData: TestData;
+interface ParameterEditorProps {
+  index: number;
+  control: any;
+  register: any;
+  errors: any;
+  remove: (index: number) => void;
+}
+
+const ParameterEditor: React.FC<ParameterEditorProps> = ({
+  index,
+  control,
+  register,
+  errors,
+  remove,
+}) => {
+  const {
+    fields: maleRanges,
+    append: appendMaleRange,
+    remove: removeMaleRange,
+  } = useFieldArray({
+    control,
+    name: `parameters.${index}.range.male`,
+  });
+
+  const {
+    fields: femaleRanges,
+    append: appendFemaleRange,
+    remove: removeFemaleRange,
+  } = useFieldArray({
+    control,
+    name: `parameters.${index}.range.female`,
+  });
+
+  return (
+    <div className="border p-4 rounded mb-4 bg-gray-50">
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-semibold">Parameter #{index + 1}</h3>
+        <button
+          type="button"
+          onClick={() => remove(index)}
+          className="text-red-500 hover:text-red-700"
+        >
+          <FaTrash />
+        </button>
+      </div>
+      <div className="mt-2">
+        <label className="block text-xs">Parameter Name</label>
+        <input
+          type="text"
+          {...register(`parameters.${index}.name`, { required: "Required" })}
+          className="w-full border rounded px-2 py-1"
+          placeholder="e.g., Hemoglobin"
+        />
+        {errors.parameters?.[index]?.name && (
+          <p className="text-red-500 text-xs">
+            {errors.parameters[index].name.message}
+          </p>
+        )}
+      </div>
+      <div className="mt-2">
+        <label className="block text-xs">Unit</label>
+        <input
+          type="text"
+          {...register(`parameters.${index}.unit`, { required: "Required" })}
+          className="w-full border rounded px-2 py-1"
+          placeholder="e.g., g/dL"
+        />
+        {errors.parameters?.[index]?.unit && (
+          <p className="text-red-500 text-xs">
+            {errors.parameters[index].unit.message}
+          </p>
+        )}
+      </div>
+      <div className="mt-2">
+        <h4 className="text-xs font-medium">Male Ranges</h4>
+        {maleRanges.map((field, mIndex) => (
+          <div key={field.id} className="flex items-center space-x-2 mt-1">
+            <input
+              type="text"
+              {...register(
+                `parameters.${index}.range.male.${mIndex}.rangeKey`,
+                { required: "Required" }
+              )}
+              className="w-1/2 border rounded px-2 py-1"
+              placeholder="Age Range e.g., 0-30d"
+            />
+            <input
+              type="text"
+              {...register(
+                `parameters.${index}.range.male.${mIndex}.rangeValue`,
+                { required: "Required" }
+              )}
+              className="w-1/2 border rounded px-2 py-1"
+              placeholder="Value e.g., 5.0-7.0"
+            />
+            <button
+              type="button"
+              onClick={() => removeMaleRange(mIndex)}
+              className="text-red-500 hover:text-red-700"
+            >
+              <FaTrash />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => appendMaleRange({ rangeKey: "", rangeValue: "" })}
+          className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+        >
+          <FaPlus className="mr-1" /> Add Male Range
+        </button>
+      </div>
+      <div className="mt-2">
+        <h4 className="text-xs font-medium">Female Ranges</h4>
+        {femaleRanges.map((field, fIndex) => (
+          <div key={field.id} className="flex items-center space-x-2 mt-1">
+            <input
+              type="text"
+              {...register(
+                `parameters.${index}.range.female.${fIndex}.rangeKey`,
+                { required: "Required" }
+              )}
+              className="w-1/2 border rounded px-2 py-1"
+              placeholder="Age Range e.g., 0-30d"
+            />
+            <input
+              type="text"
+              {...register(
+                `parameters.${index}.range.female.${fIndex}.rangeValue`,
+                { required: "Required" }
+              )}
+              className="w-1/2 border rounded px-2 py-1"
+              placeholder="Value e.g., 5.0-7.0"
+            />
+            <button
+              type="button"
+              onClick={() => removeFemaleRange(fIndex)}
+              className="text-red-500 hover:text-red-700"
+            >
+              <FaTrash />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => appendFemaleRange({ rangeKey: "", rangeValue: "" })}
+          className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+        >
+          <FaPlus className="mr-1" /> Add Female Range
+        </button>
+      </div>
+      {/* Optionally, you can add a similar block for subparameters if required */}
+    </div>
+  );
+};
+
+// -----------------------------
+// TEST MODAL COMPONENT (Create & Edit)
+// -----------------------------
+interface TestModalProps {
+  testData?: TestData; // if undefined, then creating a new test
   onClose: () => void;
   onTestUpdated: () => void;
 }
 
-const EditTestModal: React.FC<EditTestModalProps> = ({
+const TestModal: React.FC<TestModalProps> = ({
   testData,
   onClose,
   onTestUpdated,
 }) => {
-  // Preprocess parameters so that each has the proper range structure.
-  const preppedParams = testData.parameters.map((param) => {
-    if (param.agegroup) {
-      if (param.genderSpecific) {
-        // Age group with common range per group
-        return {
-          ...param,
-          range: {
-            child: param.range?.child || "",
-            adult: param.range?.adult || "",
-            older: param.range?.older || "",
-          },
-        };
-      } else {
-        // Age group with separate ranges for male and female
-        return {
-          ...param,
-          range: {
-            childmale: param.range?.childmale || "",
-            childfemale: param.range?.childfemale || "",
-            adultmale: param.range?.adultmale || "",
-            adultfemale: param.range?.adultfemale || "",
-            oldermale: param.range?.oldermale || "",
-            olderfemale: param.range?.olderfemale || "",
-          },
-        };
+  const defaultValues: BloodTestFormInputs = testData
+    ? {
+        testName: testData.testName,
+        price: testData.price,
+        parameters: testData.parameters,
       }
-    } else {
-      // Not using age groups
-      if (param.genderSpecific) {
-        return {
-          ...param,
-          range: {
-            range: param.range?.range || "",
+    : {
+        testName: "",
+        price: 0,
+        parameters: [
+          {
+            name: "",
+            unit: "",
+            range: {
+              male: [{ rangeKey: "", rangeValue: "" }],
+              female: [{ rangeKey: "", rangeValue: "" }],
+            },
+            subparameters: [],
           },
-        };
-      } else {
-        return {
-          ...param,
-          range: {
-            male: param.range?.male || "",
-            female: param.range?.female || "",
-          },
-        };
-      }
-    }
-  });
+        ],
+      };
 
   const {
     register,
     handleSubmit,
     control,
-    watch,
+  
     formState: { errors },
-  } = useForm<BloodTestFormInputs>({
-    defaultValues: {
-      testName: testData.testName,
-      price: testData.price,
-      parameters: preppedParams,
-    },
-  });
+  } = useForm<BloodTestFormInputs>({ defaultValues });
 
   const { fields, append, remove: removeField } = useFieldArray({
     control,
     name: "parameters",
   });
 
-  // Called on "Save Changes"
   const onSubmit = async (data: BloodTestFormInputs) => {
     try {
-      const testRef = ref(database, `bloodTests/${testData.key}`);
-      await update(testRef, {
-        ...data,
-        updatedAt: new Date().toISOString(),
-      });
-      alert("Test updated successfully!");
+      if (testData) {
+        // Update existing test
+        const testRef = ref(database, `bloodTests/${testData.key}`);
+        await update(testRef, {
+          ...data,
+          updatedAt: new Date().toISOString(),
+        });
+        alert("Test updated successfully!");
+      } else {
+        // Create new test
+        const testsRef = ref(database, "bloodTests");
+        const newTestRef = push(testsRef);
+        await set(newTestRef, {
+          ...data,
+          createdAt: new Date().toISOString(),
+        });
+        alert("Test created successfully!");
+      }
       onTestUpdated();
       onClose();
     } catch (error) {
-      console.error("Error updating test:", error);
-      alert("Error updating test. Please try again.");
+      console.error("Error saving test:", error);
+      alert("Error saving test. Please try again.");
     }
   };
 
-  // Called on "Delete Test"
   const handleDelete = async () => {
+    if (!testData) return;
     if (!window.confirm("Are you sure you want to delete this test?")) return;
     try {
       const testRef = ref(database, `bloodTests/${testData.key}`);
@@ -169,18 +297,23 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-      {/* Make the modal scrollable */}
       <div className="bg-white p-6 rounded-lg w-full max-w-3xl max-h-[85vh] overflow-y-auto">
-        {/* Header */}
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold flex items-center">
-            <FaEdit className="mr-2" /> Edit Blood Test
+            {testData ? (
+              <>
+                <FaEdit className="mr-2" /> Edit Blood Test
+              </>
+            ) : (
+              <>
+                <FaPlusCircle className="mr-2" /> Create New Blood Test
+              </>
+            )}
           </h2>
           <button onClick={onClose} className="text-gray-600 hover:text-gray-800">
             Close
           </button>
         </div>
-
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           {/* Test Name */}
           <div>
@@ -194,7 +327,6 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
               <p className="text-red-500 text-xs">{errors.testName.message}</p>
             )}
           </div>
-
           {/* Price */}
           <div>
             <label className="block text-sm font-medium">
@@ -214,375 +346,52 @@ const EditTestModal: React.FC<EditTestModalProps> = ({
               <p className="text-red-500 text-xs">{errors.price.message}</p>
             )}
           </div>
-
           {/* Parameters */}
           <div>
             <label className="block text-sm font-medium">Parameters</label>
-            {fields.map((field, index) => {
-              const useCommonRange =
-                watch(`parameters.${index}.genderSpecific`) === true;
-              const useAgeGroup = watch(`parameters.${index}.agegroup`) === true;
-
-              return (
-                <div key={field.id} className="border p-4 rounded mb-2 bg-gray-50">
-                  {/* Header row */}
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium">
-                      Parameter #{index + 1}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => removeField(index)}
-                      className="text-red-500 hover:text-red-700"
-                    >
-                      <FaTrash />
-                    </button>
-                  </div>
-
-                  {/* Parameter Name */}
-                  <div className="mt-2">
-                    <label className="block text-xs">Parameter Name</label>
-                    <input
-                      type="text"
-                      {...register(`parameters.${index}.name`, {
-                        required: "Required",
-                      })}
-                      className="w-full border rounded px-2 py-1"
-                      placeholder="e.g., Hemoglobin"
-                    />
-                    {errors.parameters?.[index]?.name && (
-                      <p className="text-red-500 text-xs">
-                        {errors.parameters[index]?.name?.message}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Parameter Unit */}
-                  <div className="mt-2">
-                    <label className="block text-xs">Unit</label>
-                    <input
-                      type="text"
-                      {...register(`parameters.${index}.unit`, {
-                        required: "Required",
-                      })}
-                      className="w-full border rounded px-2 py-1"
-                      placeholder="e.g., g/dL"
-                    />
-                    {errors.parameters?.[index]?.unit && (
-                      <p className="text-red-500 text-xs">
-                        {errors.parameters[index]?.unit?.message}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Gender-Specific Checkbox */}
-                  <div className="mt-2">
-                    <label className="inline-flex items-center">
-                      <input
-                        type="checkbox"
-                        {...register(`parameters.${index}.genderSpecific`)}
-                        className="mr-2"
-                      />
-                      Same range for both genders?
-                    </label>
-                  </div>
-
-                  {/* Age Group Checkbox */}
-                  <div className="mt-2">
-                    <label className="inline-flex items-center">
-                      <input
-                        type="checkbox"
-                        {...register(`parameters.${index}.agegroup`)}
-                        className="mr-2"
-                      />
-                      Different range for different age groups?
-                    </label>
-                  </div>
-
-                  {/* Render range inputs based on options */}
-                  <div className="mt-2">
-                    {!useAgeGroup ? (
-                      // Without age group: Use existing logic
-                      useCommonRange ? (
-                        <div>
-                          <label className="block text-xs">
-                            Common Range (e.g., 20-10)
-                          </label>
-                          <input
-                            type="text"
-                            {...register(`parameters.${index}.range.range`, {
-                              required: "Required",
-                            })}
-                            className="w-full border rounded px-2 py-1"
-                            placeholder="e.g., 20-10"
-                          />
-                          {errors.parameters?.[index]?.range?.range && (
-                            <p className="text-red-500 text-xs">
-                              {errors.parameters[index]?.range?.range?.message}
-                            </p>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-xs">
-                              Male Range (e.g., Less thane 18)
-                            </label>
-                            <input
-                              type="text"
-                              {...register(`parameters.${index}.range.male`, {
-                                required: "Required",
-                              })}
-                              className="w-full border rounded px-2 py-1"
-                              placeholder="e.g., Less thane 18"
-                            />
-                            {errors.parameters?.[index]?.range?.male && (
-                              <p className="text-red-500 text-xs">
-                                {errors.parameters[index]?.range?.male?.message}
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="block text-xs">
-                              Female Range (e.g., Less thane 18)
-                            </label>
-                            <input
-                              type="text"
-                              {...register(`parameters.${index}.range.female`, {
-                                required: "Required",
-                              })}
-                              className="w-full border rounded px-2 py-1"
-                              placeholder="e.g., Less thane 18"
-                            />
-                            {errors.parameters?.[index]?.range?.female && (
-                              <p className="text-red-500 text-xs">
-                                {errors.parameters[index]?.range?.female?.message}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    ) : (
-                      // With age group
-                      useCommonRange ? (
-                        // Age group with common range per group
-                        <div className="grid grid-cols-1 gap-2">
-                          <div>
-                            <label className="block text-xs">
-                              Child Range (e.g., 12-23)
-                            </label>
-                            <input
-                              type="text"
-                              {...register(`parameters.${index}.range.child`, {
-                                required: "Required",
-                              })}
-                              className="w-full border rounded px-2 py-1"
-                              placeholder="e.g., 12-23"
-                            />
-                            {errors.parameters?.[index]?.range?.child && (
-                              <p className="text-red-500 text-xs">
-                                {errors.parameters[index]?.range?.child?.message}
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="block text-xs">
-                              Adult Range (e.g., 12-24)
-                            </label>
-                            <input
-                              type="text"
-                              {...register(`parameters.${index}.range.adult`, {
-                                required: "Required",
-                              })}
-                              className="w-full border rounded px-2 py-1"
-                              placeholder="e.g., 12-24"
-                            />
-                            {errors.parameters?.[index]?.range?.adult && (
-                              <p className="text-red-500 text-xs">
-                                {errors.parameters[index]?.range?.adult?.message}
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="block text-xs">
-                              Older Range (e.g., more thane 60)
-                            </label>
-                            <input
-                              type="text"
-                              {...register(`parameters.${index}.range.older`, {
-                                required: "Required",
-                              })}
-                              className="w-full border rounded px-2 py-1"
-                              placeholder="e.g., more thane 60"
-                            />
-                            {errors.parameters?.[index]?.range?.older && (
-                              <p className="text-red-500 text-xs">
-                                {errors.parameters[index]?.range?.older?.message}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        // Age group with separate ranges for male and female
-                        <div className="space-y-2">
-                          {/* Child */}
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="block text-xs">
-                                Child Male (e.g., Less thane 18)
-                              </label>
-                              <input
-                                type="text"
-                                {...register(`parameters.${index}.range.childmale`, {
-                                  required: "Required",
-                                })}
-                                className="w-full border rounded px-2 py-1"
-                                placeholder="e.g., Less thane 18"
-                              />
-                              {errors.parameters?.[index]?.range?.childmale && (
-                                <p className="text-red-500 text-xs">
-                                  {errors.parameters[index]?.range?.childmale?.message}
-                                </p>
-                              )}
-                            </div>
-                            <div>
-                              <label className="block text-xs">
-                                Child Female (e.g., Less thane 18)
-                              </label>
-                              <input
-                                type="text"
-                                {...register(`parameters.${index}.range.childfemale`, {
-                                  required: "Required",
-                                })}
-                                className="w-full border rounded px-2 py-1"
-                                placeholder="e.g., Less thane 18"
-                              />
-                              {errors.parameters?.[index]?.range?.childfemale && (
-                                <p className="text-red-500 text-xs">
-                                  {errors.parameters[index]?.range?.childfemale?.message}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          {/* Adult */}
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="block text-xs">
-                                Adult Male (e.g., Less thane 60)
-                              </label>
-                              <input
-                                type="text"
-                                {...register(`parameters.${index}.range.adultmale`, {
-                                  required: "Required",
-                                })}
-                                className="w-full border rounded px-2 py-1"
-                                placeholder="e.g., Less thane 60"
-                              />
-                              {errors.parameters?.[index]?.range?.adultmale && (
-                                <p className="text-red-500 text-xs">
-                                  {errors.parameters[index]?.range?.adultmale?.message}
-                                </p>
-                              )}
-                            </div>
-                            <div>
-                              <label className="block text-xs">
-                                Adult Female (e.g., Less thane 60)
-                              </label>
-                              <input
-                                type="text"
-                                {...register(`parameters.${index}.range.adultfemale`, {
-                                  required: "Required",
-                                })}
-                                className="w-full border rounded px-2 py-1"
-                                placeholder="e.g., Less thane 60"
-                              />
-                              {errors.parameters?.[index]?.range?.adultfemale && (
-                                <p className="text-red-500 text-xs">
-                                  {errors.parameters[index]?.range?.adultfemale?.message}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          {/* Older */}
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="block text-xs">
-                                Older Male (e.g., more thane 60)
-                              </label>
-                              <input
-                                type="text"
-                                {...register(`parameters.${index}.range.oldermale`, {
-                                  required: "Required",
-                                })}
-                                className="w-full border rounded px-2 py-1"
-                                placeholder="e.g., more thane 60"
-                              />
-                              {errors.parameters?.[index]?.range?.oldermale && (
-                                <p className="text-red-500 text-xs">
-                                  {errors.parameters[index]?.range?.oldermale?.message}
-                                </p>
-                              )}
-                            </div>
-                            <div>
-                              <label className="block text-xs">
-                                Older Female (e.g., more thane 60)
-                              </label>
-                              <input
-                                type="text"
-                                {...register(`parameters.${index}.range.olderfemale`, {
-                                  required: "Required",
-                                })}
-                                className="w-full border rounded px-2 py-1"
-                                placeholder="e.g., more thane 60"
-                              />
-                              {errors.parameters?.[index]?.range?.olderfemale && (
-                                <p className="text-red-500 text-xs">
-                                  {errors.parameters[index]?.range?.olderfemale?.message}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* Add parameter button */}
+            {fields.map((field, index) => (
+              <ParameterEditor
+                key={field.id}
+                index={index}
+                control={control}
+                register={register}
+                errors={errors}
+                remove={removeField}
+              />
+            ))}
             <button
               type="button"
               onClick={() =>
                 append({
                   name: "",
                   unit: "",
-                  genderSpecific: true, // default to common range
-                  agegroup: false, // default to not using age groups
-                  range: { range: "" },
+                  range: {
+                    male: [{ rangeKey: "", rangeValue: "" }],
+                    female: [{ rangeKey: "", rangeValue: "" }],
+                  },
+                  subparameters: [],
                 })
               }
               className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
             >
-              <FaPlus className="mr-1" />
-              Add Parameter
+              <FaPlus className="mr-1" /> Add Parameter
             </button>
           </div>
-
-          {/* Footer Buttons */}
           <div className="flex justify-between items-center mt-4">
-            <button
-              type="button"
-              onClick={handleDelete}
-              className="inline-flex items-center px-3 py-1 border border-red-600 text-red-600 rounded hover:bg-red-50"
-            >
-              <FaTrash className="mr-1" /> Delete Test
-            </button>
+            {testData && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="inline-flex items-center px-3 py-1 border border-red-600 text-red-600 rounded hover:bg-red-50"
+              >
+                <FaTrash className="mr-1" /> Delete Test
+              </button>
+            )}
             <button
               type="submit"
               className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
             >
-              <FaSave className="mr-1" /> Save Changes
+              <FaSave className="mr-1" /> {testData ? "Save Changes" : "Create Test"}
             </button>
           </div>
         </form>
@@ -599,14 +408,12 @@ const ManageBloodTests: React.FC = () => {
   const [selectedTest, setSelectedTest] = useState<TestData | null>(null);
   const [showModal, setShowModal] = useState<boolean>(false);
 
-  // Fetch from Firebase
   const fetchTests = async () => {
     try {
       const testsRef = ref(database, "bloodTests");
       const snapshot = await get(testsRef);
       if (snapshot.exists()) {
         const data = snapshot.val();
-        // Turn the object into an array of { key, ...testData }
         const testsArray: TestData[] = Object.keys(data).map((key) => ({
           key,
           ...data[key],
@@ -627,20 +434,32 @@ const ManageBloodTests: React.FC = () => {
     setShowModal(true);
   };
 
+  const handleAddNew = () => {
+    setSelectedTest(null);
+    setShowModal(true);
+  };
+
   const handleModalClose = () => {
     setShowModal(false);
     setSelectedTest(null);
-    fetchTests(); // refresh the tests after updating/deletion
+    fetchTests();
   };
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-7xl mx-auto bg-white p-6 rounded-lg shadow-lg">
-        <h1 className="text-3xl font-bold mb-6 flex items-center">
-          <FaFlask className="mr-2 text-blue-600" />
-          Manage Blood Tests
-        </h1>
-
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold flex items-center">
+            <FaFlask className="mr-2 text-blue-600" />
+            Manage Blood Tests
+          </h1>
+          <button
+            onClick={handleAddNew}
+            className="inline-flex items-center px-3 py-1 border border-green-600 text-green-600 rounded hover:bg-green-50"
+          >
+            <FaPlus className="mr-1" /> Add Test
+          </button>
+        </div>
         <table className="min-w-full border-collapse">
           <thead>
             <tr className="bg-blue-100">
@@ -674,18 +493,15 @@ const ManageBloodTests: React.FC = () => {
             ))}
           </tbody>
         </table>
-
         {tests.length === 0 && (
           <div className="text-center py-8 text-gray-500">
             No blood tests found.
           </div>
         )}
       </div>
-
-      {/* The Edit Modal */}
-      {showModal && selectedTest && (
-        <EditTestModal
-          testData={selectedTest}
+      {showModal && (
+        <TestModal
+          testData={selectedTest || undefined}
           onClose={handleModalClose}
           onTestUpdated={handleModalClose}
         />

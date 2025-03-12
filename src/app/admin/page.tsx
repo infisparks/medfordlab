@@ -21,6 +21,12 @@ interface BloodTest {
   testName: string;
 }
 
+interface Payment {
+  amount: number;
+  paymentMode: string;
+  time: string;
+}
+
 interface Patient {
   id?: string; // Added for the key from Firebase
   name: string;
@@ -31,15 +37,17 @@ interface Patient {
   amountPaid: number;
   bloodTests: BloodTest[];
   date: string; // Used for displaying the row date
+  paymentHistory?: Payment[];
 }
 
 const AdminPanel: React.FC = () => {
-  // Define state for patients and search/filter criteria
+  // State for patients, search/filter criteria, and selected patient for payment history
   const [patients, setPatients] = useState<Patient[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
 
-  // Create a filtered list of patients based on search term and date
+  // Filter patients based on search term and date
   const filteredPatients = useMemo(() => {
     return patients.filter((patient) => {
       const matchesSearch = patient.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -48,12 +56,14 @@ const AdminPanel: React.FC = () => {
     });
   }, [patients, searchTerm, selectedDate]);
 
-  // Compute summary values for the filtered patients
+  // Compute summary values including payment mode breakdown
   const summary = useMemo(() => {
     let totalDiscount = 0;
     let totalPaid = 0;
     let totalRemaining = 0;
     let netBilling = 0;
+    let totalOnline = 0;
+    let totalCash = 0;
 
     filteredPatients.forEach((patient: Patient) => {
       const testTotal = patient.bloodTests.reduce(
@@ -62,11 +72,21 @@ const AdminPanel: React.FC = () => {
       );
       const discountValue = testTotal * (patient.discountPercentage / 100);
       const remaining = testTotal - discountValue - patient.amountPaid;
-
       netBilling += testTotal - discountValue;
       totalDiscount += discountValue;
       totalPaid += patient.amountPaid;
       totalRemaining += remaining;
+
+      // Breakdown payment history by payment mode
+      if (patient.paymentHistory && Array.isArray(patient.paymentHistory)) {
+        patient.paymentHistory.forEach((payment: Payment) => {
+          if (payment.paymentMode === "online") {
+            totalOnline += payment.amount;
+          } else if (payment.paymentMode === "cash") {
+            totalCash += payment.amount;
+          }
+        });
+      }
     });
 
     return {
@@ -74,32 +94,35 @@ const AdminPanel: React.FC = () => {
       netBilling,
       totalPaid,
       totalRemaining,
+      totalOnline,
+      totalCash,
     };
   }, [filteredPatients]);
 
   // Fetch patients from Firebase and convert object to array
   useEffect(() => {
     const patientsRef = ref(database, "patients");
-    get(patientsRef).then((snapshot) => {
-      if (snapshot.exists()) {
-        const dataObj = snapshot.val();
-        // Convert the object to an array with each key as an id
-        const dataArray: Patient[] = Object.keys(dataObj).map((key) => ({
-          id: key,
-          ...dataObj[key],
-          // Convert age from string to number if necessary
-          age: Number(dataObj[key].age)
-        }));
-        setPatients(dataArray);
-      }
-    }).catch((error) => {
-      console.error("Error fetching patients:", error);
-    });
+    get(patientsRef)
+      .then((snapshot) => {
+        if (snapshot.exists()) {
+          const dataObj = snapshot.val();
+          // Convert the object to an array with each key as an id
+          const dataArray: Patient[] = Object.keys(dataObj).map((key) => ({
+            id: key,
+            ...dataObj[key],
+            age: Number(dataObj[key].age),
+          }));
+          setPatients(dataArray);
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching patients:", error);
+      });
   }, []);
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Enhanced Header */}
+      {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -173,16 +196,23 @@ const AdminPanel: React.FC = () => {
             </div>
           </div>
 
+          {/* Amount Paid Card with Payment Mode Breakdown */}
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600 mb-1">Amount Paid</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  ₹{summary.totalPaid.toFixed(2)}
-                </p>
+            <div className="flex flex-col items-start">
+              <div className="flex items-center justify-between w-full">
+                <div>
+                  <p className="text-sm font-medium text-gray-600 mb-1">Amount Paid</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    ₹{summary.totalPaid.toFixed(2)}
+                  </p>
+                </div>
+                <div className="bg-blue-100 p-3 rounded-lg">
+                  <CurrencyDollarIcon className="h-6 w-6 text-blue-600" />
+                </div>
               </div>
-              <div className="bg-blue-100 p-3 rounded-lg">
-                <CurrencyDollarIcon className="h-6 w-6 text-blue-600" />
+              <div className="mt-2 text-sm text-gray-700">
+                <p>Online: ₹{summary.totalOnline.toFixed(2)}</p>
+                <p>Cash: ₹{summary.totalCash.toFixed(2)}</p>
               </div>
             </div>
           </div>
@@ -231,18 +261,32 @@ const AdminPanel: React.FC = () => {
                   const remaining = testTotal - discountValue - patient.amountPaid;
                   const testNames = patient.bloodTests.map((bt) => bt.testName).join(", ");
                   return (
-                    <tr key={index} className="hover:bg-gray-50 transition-colors">
+                    <tr
+                      key={index}
+                      className="hover:bg-gray-50 transition-colors cursor-pointer"
+                      onClick={() => setSelectedPatient(patient)}
+                    >
                       <td className="px-6 py-4 text-sm text-gray-700">{patient.date}</td>
                       <td className="px-6 py-4">
                         <div className="text-sm font-medium text-gray-900">{patient.name}</div>
-                        <div className="text-sm text-gray-500">{patient.gender}, {patient.age}</div>
+                        <div className="text-sm text-gray-500">
+                          {patient.gender}, {patient.age}
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-700">{patient.contact}</td>
                       <td className="px-6 py-4 text-sm text-gray-600 max-w-xs">{testNames}</td>
-                      <td className="px-6 py-4 text-sm text-gray-700 text-right">₹{testTotal.toFixed(2)}</td>
-                      <td className="px-6 py-4 text-sm text-red-600 text-right">-₹{discountValue.toFixed(2)}</td>
-                      <td className="px-6 py-4 text-sm text-green-600 text-right">₹{patient.amountPaid.toFixed(2)}</td>
-                      <td className="px-6 py-4 text-sm text-orange-600 text-right">₹{remaining.toFixed(2)}</td>
+                      <td className="px-6 py-4 text-sm text-gray-700 text-right">
+                        ₹{testTotal.toFixed(2)}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-red-600 text-right">
+                        -₹{discountValue.toFixed(2)}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-green-600 text-right">
+                        ₹{patient.amountPaid.toFixed(2)}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-orange-600 text-right">
+                        ₹{remaining.toFixed(2)}
+                      </td>
                     </tr>
                   );
                 })}
@@ -251,6 +295,51 @@ const AdminPanel: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Payment History Modal */}
+      {selectedPatient && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg w-11/12 md:w-1/2 lg:w-1/3">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">
+                Payment History for {selectedPatient.name}
+              </h2>
+              <button
+                onClick={() => setSelectedPatient(null)}
+                className="text-red-600 font-bold"
+              >
+                Close
+              </button>
+            </div>
+            {selectedPatient.paymentHistory && selectedPatient.paymentHistory.length > 0 ? (
+              <table className="min-w-full">
+                <thead>
+                  <tr>
+                    <th className="px-4 py-2 text-left">Time</th>
+                    <th className="px-4 py-2 text-left">Payment Method</th>
+                    <th className="px-4 py-2 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedPatient.paymentHistory.map((payment, idx) => (
+                    <tr key={idx}>
+                      <td className="border px-4 py-2">
+                        {new Date(payment.time).toLocaleString()}
+                      </td>
+                      <td className="border px-4 py-2">{payment.paymentMode}</td>
+                      <td className="border px-4 py-2 text-right">
+                        ₹{payment.amount.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="text-gray-600">No payment history available.</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,0 +1,10 @@
+Single testName: "COMPLETE BLOOD COUNT(CBC )".
+parameters array: One entry per distinct parameter name from your spreadsheet (MPV, Hemoglobin, RBC Count, etc.).
+genderSpecific:
+Set to false if you have separate lines for male/female in the data. (All of your parameters had at least two lines—one for male, one for female—so they’re all false.)
+agegroup:
+Set to false because your data shows multiple age brackets (e.g. newborn, 1-2000 , 2000-12000 , etc.). this is in day formate
+customAgeRanges:
+Each entry merges columns:
+"rangeKey": A textual representation of [startAge]-[endAge]_male or _female. For instance, 0-30_male to represent “0–30, male.”
+"rangeValue": The numeric range from column 10 (e.g. "5.0-7.0").

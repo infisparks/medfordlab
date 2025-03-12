@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
-import Sidebar from "../components/Sidebar";
 import { database } from "../firebase";
 import { ref, onValue, update } from "firebase/database";
 import {
@@ -14,7 +13,6 @@ import {
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 import Image from "next/image";
-// import Banner from "./../../public/banner.jpeg";
 
 interface BloodTest {
   testId: string;
@@ -39,7 +37,6 @@ interface Patient {
 }
 
 export default function Dashboard() {
-  const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [metrics, setMetrics] = useState({
     totalTests: 0,
@@ -93,7 +90,6 @@ export default function Dashboard() {
         const patientList: Patient[] = Object.keys(data).map((key) => ({
           id: key,
           ...data[key],
-          // Make sure these fields are numeric/boolean as needed
           age: Number(data[key].age),
           report: Boolean(data[key].report),
         }));
@@ -144,7 +140,7 @@ export default function Dashboard() {
       const newRemaining = testTotal - discountValue - updatedAmount;
       const patientRef = ref(database, `patients/${selectedPatient.id}`);
       const epsilon = 1;
-      const isComplete = newRemaining <= epsilon; // boolean
+      const isComplete = newRemaining <= epsilon;
 
       // Update in Firebase: update amountPaid, report status and add paymentHistory entry
       await update(patientRef, {
@@ -154,7 +150,7 @@ export default function Dashboard() {
           ...(selectedPatient.paymentHistory || []),
           {
             amount: newAmountPaid,
-            paymentMode: paymentMode, // use selected payment mode
+            paymentMode: paymentMode,
             time: new Date().toISOString(),
           },
         ],
@@ -171,31 +167,10 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen flex bg-gray-50">
-      {/* Sidebar */}
-      <Sidebar open={sidebarOpen} />
-
+    <div className="min-h-screen bg-gray-50">
       {/* Main Content */}
-      <div className="flex-1 flex flex-col ml-0 md:ml-64">
+      <div className="flex flex-col">
         <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-gray-600 hover:text-gray-800 md:hidden"
-          >
-            <svg
-              className="h-6 w-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16"
-              />
-            </svg>
-          </button>
           <div className="flex items-center space-x-4">
             <div className="text-right">
               <p className="text-sm font-medium text-gray-600">
@@ -213,7 +188,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 md:p-6">
+        <main className="p-4 md:p-6">
           {/* Filter Section */}
           <div className="mb-4 flex flex-col md:flex-row gap-4">
             <input
@@ -477,7 +452,6 @@ export default function Dashboard() {
                   required
                 />
               </div>
-              {/* Payment Mode Selector */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700">
                   Payment Mode
