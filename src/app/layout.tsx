@@ -16,7 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <Sidebar open={true} role={"staff"} />
+        <Sidebar open={true} role={"admin"} />
         <main className="ml-64 p-4">
           {/* AuthProvider is a Client Component, so it can wrap the children */}
           <AuthProvider>{children}</AuthProvider>
