@@ -14,6 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [role, setRole] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  
   useEffect(() => {
     // Listen for Firebase Auth state changes.
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
