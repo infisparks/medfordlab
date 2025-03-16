@@ -144,7 +144,7 @@ export default function Dashboard() {
           matchesStatus = hasSampleCollected && !hasBloodtest;
           break;
         case "completed":
-          matchesStatus = hasBloodtest;
+          matchesStatus = hasBloodtest ?? false;
           break;
         case "all":
         default:
