@@ -20,7 +20,6 @@ interface BloodTest {
   price: number;
 }
 
-// Make `report` a definite boolean (not optional):
 interface Patient {
   id: string;
   name: string;
@@ -32,7 +31,10 @@ interface Patient {
   amountPaid: number;
   bloodTests?: BloodTest[];
   bloodtest?: Record<string, any>;
+  /** Flag that indicates if the final report is ready. */
   report: boolean;
+  /** If sample is collected, the timestamp goes here; otherwise undefined/null => not collected. */
+  sampleCollectedAt?: string;
   paymentHistory?: { amount: number; paymentMode: string; time: string }[];
 }
 
@@ -48,30 +50,15 @@ export default function Dashboard() {
   const [paymentMode, setPaymentMode] = useState<string>("online");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState<string>("");
+  /** 
+   *  statusFilter has 4 options: 
+   *  "all", "notCollected", "sampleCollected", "completed" 
+   */
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  const filteredPatients = useMemo(() => {
-    return patients.filter((patient) => {
-      const matchesSearch = patient.name
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase());
-      const matchesDate = selectedDate
-        ? patient.createdAt.startsWith(selectedDate)
-        : true;
-      let matchesStatus = true;
-      if (statusFilter === "completed") {
-        matchesStatus = Boolean(
-          patient.bloodtest && Object.keys(patient.bloodtest).length > 0
-        );
-      } else if (statusFilter === "pending") {
-        matchesStatus = !(
-          patient.bloodtest && Object.keys(patient.bloodtest).length > 0
-        );
-      }
-      return matchesSearch && matchesDate && matchesStatus;
-    });
-  }, [patients, searchTerm, selectedDate, statusFilter]);
-
+  // -----------------------------
+  // Helper: Calculate amounts
+  // -----------------------------
   const calculateAmounts = (patient: Patient) => {
     const testTotal =
       patient.bloodTests?.reduce((acc, bt) => acc + bt.price, 0) || 0;
@@ -80,6 +67,9 @@ export default function Dashboard() {
     return { testTotal, discountValue, remaining };
   };
 
+  // -----------------------------
+  // Fetch patients from Firebase
+  // -----------------------------
   useEffect(() => {
     const patientsRef = ref(database, "patients");
     const unsubscribe = onValue(patientsRef, (snapshot) => {
@@ -96,17 +86,14 @@ export default function Dashboard() {
 
         // Sort so that completed patients appear first, then by date descending
         const sortedPatients = patientList.sort((a, b) => {
-          const aComplete =
-            a.bloodtest && Object.keys(a.bloodtest).length > 0;
-          const bComplete =
-            b.bloodtest && Object.keys(b.bloodtest).length > 0;
+          const aComplete = a.bloodtest && Object.keys(a.bloodtest).length > 0;
+          const bComplete = b.bloodtest && Object.keys(b.bloodtest).length > 0;
 
           if (aComplete && !bComplete) return -1;
           if (!aComplete && bComplete) return 1;
 
           return (
-            new Date(b.createdAt).getTime() -
-            new Date(a.createdAt).getTime()
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
         });
 
@@ -121,7 +108,7 @@ export default function Dashboard() {
         const pending = total - completed;
         setMetrics({
           totalTests: total,
-          pendingReports: pending,
+          pendingReports: pending, // older logic for "pending"
           completedTests: completed,
         });
       }
@@ -130,6 +117,64 @@ export default function Dashboard() {
     return () => unsubscribe();
   }, []);
 
+  // -----------------------------
+  // Filter logic
+  // -----------------------------
+  const filteredPatients = useMemo(() => {
+    return patients.filter((patient) => {
+      const matchesSearch = patient.name
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase());
+
+      const matchesDate = selectedDate
+        ? patient.createdAt.startsWith(selectedDate)
+        : true;
+
+      // Determine the status of the patient
+      const hasBloodtest =
+        patient.bloodtest && Object.keys(patient.bloodtest).length > 0;
+      const hasSampleCollected = !!patient.sampleCollectedAt;
+
+      let matchesStatus = true;
+      switch (statusFilter) {
+        case "notCollected":
+          matchesStatus = !hasSampleCollected;
+          break;
+        case "sampleCollected":
+          matchesStatus = hasSampleCollected && !hasBloodtest;
+          break;
+        case "completed":
+          matchesStatus = hasBloodtest;
+          break;
+        case "all":
+        default:
+          matchesStatus = true;
+          break;
+      }
+
+      return matchesSearch && matchesDate && matchesStatus;
+    });
+  }, [patients, searchTerm, selectedDate, statusFilter]);
+
+  // -----------------------------
+  // "Collect Sample" action
+  // -----------------------------
+  const handleCollectSample = async (patient: Patient) => {
+    try {
+      const patientRef = ref(database, `patients/${patient.id}`);
+      await update(patientRef, {
+        sampleCollectedAt: new Date().toISOString(),
+      });
+      alert(`Sample collected for ${patient.name}!`);
+    } catch (error) {
+      console.error("Error collecting sample:", error);
+      alert("Error collecting sample. Please try again.");
+    }
+  };
+
+  // -----------------------------
+  // "Update Payment" action
+  // -----------------------------
   const handleUpdateAmount = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPatient) return;
@@ -142,7 +187,7 @@ export default function Dashboard() {
       const epsilon = 1;
       const isComplete = newRemaining <= epsilon;
 
-      // Update in Firebase: update amountPaid, report status and add paymentHistory entry
+      // Update in Firebase: amountPaid, report status, paymentHistory
       await update(patientRef, {
         amountPaid: updatedAmount,
         report: isComplete,
@@ -168,136 +213,144 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
+        <div className="flex items-center space-x-4">
+          <div className="text-right">
+            <p className="text-sm font-medium text-gray-600">Dr. mudassir</p>
+            <p className="text-xs text-gray-400">Pathologist</p>
+          </div>
+          <Image
+            src="/doctor-avatar.png"
+            alt="Profile"
+            width={40}
+            height={40}
+            className="h-10 w-10 rounded-full border-2 border-blue-100"
+          />
+        </div>
+      </header>
+
       {/* Main Content */}
-      <div className="flex flex-col">
-        <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
-          <div className="flex items-center space-x-4">
-            <div className="text-right">
-              <p className="text-sm font-medium text-gray-600">
-                Dr.mudassir
-              </p>
-              <p className="text-xs text-gray-400">Pathologist</p>
-            </div>
-            <Image
-              src="/doctor-avatar.png"
-              alt="Profile"
-              width={40}
-              height={40}
-              className="h-10 w-10 rounded-full border-2 border-blue-100"
-            />
-          </div>
-        </header>
+      <main className="p-4 md:p-6">
+        {/* Filter Section */}
+        <div className="mb-4 flex flex-col md:flex-row gap-4">
+          <input
+            type="text"
+            placeholder="Search patients..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="p-2 border rounded-md"
+          />
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="p-2 border rounded-md"
+          />
+          {/* Status Filter */}
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="p-2 border rounded-md"
+          >
+            <option value="all">All</option>
+            <option value="notCollected">Not Collected</option>
+            <option value="sampleCollected">Sample Collected</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
 
-        <main className="p-4 md:p-6">
-          {/* Filter Section */}
-          <div className="mb-4 flex flex-col md:flex-row gap-4">
-            <input
-              type="text"
-              placeholder="Search patients..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="p-2 border rounded-md"
-            />
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="p-2 border rounded-md"
-            />
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="p-2 border rounded-md"
-            >
-              <option value="all">All</option>
-              <option value="pending">Pending</option>
-              <option value="completed">Completed</option>
-            </select>
-          </div>
-
-          {/* Metrics Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-              <div className="flex items-center space-x-4">
-                <div className="p-3 bg-blue-50 rounded-lg">
-                  <ChartBarIcon className="h-6 w-6 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500 mb-1">Total Tests</p>
-                  <p className="text-2xl font-semibold">
-                    {metrics.totalTests}
-                  </p>
-                </div>
+        {/* Metrics Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <div className="flex items-center space-x-4">
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <ChartBarIcon className="h-6 w-6 text-blue-600" />
               </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-              <div className="flex items-center space-x-4">
-                <div className="p-3 bg-yellow-50 rounded-lg">
-                  <ClockIcon className="h-6 w-6 text-yellow-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500 mb-1">
-                    Pending Reports
-                  </p>
-                  <p className="text-2xl font-semibold">
-                    {metrics.pendingReports}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-              <div className="flex items-center space-x-4">
-                <div className="p-3 bg-green-50 rounded-lg">
-                  <UserGroupIcon className="h-6 w-6 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500 mb-1">
-                    Completed Tests
-                  </p>
-                  <p className="text-2xl font-semibold">
-                    {metrics.completedTests}
-                  </p>
-                </div>
+              <div>
+                <p className="text-sm text-gray-500 mb-1">Total Tests</p>
+                <p className="text-2xl font-semibold">{metrics.totalTests}</p>
               </div>
             </div>
           </div>
 
-          {/* Recent Patients */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-            <div className="p-6 border-b border-gray-100">
-              <h2 className="text-lg font-semibold flex items-center">
-                <UserIcon className="h-5 w-5 mr-2 text-gray-600" />
-                Recent Patients
-              </h2>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <div className="flex items-center space-x-4">
+              <div className="p-3 bg-yellow-50 rounded-lg">
+                <ClockIcon className="h-6 w-6 text-yellow-600" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 mb-1">Pending Reports</p>
+                <p className="text-2xl font-semibold">
+                  {metrics.pendingReports}
+                </p>
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                      Patient
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                      Tests
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                      Entry Date
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                      Remaining
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredPatients.map((patient) => (
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <div className="flex items-center space-x-4">
+              <div className="p-3 bg-green-50 rounded-lg">
+                <UserGroupIcon className="h-6 w-6 text-green-600" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 mb-1">Completed Tests</p>
+                <p className="text-2xl font-semibold">
+                  {metrics.completedTests}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Patients */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+          <div className="p-6 border-b border-gray-100">
+            <h2 className="text-lg font-semibold flex items-center">
+              <UserIcon className="h-5 w-5 mr-2 text-gray-600" />
+              Recent Patients
+            </h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                    Patient
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                    Tests
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                    Entry Date
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                    Remaining
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredPatients.map((patient) => {
+                  const hasBloodtest =
+                    patient.bloodtest &&
+                    Object.keys(patient.bloodtest).length > 0;
+                  const hasSampleCollected = !!patient.sampleCollectedAt;
+                  let statusLabel = "Not Collected";
+                  if (hasSampleCollected && !hasBloodtest) {
+                    statusLabel = "Sample Collected";
+                  } else if (hasBloodtest) {
+                    statusLabel = "Completed";
+                  }
+
+                  const { remaining } = calculateAmounts(patient);
+
+                  return (
                     <tr key={patient.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4">
                         <div>
@@ -322,28 +375,35 @@ export default function Dashboard() {
                         {new Date(patient.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4">
-                        {patient.bloodtest &&
-                        Object.keys(patient.bloodtest).length > 0 ? (
+                        {statusLabel === "Not Collected" && (
+                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">
+                            Not Collected
+                          </span>
+                        )}
+                        {statusLabel === "Sample Collected" && (
+                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
+                            Sample Collected
+                          </span>
+                        )}
+                        {statusLabel === "Completed" && (
                           <span className="px-3 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">
                             Completed
-                          </span>
-                        ) : (
-                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800">
-                            Pending Report
                           </span>
                         )}
                       </td>
                       <td className="px-6 py-4 text-sm">
-                        {(() => {
-                          const { remaining } = calculateAmounts(patient);
-                          return remaining > 0
-                            ? `₹${remaining.toFixed(2)}`
-                            : "0";
-                        })()}
+                        {remaining > 0 ? `₹${remaining.toFixed(2)}` : "0"}
                       </td>
                       <td className="px-6 py-4 space-x-2">
-                        {patient.bloodtest &&
-                        Object.keys(patient.bloodtest).length > 0 ? (
+                        {/* Action buttons based on sampleCollectedAt & bloodtest */}
+                        {!hasSampleCollected ? (
+                          <button
+                            onClick={() => handleCollectSample(patient)}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 transition-colors"
+                          >
+                            Collect Sample
+                          </button>
+                        ) : hasBloodtest ? (
                           <>
                             <Link
                               href={`/download-report?patientId=${patient.id}`}
@@ -368,6 +428,7 @@ export default function Dashboard() {
                             Add Value
                           </Link>
                         )}
+                        {/* Update Amount button */}
                         <button
                           onClick={() => {
                             setSelectedPatient(patient);
@@ -377,20 +438,27 @@ export default function Dashboard() {
                         >
                           Update Amount
                         </button>
+                        {/* New "Edit Details" button */}
+                        <Link
+                          href={`/patient-detail?patientId=${patient.id}`}
+                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 transition-colors"
+                        >
+                          Edit Details
+                        </Link>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              {filteredPatients.length === 0 && (
-                <div className="p-6 text-center text-gray-500">
-                  No recent patients found
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
+            {filteredPatients.length === 0 && (
+              <div className="p-6 text-center text-gray-500">
+                No recent patients found
+              </div>
+            )}
           </div>
-        </main>
-      </div>
+        </div>
+      </main>
 
       {/* Modal for Payment Update */}
       {selectedPatient && (

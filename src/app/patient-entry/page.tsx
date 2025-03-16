@@ -1,22 +1,32 @@
 "use client";
 
-import React from "react";
-import { useForm, useFieldArray, SubmitHandler } from "react-hook-form";
-import { database, auth } from "../../firebase";
+import React, { useState, useEffect, useMemo } from "react";
+import { useForm, useFieldArray,   SubmitHandler } from "react-hook-form";
+import { database, auth, medfordFamilyDatabase } from "../../firebase";
 import { ref, push, set, get } from "firebase/database";
 import { UserCircleIcon, PhoneIcon } from "@heroicons/react/24/outline";
+
+// -------------------------
+// Interfaces
+// -------------------------
+interface Parameter {
+  name: string;
+  unit: string;
+  // any other fields if needed
+}
 
 interface BloodTestSelection {
   testId: string;
   testName: string;
   price: number;
+  selectedParameters?: string[];
 }
 
 interface IFormInput {
   name: string;
   contact: string; // 10-digit
   age: number;
-  dayType: "year" | "month" | "day"; // New field for age unit
+  dayType: "year" | "month" | "day"; // the age unit
   gender: string;
   address?: string;
   email?: string;
@@ -26,6 +36,7 @@ interface IFormInput {
   discountPercentage: number;
   amountPaid: number;
   paymentMode: "online" | "cash";
+  patientId?: string;
 }
 
 interface PackageType {
@@ -35,33 +46,119 @@ interface PackageType {
   discountPercentage: number;
 }
 
-const PatientEntryPage: React.FC = () => {
-  // 1) Keep track of the logged-in user
-  const [currentUser, setCurrentUser] = React.useState(auth.currentUser);
+interface FamilyPatient {
+  id: string;
+  name: string;
+  contact: string;
+  patientId: string;
+}
 
-  // 2) Listen for auth changes
-  React.useEffect(() => {
+// -------------------------
+// Parameter Selection Modal
+// -------------------------
+interface ParameterSelectionModalProps {
+  show: boolean;
+  availableParameters: Parameter[];
+  initialSelection: string[];
+  onSave: (selected: string[]) => void;
+  onClose: () => void;
+}
+
+const ParameterSelectionModal: React.FC<ParameterSelectionModalProps> = ({
+  show,
+  availableParameters,
+  initialSelection,
+  onSave,
+  onClose,
+}) => {
+  const [selected, setSelected] = useState<string[]>(initialSelection);
+
+  useEffect(() => {
+    setSelected(initialSelection);
+  }, [initialSelection]);
+
+  const toggleSelection = (paramName: string) => {
+    if (selected.includes(paramName)) {
+      setSelected(selected.filter((name) => name !== paramName));
+    } else {
+      setSelected([...selected, paramName]);
+    }
+  };
+
+  if (!show) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black opacity-50"
+        onClick={onClose}
+      />
+      <div className="bg-white rounded-lg p-6 z-10 w-full max-w-sm mx-4">
+        <h3 className="text-lg font-semibold mb-4 text-gray-800">
+          Select Specific Parameters
+        </h3>
+        <div className="max-h-60 overflow-y-auto mb-4 space-y-2">
+          {availableParameters.map((param, index) => (
+            <div key={index} className="flex items-center">
+              <input
+                type="checkbox"
+                checked={selected.includes(param.name)}
+                onChange={() => toggleSelection(param.name)}
+                className="mr-2"
+              />
+              <label className="text-gray-700">{param.name}</label>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end space-x-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 border rounded text-gray-600 hover:bg-gray-100"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSave(selected)}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// -------------------------
+// Main Patient Entry Page
+// -------------------------
+const PatientEntryPage: React.FC = () => {
+  // 1) Auth State
+  const [currentUser, setCurrentUser] = useState(auth.currentUser);
+
+  useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       setCurrentUser(user);
     });
     return () => unsubscribe();
   }, []);
 
-  // 3) Define form-related hooks
+  // 2) Form Setup
   const {
     register,
     handleSubmit,
-    watch,
-    setValue,
     control,
     formState: { errors, isSubmitting },
+    watch,
+    setValue,
     reset,
   } = useForm<IFormInput>({
     defaultValues: {
       name: "",
       contact: "",
       age: 0,
-      dayType: "year", // Default age unit
+      dayType: "year",
       gender: "",
       address: "",
       email: "",
@@ -71,20 +168,24 @@ const PatientEntryPage: React.FC = () => {
       discountPercentage: 0,
       amountPaid: 0,
       paymentMode: "online",
+      patientId: "",
     },
   });
 
-  // 4) Other states/hooks
-  const [doctorList, setDoctorList] = React.useState<
-    { id: string; doctorName: string }[]
+  // 3) Data & States
+  const [doctorList, setDoctorList] = useState<{ id: string; doctorName: string }[]>([]);
+  const [availableBloodTests, setAvailableBloodTests] = useState<
+    { id: string; testName: string; price: number; parameters?: Parameter[] }[]
   >([]);
-  const [availableBloodTests, setAvailableBloodTests] = React.useState<
-    { id: string; testName: string; price: number }[]
-  >([]);
-  const [availablePackages, setAvailablePackages] = React.useState<PackageType[]>([]);
+  const [availablePackages, setAvailablePackages] = useState<PackageType[]>([]);
+  const [familyPatients, setFamilyPatients] = useState<FamilyPatient[]>([]);
 
-  // 5) Data-fetching useEffects
-  React.useEffect(() => {
+  // Suggestions toggle
+  const [showPatientSuggestions, setShowPatientSuggestions] = useState(true);
+  const [showDoctorSuggestions, setShowDoctorSuggestions] = useState(true);
+
+  // 4) Fetch Doctors
+  useEffect(() => {
     const fetchDoctorList = async () => {
       try {
         const doctorRef = ref(database, "doctor");
@@ -104,7 +205,8 @@ const PatientEntryPage: React.FC = () => {
     fetchDoctorList();
   }, []);
 
-  React.useEffect(() => {
+  // 5) Fetch Blood Tests with parameters
+  useEffect(() => {
     const fetchBloodTests = async () => {
       try {
         const testsRef = ref(database, "bloodTests");
@@ -115,6 +217,7 @@ const PatientEntryPage: React.FC = () => {
             id: key,
             testName: data[key].testName,
             price: Number(data[key].price),
+            parameters: data[key].parameters || [],
           }));
           setAvailableBloodTests(testsArray);
         }
@@ -125,7 +228,8 @@ const PatientEntryPage: React.FC = () => {
     fetchBloodTests();
   }, []);
 
-  React.useEffect(() => {
+  // 6) Fetch Packages
+  useEffect(() => {
     const fetchPackages = async () => {
       try {
         const packagesRef = ref(database, "packages");
@@ -147,34 +251,62 @@ const PatientEntryPage: React.FC = () => {
     fetchPackages();
   }, []);
 
-  // 6) Watch fields for dynamic calculations and doctor referral suggestions
+  // 7) Fetch Family Patients
+  useEffect(() => {
+    const fetchFamilyPatients = async () => {
+      try {
+        const familyPatientsRef = ref(medfordFamilyDatabase, "patients");
+        const snapshot = await get(familyPatientsRef);
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const patientsArray: FamilyPatient[] = Object.keys(data).map((key) => ({
+            id: key,
+            name: data[key].name,
+            contact: data[key].contact,
+            patientId: data[key].patientId,
+          }));
+          setFamilyPatients(patientsArray);
+        }
+      } catch (error) {
+        console.error("Error fetching family patients:", error);
+      }
+    };
+    fetchFamilyPatients();
+  }, []);
+
+  // 8) Filtered Suggestions
   const watchDoctorName = watch("doctorName") ?? "";
-  const filteredDoctorSuggestions = React.useMemo(() => {
+  const filteredDoctorSuggestions = useMemo(() => {
     if (!watchDoctorName.trim()) return [];
     return doctorList.filter((doctor) =>
       doctor.doctorName.toLowerCase().startsWith(watchDoctorName.toLowerCase())
     );
   }, [watchDoctorName, doctorList]);
 
-  // 7) Setup Field Array for blood tests
+  const watchPatientName = watch("name") ?? "";
+  const filteredPatientSuggestions = useMemo(() => {
+    if (!watchPatientName.trim()) return [];
+    return familyPatients.filter((patient) =>
+      patient.name.toLowerCase().startsWith(watchPatientName.toLowerCase())
+    );
+  }, [watchPatientName, familyPatients]);
+
+  // 9) Field Array for Blood Tests
   const { fields: bloodTestFields, append, remove } = useFieldArray({
     control,
     name: "bloodTests",
   });
 
-  // 8) Payment calculations (unchanged)
+  // 10) Payment Calculations
   const bloodTests = watch("bloodTests");
   const discountPercentage = watch("discountPercentage");
   const amountPaid = watch("amountPaid");
 
-  const totalAmount = bloodTests.reduce(
-    (sum, test) => sum + Number(test.price || 0),
-    0
-  );
+  const totalAmount = bloodTests.reduce((sum, test) => sum + Number(test.price || 0), 0);
   const discountValue = totalAmount * (Number(discountPercentage) / 100);
   const remainingAmount = totalAmount - discountValue - Number(amountPaid);
 
-  // 9) Helper: Generate an 8-digit alphanumeric patient ID
+  // 11) Generate Patient ID
   const generatePatientId = (length: number = 8): string => {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let result = "";
@@ -184,39 +316,66 @@ const PatientEntryPage: React.FC = () => {
     return result;
   };
 
-  // 10) onSubmit logic – compute total days based on age unit and save patient record
+  // 12) Parameter Modal state
+  const [modalVisible, setModalVisible] = useState(false);
+  const [currentTestIndex, setCurrentTestIndex] = useState<number | null>(null);
+
+  const openParameterModal = (index: number) => {
+    setCurrentTestIndex(index);
+    setModalVisible(true);
+  };
+
+  const handleModalSave = (selected: string[]) => {
+    if (currentTestIndex !== null) {
+      setValue(`bloodTests.${currentTestIndex}.selectedParameters`, selected);
+    }
+    setModalVisible(false);
+    setCurrentTestIndex(null);
+  };
+
+  const getTestParameters = (testId: string): Parameter[] => {
+    const test = availableBloodTests.find((t) => t.id === testId);
+    if (test?.parameters) {
+      return test.parameters;
+    }
+    return [];
+  };
+
+  // 13) onSubmit
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     try {
       const userEmail = currentUser?.email || "Unknown User";
-      // Generate an 8-character alphanumeric patientId
-      const patientId = generatePatientId();
+      let patientId = data.patientId;
+      if (!patientId || patientId.trim() === "") {
+        patientId = generatePatientId();
+        data.patientId = patientId;
+      }
 
-      // Calculate total days based on age unit selected
-      const multiplier =
-        data.dayType === "year"
-          ? 360
-          : data.dayType === "month"
-          ? 30
-          : 1;
+      const multiplier = data.dayType === "year" ? 360 : data.dayType === "month" ? 30 : 1;
       const total_day = data.age * multiplier;
 
+      // Insert new patient record
       const patientsRef = ref(database, "patients");
       const newPatientRef = push(patientsRef);
       await set(newPatientRef, {
         ...data,
-        patientId, // Generated patient id
-        total_day, // Computed total days
+        patientId,
+        total_day,
         enteredBy: userEmail,
         createdAt: new Date().toISOString(),
+      });
+
+      // Insert minimal info to family database
+      await set(ref(medfordFamilyDatabase, "patients/" + patientId), {
+        name: data.name,
+        contact: data.contact,
+        patientId: patientId,
       });
 
       // Construct WhatsApp message
       const testNames = data.bloodTests.map((test) => test.testName).join(", ");
       const discountLine =
-        data.discountPercentage > 0
-          ? `Discount: ${data.discountPercentage}%\n`
-          : "";
-
+        data.discountPercentage > 0 ? `Discount: ${data.discountPercentage}%\n` : "";
       const message = `Dear ${data.name},\n
 Thank you for choosing our services. We have received your request for the following test(s): ${testNames}.\n
 Total Amount: Rs. ${totalAmount.toFixed(2)}
@@ -230,8 +389,8 @@ MedBliss`;
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          token: "99583991572", // Fixed token
-          number: `91${data.contact}`, // Prefix '91'
+          token: "99583991572",
+          number: `91${data.contact}`,
           message,
         }),
       });
@@ -244,406 +403,496 @@ MedBliss`;
     }
   };
 
+  // If user not logged in
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="bg-white p-8 rounded shadow-md max-w-md w-full">
+          <p className="text-center text-gray-700">
+            Please log in to access this page.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // 14) Render
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      {!currentUser ? (
-        <div>Please log in to access this page.</div>
-      ) : (
-        <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-lg">
-          <div className="p-8">
-            <div className="flex items-center mb-8">
-              <UserCircleIcon className="h-8 w-8 text-blue-600 mr-3" />
-              <h2 className="text-2xl font-bold text-gray-800">Patient Entry</h2>
-            </div>
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
+      <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-lg">
+        <div className="p-6 sm:p-8">
+          <div className="flex items-center mb-6">
+            <UserCircleIcon className="h-8 w-8 text-blue-600 mr-3" />
+            <h2 className="text-2xl font-bold text-gray-800">Patient Entry</h2>
+          </div>
 
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-              {/* Patient Information */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-700">Patient Information</h3>
-                {/* Name */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Full Name
-                  </label>
-                  <div className="relative">
-                    <input
-                      {...register("name", { required: "Name is required" })}
-                      className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="John Doe"
-                    />
-                    <UserCircleIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
-                  </div>
-                  {errors.name && (
-                    <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>
-                  )}
-                </div>
-
-                {/* Contact Number */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Contact Number
-                  </label>
-                  <div className="relative">
-                    <input
-                      {...register("contact", {
-                        required: "Phone number is required",
-                        pattern: {
-                          value: /^[0-9]{10}$/,
-                          message: "Phone number must be 10 digits",
-                        },
-                      })}
-                      className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter 10-digit mobile number"
-                    />
-                    <PhoneIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
-                  </div>
-                  {errors.contact && (
-                    <p className="text-red-500 text-sm mt-1">{errors.contact.message}</p>
-                  )}
-                </div>
-
-                {/* Age, Age Unit & Gender */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      Age
-                    </label>
-                    <input
-                      type="number"
-                      {...register("age", {
-                        required: "Age is required",
-                        min: { value: 1, message: "Age must be positive" },
-                      })}
-                      className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    />
-                    {errors.age && (
-                      <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      Age Unit
-                    </label>
-                    <select
-                      {...register("dayType", { required: "Select age unit" })}
-                      className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="year">Year</option>
-                      <option value="month">Month</option>
-                      <option value="day">Day</option>
-                    </select>
-                    {errors.dayType && (
-                      <p className="text-red-500 text-sm mt-1">{errors.dayType.message}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      Gender
-                    </label>
-                    <select
-                      {...register("gender", { required: "Gender is required" })}
-                      className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">Select</option>
-                      <option value="Male">Male</option>
-                      <option value="Female">Female</option>
-                      <option value="Other">Other</option>
-                    </select>
-                    {errors.gender && (
-                      <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Additional Information */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-gray-700">
-                  Additional Information (Optional)
-                </h3>
-                <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Address
-                  </label>
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+            {/* Patient Info */}
+            <div className="space-y-4 relative">
+              <h3 className="text-lg font-semibold text-gray-700">
+                Patient Information
+              </h3>
+              {/* Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Full Name
+                </label>
+                <div className="relative">
                   <input
-                    {...register("address")}
-                    className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="123 Main St, City, Country"
+                    {...register("name", {
+                      required: "Name is required",
+                      onChange: () => setShowPatientSuggestions(true),
+                    })}
+                    className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                    placeholder="John Doe"
                   />
+                  <UserCircleIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    {...register("email")}
-                    className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="example@example.com"
-                  />
-                </div>
-              </div>
-
-              {/* Doctor Referral */}
-              <div className="space-y-4 relative">
-                <h3 className="text-lg font-semibold text-gray-700">Doctor Referral</h3>
-                <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Doctor Name
-                  </label>
-                  <input
-                    {...register("doctorName")}
-                    className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="Type doctor's name..."
-                  />
-                </div>
-                {filteredDoctorSuggestions.length > 0 && (
+                {errors.name && (
+                  <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>
+                )}
+                {showPatientSuggestions && filteredPatientSuggestions.length > 0 && (
                   <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-1 rounded-md max-h-40 overflow-y-auto">
-                    {filteredDoctorSuggestions.map((doctor, index) => (
+                    {filteredPatientSuggestions.map((patient) => (
                       <li
-                        key={index}
+                        key={patient.patientId}
                         className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
                         onClick={() => {
-                          setValue("doctorName", doctor.doctorName);
-                          setValue("doctorId", doctor.id);
+                          setValue("name", patient.name);
+                          setValue("contact", patient.contact);
+                          setValue("patientId", patient.patientId);
+                          setShowPatientSuggestions(false);
                         }}
                       >
-                        {doctor.doctorName}
+                        {patient.name} – {patient.patientId}
                       </li>
                     ))}
                   </ul>
                 )}
               </div>
 
-              {/* Package & Blood Test & Payment */}
-              <div className="space-y-4 border-t pt-6">
-                <h3 className="text-lg font-semibold text-gray-700">
-                  Package / Blood Test Selection & Payment Details
-                </h3>
+              {/* Contact */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Contact Number
+                </label>
+                <div className="relative">
+                  <input
+                    {...register("contact", {
+                      required: "Phone number is required",
+                      pattern: {
+                        value: /^[0-9]{10}$/,
+                        message: "Phone number must be 10 digits",
+                      },
+                    })}
+                    className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter 10-digit mobile number"
+                  />
+                  <PhoneIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
+                </div>
+                {errors.contact && (
+                  <p className="text-red-500 text-sm mt-1">{errors.contact.message}</p>
+                )}
+              </div>
 
-                {/* Package Selection */}
+              {/* Age, Age Unit, Gender */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Select Package (Optional)
+                    Age
+                  </label>
+                  <input
+                    type="number"
+                    {...register("age", {
+                      required: "Age is required",
+                      min: { value: 1, message: "Age must be positive" },
+                    })}
+                    className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                  {errors.age && (
+                    <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    Age Unit
                   </label>
                   <select
-                    onChange={(e) => {
-                      const selectedPackageId = e.target.value;
-                      if (!selectedPackageId) return;
-                      const selectedPackage = availablePackages.find(
-                        (pkg) => pkg.id === selectedPackageId
-                      );
-                      if (selectedPackage) {
-                        // Auto-fill tests and package discount
-                        setValue("bloodTests", selectedPackage.tests);
-                        setValue("discountPercentage", selectedPackage.discountPercentage);
-                      }
-                    }}
-                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                    {...register("dayType", { required: "Select age unit" })}
+                    className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="">No Package Selected</option>
-                    {availablePackages.map((pkg) => (
-                      <option key={pkg.id} value={pkg.id}>
-                        {pkg.packageName}
-                      </option>
-                    ))}
+                    <option value="year">Year</option>
+                    <option value="month">Month</option>
+                    <option value="day">Day</option>
                   </select>
+                  {errors.dayType && (
+                    <p className="text-red-500 text-sm mt-1">{errors.dayType.message}</p>
+                  )}
                 </div>
-
-                {/* Blood Test Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Select Blood Tests
+                    Gender
                   </label>
-                  <div className="space-y-4">
-                    {bloodTestFields.map((field, index) => (
+                  <select
+                    {...register("gender", { required: "Gender is required" })}
+                    className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
+                  {errors.gender && (
+                    <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Additional Info */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-gray-700">
+                Additional Information (Optional)
+              </h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Address
+                </label>
+                <input
+                  {...register("address")}
+                  className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="123 Main St, City, Country"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  {...register("email")}
+                  className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="example@example.com"
+                />
+              </div>
+            </div>
+
+            {/* Doctor Referral */}
+            <div className="space-y-4 relative">
+              <h3 className="text-lg font-semibold text-gray-700">Doctor Referral</h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Doctor Name
+                </label>
+                <input
+                  {...register("doctorName", {
+                    onChange: () => setShowDoctorSuggestions(true),
+                  })}
+                  className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="Type doctor's name..."
+                />
+              </div>
+              {showDoctorSuggestions && filteredDoctorSuggestions.length > 0 && (
+                <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-1 rounded-md max-h-40 overflow-y-auto">
+                  {filteredDoctorSuggestions.map((doctor, index) => (
+                    <li
+                      key={index}
+                      className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
+                      onClick={() => {
+                        setValue("doctorName", doctor.doctorName);
+                        setValue("doctorId", doctor.id);
+                        setShowDoctorSuggestions(false);
+                      }}
+                    >
+                      {doctor.doctorName}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* Package & Blood Test */}
+            <div className="space-y-4 border-t pt-6">
+              <h3 className="text-lg font-semibold text-gray-700">
+                Package / Blood Test Selection & Payment Details
+              </h3>
+
+              {/* Package Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Select Package (Optional)
+                </label>
+                <select
+                  onChange={(e) => {
+                    const selectedPackageId = e.target.value;
+                    if (!selectedPackageId) return;
+                    const selectedPackage = availablePackages.find(
+                      (pkg) => pkg.id === selectedPackageId
+                    );
+                    if (selectedPackage) {
+                      setValue("bloodTests", selectedPackage.tests);
+                      setValue("discountPercentage", selectedPackage.discountPercentage);
+                    }
+                  }}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">No Package Selected</option>
+                  {availablePackages.map((pkg) => (
+                    <option key={pkg.id} value={pkg.id}>
+                      {pkg.packageName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Blood Test Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Select Blood Tests
+                </label>
+                <div className="space-y-4">
+                  {bloodTestFields.map((field, index) => {
+                    const currentTestId = watch(`bloodTests.${index}.testId`);
+                    const selectedParams =
+                      watch(`bloodTests.${index}.selectedParameters`) || [];
+                    const testParams = getTestParameters(currentTestId);
+
+                    return (
                       <div
                         key={field.id}
-                        className="flex flex-col sm:flex-row sm:space-x-4 items-start sm:items-end border p-4 rounded-lg"
+                        className="border p-4 rounded-lg space-y-4"
                       >
-                        <div className="flex-1">
-                          <label className="block text-xs font-medium text-gray-500 mb-1">
-                            Test Name
-                          </label>
-                          <select
-                            {...register(`bloodTests.${index}.testId` as const, {
-                              required: "Blood test is required",
-                            })}
-                            onChange={(e) => {
-                              const selectedId = e.target.value;
-                              const selectedTest = availableBloodTests.find(
-                                (t) => t.id === selectedId
-                              );
-                              if (selectedTest) {
-                                setValue(
-                                  `bloodTests.${index}.testName`,
-                                  selectedTest.testName
+                        {/* Row 1: Test Name & Price */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">
+                              Test Name
+                            </label>
+                            <select
+                              {...register(`bloodTests.${index}.testId`, {
+                                required: "Blood test is required",
+                              })}
+                              onChange={(e) => {
+                                const selectedId = e.target.value;
+                                const selectedTest = availableBloodTests.find(
+                                  (t) => t.id === selectedId
                                 );
-                                setValue(
-                                  `bloodTests.${index}.price`,
-                                  selectedTest.price
-                                );
-                              } else {
-                                setValue(`bloodTests.${index}.testName`, "");
-                                setValue(`bloodTests.${index}.price`, 0);
-                              }
-                            }}
-                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">Select a test</option>
-                            {availableBloodTests.map((test) => (
-                              <option key={test.id} value={test.id}>
-                                {test.testName}
-                              </option>
-                            ))}
-                          </select>
-                          {errors.bloodTests?.[index]?.testId && (
-                            <p className="text-red-500 text-xs mt-1">
-                              {errors.bloodTests[index]?.testId?.message}
-                            </p>
-                          )}
+                                if (selectedTest) {
+                                  setValue(
+                                    `bloodTests.${index}.testName`,
+                                    selectedTest.testName
+                                  );
+                                  setValue(
+                                    `bloodTests.${index}.price`,
+                                    selectedTest.price
+                                  );
+                                  // reset any selectedParameters
+                                  setValue(
+                                    `bloodTests.${index}.selectedParameters`,
+                                    []
+                                  );
+                                } else {
+                                  setValue(`bloodTests.${index}.testName`, "");
+                                  setValue(`bloodTests.${index}.price`, 0);
+                                  setValue(`bloodTests.${index}.selectedParameters`, []);
+                                }
+                              }}
+                              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">Select a test</option>
+                              {availableBloodTests.map((test) => (
+                                <option key={test.id} value={test.id}>
+                                  {test.testName}
+                                </option>
+                              ))}
+                            </select>
+                            {errors.bloodTests?.[index]?.testId && (
+                              <p className="text-red-500 text-xs mt-1">
+                                {errors.bloodTests[index]?.testId?.message}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">
+                              Price (Rs.)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              {...register(`bloodTests.${index}.price`, {
+                                required: "Price is required",
+                                valueAsNumber: true,
+                              })}
+                              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                              placeholder="Auto-filled"
+                              readOnly
+                            />
+                            {errors.bloodTests?.[index]?.price && (
+                              <p className="text-red-500 text-xs mt-1">
+                                {errors.bloodTests[index]?.price?.message}
+                              </p>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex-1 mt-4 sm:mt-0">
-                          <label className="block text-xs font-medium text-gray-500 mb-1">
-                            Price (Rs.)
-                          </label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            {...register(`bloodTests.${index}.price` as const, {
-                              required: "Price is required",
-                              valueAsNumber: true,
-                            })}
-                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            placeholder="Auto-filled"
-                            readOnly
-                          />
-                          {errors.bloodTests?.[index]?.price && (
-                            <p className="text-red-500 text-xs mt-1">
-                              {errors.bloodTests[index]?.price?.message}
-                            </p>
-                          )}
-                        </div>
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => remove(index)}
-                            className="text-red-500 hover:text-red-700 text-sm mt-4 sm:mt-0"
-                          >
-                            Remove
-                          </button>
+
+                        {/* Row 2: Book Specific Parameter */}
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between">
+                          <div className="mt-2 mb-2 sm:mb-0">
+                            <button
+                              type="button"
+                              onClick={() => openParameterModal(index)}
+                              className="inline-flex items-center px-4 py-2 border border-green-600 text-green-600 rounded hover:bg-green-50 transition-colors"
+                              disabled={!currentTestId || testParams.length === 0}
+                            >
+                              Book Specific Parameter
+                            </button>
+                          </div>
+                          <div>
+                            {selectedParams && selectedParams.length > 0 ? (
+                              <p className="text-sm text-gray-600">
+                                <strong>Booked Parameters: </strong>
+                                {selectedParams.join(", ")}
+                              </p>
+                            ) : (
+                              <p className="text-sm text-gray-600">
+                                <strong>All parameters</strong> will be booked
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => remove(index)}
+                              className="text-red-500 hover:text-red-700 text-sm"
+                            >
+                              Remove Test
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      append({ testId: "", testName: "", price: 0 })
-                    }
-                    className="mt-4 inline-flex items-center px-4 py-2 border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
-                  >
-                    Add Blood Test
-                  </button>
+                    );
+                  })}
                 </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    append({ testId: "", testName: "", price: 0 })
+                  }
+                  className="mt-4 inline-flex items-center px-4 py-2 border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
+                >
+                  Add Blood Test
+                </button>
+              </div>
 
-                {/* Payment Details */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      Discount (%)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      {...register("discountPercentage", {
-                        required: "Discount is required",
-                        valueAsNumber: true,
-                      })}
-                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter discount percentage"
-                    />
-                    {errors.discountPercentage && (
-                      <p className="text-red-500 text-sm mt-1">
-                        {errors.discountPercentage.message}
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      Amount Paid (Rs.)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      {...register("amountPaid", {
-                        required: "Amount paid is required",
-                        valueAsNumber: true,
-                      })}
-                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter amount paid"
-                    />
-                    {errors.amountPaid && (
-                      <p className="text-red-500 text-sm mt-1">
-                        {errors.amountPaid.message}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Computed Totals */}
-                <div className="space-y-2">
-                  <p className="text-sm text-gray-700">
-                    Total Amount: <strong>Rs. {totalAmount.toFixed(2)}</strong>
-                  </p>
-                  <p className="text-sm text-gray-700">
-                    Discount: <strong>Rs. {discountValue.toFixed(2)}</strong>
-                  </p>
-                  <p className="text-sm text-gray-700">
-                    Remaining Amount: <strong>Rs. {remainingAmount.toFixed(2)}</strong>
-                  </p>
-                </div>
-
-                {/* Payment Mode */}
-                <div className="mt-4">
+              {/* Payment Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
                   <label className="block text-sm font-medium text-gray-600 mb-1">
-                    Payment Mode
+                    Discount (%)
                   </label>
-                  <div className="flex space-x-6">
-                    <label className="inline-flex items-center">
-                      <input
-                        type="radio"
-                        value="online"
-                        {...register("paymentMode", { required: true })}
-                        className="form-radio text-blue-600"
-                        defaultChecked
-                      />
-                      <span className="ml-2">Online</span>
-                    </label>
-                    <label className="inline-flex items-center">
-                      <input
-                        type="radio"
-                        value="cash"
-                        {...register("paymentMode", { required: true })}
-                        className="form-radio text-blue-600"
-                      />
-                      <span className="ml-2">Cash</span>
-                    </label>
-                  </div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    {...register("discountPercentage", {
+                      required: "Discount is required",
+                      valueAsNumber: true,
+                    })}
+                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                  {errors.discountPercentage && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.discountPercentage.message}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">
+                    Amount Paid (Rs.)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    {...register("amountPaid", {
+                      required: "Amount paid is required",
+                      valueAsNumber: true,
+                    })}
+                    className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                  {errors.amountPaid && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.amountPaid.message}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors duration-200"
-              >
-                {isSubmitting ? "Submitting..." : "Save Patient Record"}
-              </button>
-            </form>
-          </div>
+              {/* Computed Totals */}
+              <div className="space-y-2">
+                <p className="text-sm text-gray-700">
+                  Total Amount: <strong>Rs. {totalAmount.toFixed(2)}</strong>
+                </p>
+                <p className="text-sm text-gray-700">
+                  Discount: <strong>Rs. {discountValue.toFixed(2)}</strong>
+                </p>
+                <p className="text-sm text-gray-700">
+                  Remaining Amount: <strong>Rs. {remainingAmount.toFixed(2)}</strong>
+                </p>
+              </div>
+
+              {/* Payment Mode */}
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Payment Mode
+                </label>
+                <div className="flex space-x-6">
+                  <label className="inline-flex items-center">
+                    <input
+                      type="radio"
+                      value="online"
+                      {...register("paymentMode", { required: true })}
+                      className="form-radio text-blue-600"
+                      defaultChecked
+                    />
+                    <span className="ml-2">Online</span>
+                  </label>
+                  <label className="inline-flex items-center">
+                    <input
+                      type="radio"
+                      value="cash"
+                      {...register("paymentMode", { required: true })}
+                      className="form-radio text-blue-600"
+                    />
+                    <span className="ml-2">Cash</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors duration-200"
+            >
+              {isSubmitting ? "Submitting..." : "Save Patient Record"}
+            </button>
+          </form>
         </div>
+      </div>
+
+      {/* Parameter Selection Modal */}
+      {modalVisible && currentTestIndex !== null && (
+        <ParameterSelectionModal
+          show={modalVisible}
+          availableParameters={getTestParameters(
+            watch(`bloodTests.${currentTestIndex}.testId`)
+          )}
+          initialSelection={
+            watch(`bloodTests.${currentTestIndex}.selectedParameters`) || []
+          }
+          onSave={handleModalSave}
+          onClose={() => setModalVisible(false)}
+        />
       )}
     </div>
   );

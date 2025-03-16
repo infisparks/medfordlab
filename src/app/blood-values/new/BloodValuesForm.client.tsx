@@ -25,6 +25,12 @@ interface TestValueEntry {
   testId: string;
   testName: string;
   parameters: TestParameterValue[];
+  subheadings?: {
+    title: string;
+    parameterNames: string[];
+  }[];
+  // New: optional field if only some parameters were selected at booking.
+  selectedParameters?: string[];
 }
 
 interface BloodValuesFormInputs {
@@ -76,24 +82,28 @@ const BloodValuesForm: React.FC = () => {
         if (patientSnapshot.exists()) {
           const patientData = patientSnapshot.val();
           const patientTests = patientData.bloodTests || [];
-          // Retrieve stored test values if they exist.
           const storedBloodTests = patientData.bloodtest || {};
-          // Determine patient age in days.
           const patientAgeInDays = patientData.total_day
             ? Number(patientData.total_day)
             : Number(patientData.age) * 365;
 
           const testsData: TestValueEntry[] = await Promise.all(
-            patientTests.map(async (test: { testId: string; testName: string }) => {
+            patientTests.map(async (test: { testId: string; testName: string; selectedParameters?: string[] }) => {
               const testRef = ref(database, `bloodTests/${test.testId}`);
               const testSnapshot = await get(testRef);
               if (testSnapshot.exists()) {
                 const testDetail = testSnapshot.val();
-                // Normalize test key to check stored values.
-                const normalizedTestKey = test.testName.toLowerCase().replace(/\s+/g, "_");
-                const storedTest = storedBloodTests[normalizedTestKey];
-                const parameters: TestParameterValue[] = testDetail.parameters.map((param: any) => {
-                  // For each parameter, pick the proper range based on patient gender and age.
+                // New: if selectedParameters were booked, only use those parameters.
+                const allParams = testDetail.parameters;
+                let filteredParams;
+                if (test.selectedParameters && test.selectedParameters.length > 0) {
+                  filteredParams = allParams.filter((param: any) =>
+                    test.selectedParameters!.includes(param.name)
+                  );
+                } else {
+                  filteredParams = allParams;
+                }
+                const parameters = filteredParams.map((param: any) => {
                   const gender = patientData.gender?.toLowerCase() === "male" ? "male" : "female";
                   const ranges = param.range[gender] || [];
                   let rangeStr = "";
@@ -104,11 +114,9 @@ const BloodValuesForm: React.FC = () => {
                       break;
                     }
                   }
-                  // Fallback if no range found.
                   if (!rangeStr && ranges.length > 0) {
                     rangeStr = ranges[ranges.length - 1].rangeValue;
                   }
-                  // Process subparameters similarly.
                   let subparams: TestParameterValue[] | undefined = undefined;
                   if (param.subparameters && Array.isArray(param.subparameters)) {
                     subparams = param.subparameters.map((subParam: any) => {
@@ -124,10 +132,10 @@ const BloodValuesForm: React.FC = () => {
                       if (!subRangeStr && subRanges.length > 0) {
                         subRangeStr = subRanges[subRanges.length - 1].rangeValue;
                       }
-                      // Find any stored value for the subparameter.
                       const storedSubParam =
-                        storedTest &&
-                        storedTest.parameters.find((p: any) => p.name === param.name)
+                        storedBloodTests &&
+                        storedBloodTests[test.testName.toLowerCase().replace(/\s+/g, "_")] &&
+                        storedBloodTests[test.testName.toLowerCase().replace(/\s+/g, "_")].parameters.find((p: any) => p.name === param.name)
                           ?.subparameters?.find((sp: any) => sp.name === subParam.name);
                       return {
                         name: subParam.name,
@@ -137,10 +145,10 @@ const BloodValuesForm: React.FC = () => {
                       };
                     });
                   }
-                  // Find any stored value for the main parameter.
                   const storedParam =
-                    storedTest && storedTest.parameters.find((p: any) => p.name === param.name);
-
+                    storedBloodTests &&
+                    storedBloodTests[test.testName.toLowerCase().replace(/\s+/g, "_")] &&
+                    storedBloodTests[test.testName.toLowerCase().replace(/\s+/g, "_")].parameters.find((p: any) => p.name === param.name);
                   return {
                     name: param.name,
                     unit: param.unit,
@@ -153,6 +161,8 @@ const BloodValuesForm: React.FC = () => {
                   testId: test.testId,
                   testName: testDetail.testName,
                   parameters,
+                  subheadings: testDetail.subheadings || [],
+                  selectedParameters: test.selectedParameters, // pass along the booked selection
                 };
               }
               return {
@@ -179,12 +189,12 @@ const BloodValuesForm: React.FC = () => {
 
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
     try {
-      // Save each test's parameter values in Firebase under the "bloodtest" node
       for (const test of data.tests) {
         const testKey = test.testName.toLowerCase().replace(/\s+/g, "_");
         const testRef = ref(database, `patients/${data.patientId}/bloodtest/${testKey}`);
         await set(testRef, {
           parameters: test.parameters,
+          subheadings: test.subheadings || [],
           createdAt: new Date().toISOString(),
         });
       }
@@ -251,13 +261,219 @@ const BloodValuesForm: React.FC = () => {
                 <h3 className="text-xl font-semibold text-gray-800">{test.testName}</h3>
               </div>
 
-              {test.parameters.length > 0 ? (
+              {/* Render parameters based on subheadings or global list */}
+              {test.subheadings && test.subheadings.length > 0 ? (
+                <>
+                  {test.subheadings.map((subheading, subIndex) => {
+                    const paramsForSub = test.parameters
+                      .map((param, pIndex) => ({ ...param, originalIndex: pIndex }))
+                      .filter((item) => subheading.parameterNames.includes(item.name));
+                    return (
+                      <div key={subIndex} className="mb-6">
+                        <h4 className="text-lg font-bold mb-2">{subheading.title}</h4>
+                        {paramsForSub.length > 0 ? (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {paramsForSub.map((item) => (
+                              <div key={item.originalIndex} className="space-y-4">
+                                <label className="block text-sm font-medium text-gray-700">
+                                  {item.name}{" "}
+                                  <span className="ml-2 text-sm text-gray-500">
+                                    ({item.unit})
+                                  </span>
+                                </label>
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    {...register(
+                                      `tests.${testIndex}.parameters.${item.originalIndex}.value` as Path<BloodValuesFormInputs>,
+                                      { required: "Value is required" }
+                                    )}
+                                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
+                                      errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                        ?.value
+                                        ? "border-red-500 focus:ring-red-200"
+                                        : "border-gray-300 focus:ring-blue-200"
+                                    }`}
+                                    placeholder="Enter value"
+                                  />
+                                  {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                    ?.value && (
+                                    <FiAlertCircle className="absolute right-3 top-3 w-5 h-5 text-red-500" />
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 text-sm">
+                                  <span className="text-gray-500">Normal Range:</span>
+                                  <span className="font-medium text-green-600">
+                                    {item.range}
+                                  </span>
+                                </div>
+                                {item.subparameters &&
+                                  item.subparameters.length > 0 && (
+                                    <div className="ml-4 border-l pl-4 space-y-4">
+                                      {item.subparameters.map((subParam, subParamIndex) => (
+                                        <div key={subParamIndex} className="space-y-2">
+                                          <label className="block text-sm font-medium text-gray-700">
+                                            {subParam.name}{" "}
+                                            <span className="ml-2 text-sm text-gray-500">
+                                              ({subParam.unit})
+                                            </span>
+                                          </label>
+                                          <div className="relative">
+                                            <input
+                                              type="number"
+                                              step="any"
+                                              {...register(
+                                                `tests.${testIndex}.parameters.${item.originalIndex}.subparameters.${subParamIndex}.value` as Path<BloodValuesFormInputs>,
+                                                { required: "Value is required" }
+                                              )}
+                                              className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
+                                                errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                                  ?.subparameters?.[subParamIndex]?.value
+                                                  ? "border-red-500 focus:ring-red-200"
+                                                  : "border-gray-300 focus:ring-blue-200"
+                                              }`}
+                                              placeholder="Enter value"
+                                            />
+                                            {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                              ?.subparameters?.[subParamIndex]?.value && (
+                                              <FiAlertCircle className="absolute right-3 top-3 w-5 h-5 text-red-500" />
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-2 text-sm">
+                                            <span className="text-gray-500">
+                                              Normal Range:
+                                            </span>
+                                            <span className="font-medium text-green-600">
+                                              {subParam.range}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="bg-yellow-50 p-4 rounded-lg flex items-center gap-3 text-yellow-700">
+                            <FiAlertCircle className="w-5 h-5" />
+                            <span>No parameters available for this subheading</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {(() => {
+                    const subheadingParamNames = test.subheadings.reduce(
+                      (acc: string[], sub) => acc.concat(sub.parameterNames),
+                      []
+                    );
+                    const globalParams = test.parameters
+                      .map((param, paramIndex) => ({ ...param, originalIndex: paramIndex }))
+                      .filter((item) => !subheadingParamNames.includes(item.name));
+                    if (globalParams.length > 0) {
+                      return (
+                        <div className="mb-6">
+                          <h4 className="text-lg font-bold mb-2">Global Parameters</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {globalParams.map((item) => (
+                              <div key={item.originalIndex} className="space-y-4">
+                                <label className="block text-sm font-medium text-gray-700">
+                                  {item.name}{" "}
+                                  <span className="ml-2 text-sm text-gray-500">
+                                    ({item.unit})
+                                  </span>
+                                </label>
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    {...register(
+                                      `tests.${testIndex}.parameters.${item.originalIndex}.value` as Path<BloodValuesFormInputs>,
+                                      { required: "Value is required" }
+                                    )}
+                                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
+                                      errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                        ?.value
+                                        ? "border-red-500 focus:ring-red-200"
+                                        : "border-gray-300 focus:ring-blue-200"
+                                    }`}
+                                    placeholder="Enter value"
+                                  />
+                                  {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                    ?.value && (
+                                    <FiAlertCircle className="absolute right-3 top-3 w-5 h-5 text-red-500" />
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 text-sm">
+                                  <span className="text-gray-500">Normal Range:</span>
+                                  <span className="font-medium text-green-600">{item.range}</span>
+                                </div>
+                                {item.subparameters &&
+                                  item.subparameters.length > 0 && (
+                                    <div className="ml-4 border-l pl-4 space-y-4">
+                                      {item.subparameters.map((subParam, subIndex) => (
+                                        <div key={subIndex} className="space-y-2">
+                                          <label className="block text-sm font-medium text-gray-700">
+                                            {subParam.name}{" "}
+                                            <span className="ml-2 text-sm text-gray-500">
+                                              ({subParam.unit})
+                                            </span>
+                                          </label>
+                                          <div className="relative">
+                                            <input
+                                              type="number"
+                                              step="any"
+                                              {...register(
+                                                `tests.${testIndex}.parameters.${item.originalIndex}.subparameters.${subIndex}.value` as Path<BloodValuesFormInputs>,
+                                                { required: "Value is required" }
+                                              )}
+                                              className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
+                                                errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                                  ?.subparameters?.[subIndex]?.value
+                                                  ? "border-red-500 focus:ring-red-200"
+                                                  : "border-gray-300 focus:ring-blue-200"
+                                              }`}
+                                              placeholder="Enter value"
+                                            />
+                                            {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                              ?.subparameters?.[subIndex]?.value && (
+                                              <FiAlertCircle className="absolute right-3 top-3 w-5 h-5 text-red-500" />
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-2 text-sm">
+                                            <span className="text-gray-500">
+                                              Normal Range:
+                                            </span>
+                                            <span className="font-medium text-green-600">
+                                              {subParam.range}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                </>
+              ) : (
+                // No subheadings: render all parameters normally.
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {test.parameters.map((param, paramIndex) => (
                     <div key={paramIndex} className="space-y-4">
                       <label className="block text-sm font-medium text-gray-700">
-                        {param.name}
-                        <span className="ml-2 text-sm text-gray-500">({param.unit})</span>
+                        {param.name}{" "}
+                        <span className="ml-2 text-sm text-gray-500">
+                          ({param.unit})
+                        </span>
                       </label>
                       <div className="relative">
                         <input
@@ -282,21 +498,22 @@ const BloodValuesForm: React.FC = () => {
                         <span className="text-gray-500">Normal Range:</span>
                         <span className="font-medium text-green-600">{param.range}</span>
                       </div>
-
                       {param.subparameters && param.subparameters.length > 0 && (
                         <div className="ml-4 border-l pl-4 space-y-4">
                           {param.subparameters.map((subParam, subIndex) => (
                             <div key={subIndex} className="space-y-2">
                               <label className="block text-sm font-medium text-gray-700">
-                                {subParam.name}
-                                <span className="ml-2 text-sm text-gray-500">({subParam.unit})</span>
+                                {subParam.name}{" "}
+                                <span className="ml-2 text-sm text-gray-500">
+                                  ({subParam.unit})
+                                </span>
                               </label>
                               <div className="relative">
                                 <input
                                   type="number"
                                   step="any"
                                   {...register(
-                                    ((`tests.${testIndex}.parameters.${paramIndex}.subparameters.${subIndex}.value`) as unknown) as Path<BloodValuesFormInputs>,
+                                    `tests.${testIndex}.parameters.${paramIndex}.subparameters.${subIndex}.value` as Path<BloodValuesFormInputs>,
                                     { required: "Value is required" }
                                   )}
                                   className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${
@@ -311,7 +528,9 @@ const BloodValuesForm: React.FC = () => {
                                 )}
                               </div>
                               <div className="flex items-center gap-2 text-sm">
-                                <span className="text-gray-500">Normal Range:</span>
+                                <span className="text-gray-500">
+                                  Normal Range:
+                                </span>
                                 <span className="font-medium text-green-600">{subParam.range}</span>
                               </div>
                             </div>
@@ -321,15 +540,9 @@ const BloodValuesForm: React.FC = () => {
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="bg-yellow-50 p-4 rounded-lg flex items-center gap-3 text-yellow-700">
-                  <FiAlertCircle className="w-5 h-5" />
-                  <span>No parameters available for this test</span>
-                </div>
               )}
             </div>
           ))}
-
           <div className="border-t pt-6">
             <button
               type="submit"

@@ -1,9 +1,17 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { database } from "../../firebase"; // adjust path as needed
+import { database } from "../../firebase"; // adjust path if needed
 import { ref, get, update, remove, push, set } from "firebase/database";
-import { useForm, useFieldArray } from "react-hook-form";
+import {
+  useForm,
+  useFieldArray,
+  useWatch,
+  SubmitHandler,
+  FieldErrorsImpl,
+  UseFormGetValues,
+  UseFormSetValue,
+} from "react-hook-form";
 import {
   FaEdit,
   FaTrash,
@@ -29,32 +37,53 @@ export interface Parameter {
     male: AgeRangeItem[];
     female: AgeRangeItem[];
   };
-  // Optional: subparameters can follow the same structure if needed.
-  subparameters?: Parameter[];
+}
+
+export interface Subheading {
+  title: string;
+  parameterNames: string[];
+}
+
+export interface Subpricing {
+  subpricingName: string;
+  price: number;
+  includedParameters: string[];
 }
 
 export interface BloodTestFormInputs {
   testName: string;
   price: number;
   parameters: Parameter[];
+  subheadings: Subheading[];
+  subpricing: Subpricing[];
 }
 
 export interface TestData extends BloodTestFormInputs {
   key: string;
   createdAt: string;
+  updatedAt?: string;
+}
+
+// Helper to safely fetch error messages
+function getFieldErrorMessage(errors: any, path: string[]): string | undefined {
+  let current = errors;
+  for (const p of path) {
+    if (!current) return undefined;
+    current = current[p];
+  }
+  return typeof current?.message === "string" ? current.message : undefined;
 }
 
 // -----------------------------
-// PARAMETER EDITOR COMPONENT
+// PARAMETER EDITOR
 // -----------------------------
 interface ParameterEditorProps {
   index: number;
   control: any;
   register: any;
-  errors: any;
+  errors: FieldErrorsImpl<any>;
   remove: (index: number) => void;
 }
-
 const ParameterEditor: React.FC<ParameterEditorProps> = ({
   index,
   control,
@@ -62,23 +91,25 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
   errors,
   remove,
 }) => {
-  const {
-    fields: maleRanges,
-    append: appendMaleRange,
-    remove: removeMaleRange,
-  } = useFieldArray({
+  const maleRangesArray = useFieldArray({
     control,
     name: `parameters.${index}.range.male`,
   });
-
-  const {
-    fields: femaleRanges,
-    append: appendFemaleRange,
-    remove: removeFemaleRange,
-  } = useFieldArray({
+  const femaleRangesArray = useFieldArray({
     control,
     name: `parameters.${index}.range.female`,
   });
+
+  const paramNameErr = getFieldErrorMessage(errors, [
+    "parameters",
+    index.toString(),
+    "name",
+  ]);
+  const paramUnitErr = getFieldErrorMessage(errors, [
+    "parameters",
+    index.toString(),
+    "unit",
+  ]);
 
   return (
     <div className="border p-4 rounded mb-4 bg-gray-50">
@@ -92,19 +123,16 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
           <FaTrash />
         </button>
       </div>
+
+      {/* Parameter Name & Unit */}
       <div className="mt-2">
         <label className="block text-xs">Parameter Name</label>
         <input
           type="text"
           {...register(`parameters.${index}.name`, { required: "Required" })}
           className="w-full border rounded px-2 py-1"
-          placeholder="e.g., Hemoglobin"
         />
-        {errors.parameters?.[index]?.name && (
-          <p className="text-red-500 text-xs">
-            {errors.parameters[index].name.message}
-          </p>
-        )}
+        {paramNameErr && <p className="text-red-500 text-xs">{paramNameErr}</p>}
       </div>
       <div className="mt-2">
         <label className="block text-xs">Unit</label>
@@ -112,102 +140,434 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
           type="text"
           {...register(`parameters.${index}.unit`, { required: "Required" })}
           className="w-full border rounded px-2 py-1"
-          placeholder="e.g., g/dL"
         />
-        {errors.parameters?.[index]?.unit && (
-          <p className="text-red-500 text-xs">
-            {errors.parameters[index].unit.message}
-          </p>
-        )}
+        {paramUnitErr && <p className="text-red-500 text-xs">{paramUnitErr}</p>}
       </div>
+
+      {/* Male Ranges */}
       <div className="mt-2">
         <h4 className="text-xs font-medium">Male Ranges</h4>
-        {maleRanges.map((field, mIndex) => (
-          <div key={field.id} className="flex items-center space-x-2 mt-1">
-            <input
-              type="text"
-              {...register(
-                `parameters.${index}.range.male.${mIndex}.rangeKey`,
-                { required: "Required" }
-              )}
-              className="w-1/2 border rounded px-2 py-1"
-              placeholder="Age Range e.g., 0-30d"
-            />
-            <input
-              type="text"
-              {...register(
-                `parameters.${index}.range.male.${mIndex}.rangeValue`,
-                { required: "Required" }
-              )}
-              className="w-1/2 border rounded px-2 py-1"
-              placeholder="Value e.g., 5.0-7.0"
-            />
-            <button
-              type="button"
-              onClick={() => removeMaleRange(mIndex)}
-              className="text-red-500 hover:text-red-700"
-            >
-              <FaTrash />
-            </button>
-          </div>
-        ))}
+        {maleRangesArray.fields.map((field, mIndex) => {
+          const keyErr = getFieldErrorMessage(errors, [
+            "parameters",
+            index.toString(),
+            "range",
+            "male",
+            mIndex.toString(),
+            "rangeKey",
+          ]);
+          const valErr = getFieldErrorMessage(errors, [
+            "parameters",
+            index.toString(),
+            "range",
+            "male",
+            mIndex.toString(),
+            "rangeValue",
+          ]);
+          return (
+            <div key={field.id} className="flex items-center space-x-2 mt-1">
+              <input
+                type="text"
+                {...register(
+                  `parameters.${index}.range.male.${mIndex}.rangeKey`,
+                  { required: "Required" }
+                )}
+                className="w-1/2 border rounded px-2 py-1"
+              />
+              <input
+                type="text"
+                {...register(
+                  `parameters.${index}.range.male.${mIndex}.rangeValue`,
+                  { required: "Required" }
+                )}
+                className="w-1/2 border rounded px-2 py-1"
+              />
+              <button
+                type="button"
+                onClick={() => maleRangesArray.remove(mIndex)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <FaTrash />
+              </button>
+              {keyErr && <p className="text-red-500 text-xs w-full">{keyErr}</p>}
+              {valErr && <p className="text-red-500 text-xs w-full">{valErr}</p>}
+            </div>
+          );
+        })}
         <button
           type="button"
-          onClick={() => appendMaleRange({ rangeKey: "", rangeValue: "" })}
+          onClick={() => maleRangesArray.append({ rangeKey: "", rangeValue: "" })}
           className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
         >
           <FaPlus className="mr-1" /> Add Male Range
         </button>
       </div>
+
+      {/* Female Ranges */}
       <div className="mt-2">
         <h4 className="text-xs font-medium">Female Ranges</h4>
-        {femaleRanges.map((field, fIndex) => (
-          <div key={field.id} className="flex items-center space-x-2 mt-1">
-            <input
-              type="text"
-              {...register(
-                `parameters.${index}.range.female.${fIndex}.rangeKey`,
-                { required: "Required" }
-              )}
-              className="w-1/2 border rounded px-2 py-1"
-              placeholder="Age Range e.g., 0-30d"
-            />
-            <input
-              type="text"
-              {...register(
-                `parameters.${index}.range.female.${fIndex}.rangeValue`,
-                { required: "Required" }
-              )}
-              className="w-1/2 border rounded px-2 py-1"
-              placeholder="Value e.g., 5.0-7.0"
-            />
-            <button
-              type="button"
-              onClick={() => removeFemaleRange(fIndex)}
-              className="text-red-500 hover:text-red-700"
-            >
-              <FaTrash />
-            </button>
-          </div>
-        ))}
+        {femaleRangesArray.fields.map((field, fIndex) => {
+          const keyErr = getFieldErrorMessage(errors, [
+            "parameters",
+            index.toString(),
+            "range",
+            "female",
+            fIndex.toString(),
+            "rangeKey",
+          ]);
+          const valErr = getFieldErrorMessage(errors, [
+            "parameters",
+            index.toString(),
+            "range",
+            "female",
+            fIndex.toString(),
+            "rangeValue",
+          ]);
+          return (
+            <div key={field.id} className="flex items-center space-x-2 mt-1">
+              <input
+                type="text"
+                {...register(
+                  `parameters.${index}.range.female.${fIndex}.rangeKey`,
+                  { required: "Required" }
+                )}
+                className="w-1/2 border rounded px-2 py-1"
+              />
+              <input
+                type="text"
+                {...register(
+                  `parameters.${index}.range.female.${fIndex}.rangeValue`,
+                  { required: "Required" }
+                )}
+                className="w-1/2 border rounded px-2 py-1"
+              />
+              <button
+                type="button"
+                onClick={() => femaleRangesArray.remove(fIndex)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <FaTrash />
+              </button>
+              {keyErr && <p className="text-red-500 text-xs w-full">{keyErr}</p>}
+              {valErr && <p className="text-red-500 text-xs w-full">{valErr}</p>}
+            </div>
+          );
+        })}
         <button
           type="button"
-          onClick={() => appendFemaleRange({ rangeKey: "", rangeValue: "" })}
+          onClick={() =>
+            femaleRangesArray.append({ rangeKey: "", rangeValue: "" })
+          }
           className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
         >
           <FaPlus className="mr-1" /> Add Female Range
         </button>
       </div>
-      {/* Optionally, you can add a similar block for subparameters if required */}
     </div>
   );
 };
 
 // -----------------------------
-// TEST MODAL COMPONENT (Create & Edit)
+// SUBHEADING EDITOR
+// -----------------------------
+interface SubheadingEditorProps {
+  index: number;
+  control: any;
+  register: any;
+  errors: FieldErrorsImpl<any>;
+  remove: (index: number) => void;
+  getValues: UseFormGetValues<BloodTestFormInputs>;
+  setValue: UseFormSetValue<BloodTestFormInputs>;
+}
+
+const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
+  index,
+  control,
+  register,
+  errors,
+  remove,
+  getValues,
+  setValue,
+}) => {
+  const paramNamesArray = useFieldArray({
+    control,
+    name: `subheadings.${index}.parameterNames`,
+  });
+  const globalParameters = useWatch({ control, name: "parameters" }) || [];
+  const subheadingTitleErr = getFieldErrorMessage(errors, [
+    "subheadings",
+    index.toString(),
+    "title",
+  ]);
+
+  // Called on parameter select
+  const handleParameterChange = (pIndex: number, newValue: string) => {
+    if (!newValue) return;
+    // Gather *all* subheading param names across all subheadings
+    const allSubheadings = getValues("subheadings") || [];
+    // The parameter the user changed
+    for (let shIndex = 0; shIndex < allSubheadings.length; shIndex++) {
+      // skip the one we're editing
+      if (shIndex === index) continue;
+      const paramNames = allSubheadings[shIndex]?.parameterNames || [];
+      if (paramNames.includes(newValue)) {
+        alert(`Parameter "${newValue}" is already used in another subheading!`);
+        setValue(`subheadings.${index}.parameterNames.${pIndex}`, "");
+        return;
+      }
+    }
+  };
+
+  return (
+    <div className="border p-4 rounded mb-4 bg-gray-100">
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-semibold">Subheading #{index + 1}</h3>
+        <button
+          type="button"
+          onClick={() => remove(index)}
+          className="text-red-500 hover:text-red-700"
+        >
+          <FaTrash />
+        </button>
+      </div>
+
+      {/* Title */}
+      <div className="mt-2">
+        <label className="block text-xs">Subheading Title</label>
+        <input
+          type="text"
+          {...register(`subheadings.${index}.title`, {
+            required: "Required",
+          })}
+          className="w-full border rounded px-2 py-1"
+          placeholder="e.g., RBC"
+        />
+        {subheadingTitleErr && (
+          <p className="text-red-500 text-xs">{subheadingTitleErr}</p>
+        )}
+      </div>
+
+      {/* Parameter Names */}
+      <div className="mt-2">
+        <h4 className="text-xs font-medium">Select Parameters</h4>
+        {paramNamesArray.fields.map((field, pIndex) => {
+          const paramNameErr = getFieldErrorMessage(errors, [
+            "subheadings",
+            index.toString(),
+            "parameterNames",
+            pIndex.toString(),
+          ]);
+          return (
+            <div key={field.id} className="flex items-center space-x-2 mt-1">
+              <select
+                {...register(`subheadings.${index}.parameterNames.${pIndex}`, {
+                  required: "Required",
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
+                    handleParameterChange(pIndex, e.target.value);
+                  },
+                })}
+                className="w-full border rounded px-2 py-1"
+              >
+                <option value="">Select Parameter</option>
+                {globalParameters.map((param: { name: string }, idx: number) => (
+                  <option key={idx} value={param.name}>
+                    {param.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => paramNamesArray.remove(pIndex)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <FaTrash />
+              </button>
+              {paramNameErr && (
+                <p className="text-red-500 text-xs w-full">{paramNameErr}</p>
+              )}
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => paramNamesArray.append("")}
+          className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+        >
+          <FaPlus className="mr-1" /> Add Parameter
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// -----------------------------
+// SUBPRICING EDITOR
+// -----------------------------
+interface SubpricingEditorProps {
+  index: number;
+  control: any;
+  register: any;
+  errors: FieldErrorsImpl<any>;
+  remove: (index: number) => void;
+  getValues: UseFormGetValues<BloodTestFormInputs>;
+  setValue: UseFormSetValue<BloodTestFormInputs>;
+}
+
+const SubpricingEditor: React.FC<SubpricingEditorProps> = ({
+  index,
+  control,
+  register,
+  errors,
+  remove,
+  getValues,
+  setValue,
+}) => {
+  const includedParamsArray = useFieldArray({
+    control,
+    name: `subpricing.${index}.includedParameters`,
+  });
+  const globalParameters = useWatch({ control, name: "parameters" }) || [];
+
+  const subpricingNameErr = getFieldErrorMessage(errors, [
+    "subpricing",
+    index.toString(),
+    "subpricingName",
+  ]);
+  const subpricingPriceErr = getFieldErrorMessage(errors, [
+    "subpricing",
+    index.toString(),
+    "price",
+  ]);
+
+  const handleIncludedParamChange = (incIndex: number, newVal: string) => {
+    if (!newVal) return;
+    // Check across ALL subpricing objects
+    const allSubpricing = getValues("subpricing") || [];
+    for (let spIndex = 0; spIndex < allSubpricing.length; spIndex++) {
+      if (spIndex === index) continue; // skip current
+      const paramNames = allSubpricing[spIndex]?.includedParameters || [];
+      if (paramNames.includes(newVal)) {
+        alert(
+          `Parameter "${newVal}" is already used in a different subpricing block!`
+        );
+        setValue(
+          `subpricing.${index}.includedParameters.${incIndex}`,
+          ""
+        );
+        return;
+      }
+    }
+
+    // Auto-fill subpricingName if it's empty and this is the only param
+    const incParams = getValues(`subpricing.${index}.includedParameters`);
+    const nonEmpty = incParams.filter((p) => p).length;
+    const currentName = getValues(`subpricing.${index}.subpricingName`);
+    if (!currentName && nonEmpty === 1) {
+      setValue(`subpricing.${index}.subpricingName`, newVal);
+    }
+  };
+
+  return (
+    <div className="border p-4 rounded mb-4 bg-gray-50">
+      <div className="flex justify-between items-center">
+        <h3 className="text-sm font-semibold">Subpricing #{index + 1}</h3>
+        <button
+          type="button"
+          onClick={() => remove(index)}
+          className="text-red-500 hover:text-red-700"
+        >
+          <FaTrash />
+        </button>
+      </div>
+
+      {/* subpricingName */}
+      <div className="mt-2">
+        <label className="block text-xs">Subpricing Name</label>
+        <input
+          type="text"
+          {...register(`subpricing.${index}.subpricingName`, {
+            required: "Required",
+          })}
+          className="w-full border rounded px-2 py-1"
+        />
+        {subpricingNameErr && (
+          <p className="text-red-500 text-xs">{subpricingNameErr}</p>
+        )}
+      </div>
+
+      {/* price */}
+      <div className="mt-2">
+        <label className="block text-xs">Subpricing Price (Rs.)</label>
+        <input
+          type="number"
+          step="0.01"
+          {...register(`subpricing.${index}.price`, {
+            required: "Required",
+            valueAsNumber: true,
+          })}
+          className="w-full border rounded px-2 py-1"
+        />
+        {subpricingPriceErr && (
+          <p className="text-red-500 text-xs">{subpricingPriceErr}</p>
+        )}
+      </div>
+
+      {/* includedParameters */}
+      <div className="mt-2">
+        <h4 className="text-xs font-medium">Included Parameters</h4>
+        {includedParamsArray.fields.map((field, incIndex) => {
+          const incParamErr = getFieldErrorMessage(errors, [
+            "subpricing",
+            index.toString(),
+            "includedParameters",
+            incIndex.toString(),
+          ]);
+          return (
+            <div key={field.id} className="flex items-center space-x-2 mt-1">
+              <select
+                {...register(`subpricing.${index}.includedParameters.${incIndex}`, {
+                  required: "Required",
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => handleIncludedParamChange(incIndex, e.target.value),
+                })}
+                className="w-full border rounded px-2 py-1"
+              >
+                <option value="">Select Parameter</option>
+                {globalParameters.map((param: { name: string }, pIdx: number) => (
+                  <option key={pIdx} value={param.name}>
+                    {param.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => includedParamsArray.remove(incIndex)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <FaTrash />
+              </button>
+              {incParamErr && (
+                <p className="text-red-500 text-xs w-full">{incParamErr}</p>
+              )}
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => includedParamsArray.append("")}
+          className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+        >
+          <FaPlus className="mr-1" /> Add Parameter
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// -----------------------------
+// TEST MODAL (Create & Edit)
 // -----------------------------
 interface TestModalProps {
-  testData?: TestData; // if undefined, then creating a new test
+  testData?: TestData; 
   onClose: () => void;
   onTestUpdated: () => void;
 }
@@ -222,6 +582,8 @@ const TestModal: React.FC<TestModalProps> = ({
         testName: testData.testName,
         price: testData.price,
         parameters: testData.parameters,
+        subheadings: testData.subheadings,
+        subpricing: testData.subpricing || [],
       }
     : {
         testName: "",
@@ -234,28 +596,32 @@ const TestModal: React.FC<TestModalProps> = ({
               male: [{ rangeKey: "", rangeValue: "" }],
               female: [{ rangeKey: "", rangeValue: "" }],
             },
-            subparameters: [],
           },
         ],
+        subheadings: [],
+        subpricing: [],
       };
 
   const {
     register,
     handleSubmit,
     control,
-  
     formState: { errors },
+    getValues,
+    setValue,
   } = useForm<BloodTestFormInputs>({ defaultValues });
 
-  const { fields, append, remove: removeField } = useFieldArray({
-    control,
-    name: "parameters",
-  });
+  const paramFields = useFieldArray({ control, name: "parameters" });
+  const subheadingFields = useFieldArray({ control, name: "subheadings" });
+  const subpricingFields = useFieldArray({ control, name: "subpricing" });
 
-  const onSubmit = async (data: BloodTestFormInputs) => {
+  const testNameErr = getFieldErrorMessage(errors, ["testName"]);
+  const testPriceErr = getFieldErrorMessage(errors, ["price"]);
+
+  const onSubmit: SubmitHandler<BloodTestFormInputs> = async (data) => {
     try {
       if (testData) {
-        // Update existing test
+        // Update
         const testRef = ref(database, `bloodTests/${testData.key}`);
         await update(testRef, {
           ...data,
@@ -263,7 +629,7 @@ const TestModal: React.FC<TestModalProps> = ({
         });
         alert("Test updated successfully!");
       } else {
-        // Create new test
+        // Create
         const testsRef = ref(database, "bloodTests");
         const newTestRef = push(testsRef);
         await set(newTestRef, {
@@ -314,6 +680,7 @@ const TestModal: React.FC<TestModalProps> = ({
             Close
           </button>
         </div>
+
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           {/* Test Name */}
           <div>
@@ -323,10 +690,9 @@ const TestModal: React.FC<TestModalProps> = ({
               {...register("testName", { required: "Test name is required" })}
               className="w-full border rounded px-3 py-2"
             />
-            {errors.testName && (
-              <p className="text-red-500 text-xs">{errors.testName.message}</p>
-            )}
+            {testNameErr && <p className="text-red-500 text-xs">{testNameErr}</p>}
           </div>
+
           {/* Price */}
           <div>
             <label className="block text-sm font-medium">
@@ -342,41 +708,107 @@ const TestModal: React.FC<TestModalProps> = ({
               })}
               className="w-full border rounded px-3 py-2"
             />
-            {errors.price && (
-              <p className="text-red-500 text-xs">{errors.price.message}</p>
-            )}
+            {testPriceErr && <p className="text-red-500 text-xs">{testPriceErr}</p>}
           </div>
+
           {/* Parameters */}
           <div>
-            <label className="block text-sm font-medium">Parameters</label>
-            {fields.map((field, index) => (
+            <label className="block text-sm font-medium">Global Parameters</label>
+            {paramFields.fields.map((field, pIndex) => (
               <ParameterEditor
                 key={field.id}
-                index={index}
+                index={pIndex}
                 control={control}
                 register={register}
-                errors={errors}
-                remove={removeField}
+                errors={errors as FieldErrorsImpl<any>}
+                remove={paramFields.remove}
               />
             ))}
             <button
               type="button"
               onClick={() =>
-                append({
+                paramFields.append({
                   name: "",
                   unit: "",
                   range: {
                     male: [{ rangeKey: "", rangeValue: "" }],
                     female: [{ rangeKey: "", rangeValue: "" }],
                   },
-                  subparameters: [],
                 })
               }
               className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
             >
-              <FaPlus className="mr-1" /> Add Parameter
+              <FaPlus className="mr-1" /> Add Global Parameter
             </button>
           </div>
+
+          {/* Subheadings */}
+          <div>
+            <label className="block text-sm font-medium">Subheadings</label>
+            <div className="space-y-4">
+              {subheadingFields.fields.map((field, sIndex) => (
+                <SubheadingEditor
+                  key={field.id}
+                  index={sIndex}
+                  control={control}
+                  register={register}
+                  errors={errors as FieldErrorsImpl<any>}
+                  remove={subheadingFields.remove}
+                  getValues={getValues}
+                  setValue={setValue}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                subheadingFields.append({ title: "", parameterNames: [] })
+              }
+              className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+            >
+              <FaPlus className="mr-1" /> Add Subheading
+            </button>
+          </div>
+
+          {/* Subpricing */}
+          <div>
+            <label className="block text-sm font-medium">
+              Parameter-Based Pricing (Optional)
+            </label>
+            <p className="text-xs text-gray-500 mb-2">
+              If subpricing #1 uses   Hemoglobin,  no other subpricing can use  Hemoglobin. 
+              If only one parameter is chosen, subpricingName auto-fills. You can still edit it.
+            </p>
+            <div className="space-y-4">
+              {subpricingFields.fields.map((field, spIndex) => (
+                <SubpricingEditor
+                  key={field.id}
+                  index={spIndex}
+                  control={control}
+                  register={register}
+                  errors={errors as FieldErrorsImpl<any>}
+                  remove={subpricingFields.remove}
+                  getValues={getValues}
+                  setValue={setValue}
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                subpricingFields.append({
+                  subpricingName: "",
+                  price: 0,
+                  includedParameters: [],
+                })
+              }
+              className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+            >
+              <FaPlus className="mr-1" /> Add Subpricing
+            </button>
+          </div>
+
+          {/* Buttons */}
           <div className="flex justify-between items-center mt-4">
             {testData && (
               <button
@@ -391,7 +823,8 @@ const TestModal: React.FC<TestModalProps> = ({
               type="submit"
               className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
             >
-              <FaSave className="mr-1" /> {testData ? "Save Changes" : "Create Test"}
+              <FaSave className="mr-1" />
+              {testData ? "Save Changes" : "Create Test"}
             </button>
           </div>
         </form>
@@ -401,24 +834,23 @@ const TestModal: React.FC<TestModalProps> = ({
 };
 
 // -----------------------------
-// MANAGE TESTS PAGE
+// MAIN PAGE: MANAGE TESTS
 // -----------------------------
 const ManageBloodTests: React.FC = () => {
   const [tests, setTests] = useState<TestData[]>([]);
   const [selectedTest, setSelectedTest] = useState<TestData | null>(null);
-  const [showModal, setShowModal] = useState<boolean>(false);
+  const [showModal, setShowModal] = useState(false);
 
   const fetchTests = async () => {
     try {
-      const testsRef = ref(database, "bloodTests");
-      const snapshot = await get(testsRef);
+      const snapshot = await get(ref(database, "bloodTests"));
       if (snapshot.exists()) {
         const data = snapshot.val();
-        const testsArray: TestData[] = Object.keys(data).map((key) => ({
+        const arr: TestData[] = Object.keys(data).map((key) => ({
           key,
           ...data[key],
         }));
-        setTests(testsArray);
+        setTests(arr);
       }
     } catch (error) {
       console.error("Error fetching tests:", error);
@@ -460,30 +892,39 @@ const ManageBloodTests: React.FC = () => {
             <FaPlus className="mr-1" /> Add Test
           </button>
         </div>
+
         <table className="min-w-full border-collapse">
           <thead>
             <tr className="bg-blue-100">
               <th className="border px-4 py-2">Test Name</th>
               <th className="border px-4 py-2">Price (Rs.)</th>
               <th className="border px-4 py-2">Parameters</th>
+              <th className="border px-4 py-2">Subheadings</th>
+              <th className="border px-4 py-2">Subpricing</th>
               <th className="border px-4 py-2">Created At</th>
               <th className="border px-4 py-2">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {tests.map((test) => (
-              <tr key={test.key} className="hover:bg-gray-50">
-                <td className="border px-4 py-2">{test.testName}</td>
-                <td className="border px-4 py-2">₹{test.price}</td>
+            {tests.map((t) => (
+              <tr key={t.key} className="hover:bg-gray-50">
+                <td className="border px-4 py-2">{t.testName}</td>
+                <td className="border px-4 py-2">₹{t.price}</td>
                 <td className="border px-4 py-2">
-                  {test.parameters?.length || 0} parameters
+                  {t.parameters?.length || 0} parameters
                 </td>
                 <td className="border px-4 py-2">
-                  {new Date(test.createdAt).toLocaleDateString()}
+                  {t.subheadings?.length || 0} subheadings
+                </td>
+                <td className="border px-4 py-2">
+                  {t.subpricing?.length || 0} subpricing
+                </td>
+                <td className="border px-4 py-2">
+                  {new Date(t.createdAt).toLocaleDateString()}
                 </td>
                 <td className="border px-4 py-2">
                   <button
-                    onClick={() => handleEdit(test)}
+                    onClick={() => handleEdit(t)}
                     className="text-blue-600 hover:text-blue-800"
                   >
                     <FaEdit />
@@ -491,14 +932,20 @@ const ManageBloodTests: React.FC = () => {
                 </td>
               </tr>
             ))}
+            {tests.length === 0 && (
+              <tr>
+                <td
+                  colSpan={7}
+                  className="border px-4 py-6 text-center text-gray-500"
+                >
+                  No blood tests found.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
-        {tests.length === 0 && (
-          <div className="text-center py-8 text-gray-500">
-            No blood tests found.
-          </div>
-        )}
       </div>
+
       {showModal && (
         <TestModal
           testData={selectedTest || undefined}
