@@ -550,7 +550,7 @@ const TestModal: React.FC<TestModalProps> = ({
       reset(parsedData);
       setIsJsonEditor(false);
     } catch (error) {
-      alert("Invalid JSON. Cannot switch to form view.");
+      alert(error );
     }
   };
 

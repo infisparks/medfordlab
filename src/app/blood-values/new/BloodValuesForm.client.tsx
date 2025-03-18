@@ -5,7 +5,7 @@ import {
   useForm,
   SubmitHandler,
   Path,
-  useWatch,
+ 
 } from "react-hook-form";
 import { useSearchParams, useRouter } from "next/navigation";
 import { database } from "../../../firebase";
@@ -24,10 +24,6 @@ import { FaCalculator } from "react-icons/fa";
 // -------------------------
 
 // AgeRangeItem remains unchanged
-interface AgeRangeItem {
-  rangeKey: string;
-  rangeValue: string;
-}
 
 // TestParameterValue now includes a "valueType" property and supports string or number values.
 interface TestParameterValue {
