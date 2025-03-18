@@ -97,8 +97,8 @@ export default function Dashboard() {
           );
         });
 
-        // Show only the most recent 5 on the dashboard
-        setPatients(sortedPatients.slice(0, 5));
+        // Remove the slice so that all patients are displayed
+        setPatients(sortedPatients);
 
         // Compute metrics
         const total = patientList.length;
@@ -108,7 +108,7 @@ export default function Dashboard() {
         const pending = total - completed;
         setMetrics({
           totalTests: total,
-          pendingReports: pending, // older logic for "pending"
+          pendingReports: pending,
           completedTests: completed,
         });
       }
@@ -217,16 +217,10 @@ export default function Dashboard() {
       <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
         <div className="flex items-center space-x-4">
           <div className="text-right">
-            <p className="text-sm font-medium text-gray-600">Dr. mudassir</p>
-            <p className="text-xs text-gray-400">Pathologist</p>
+            <p className="text-3xl font-medium text-blue-600">InfiCare</p>
+            {/* <p className="text-xs text-gray-400">Pathologist</p> */}
           </div>
-          <Image
-            src="/doctor-avatar.png"
-            alt="Profile"
-            width={40}
-            height={40}
-            className="h-10 w-10 rounded-full border-2 border-blue-100"
-          />
+         
         </div>
       </header>
 
@@ -365,6 +359,15 @@ export default function Dashboard() {
                           <ul className="list-disc pl-4">
                             {patient.bloodTests.map((test) => (
                               <li key={test.testId}>{test.testName}</li>
+                            ))}
+                          </ul>
+                        ) : patient.bloodtest &&
+                          Object.keys(patient.bloodtest).length > 0 ? (
+                          <ul className="list-disc pl-4">
+                            {Object.keys(patient.bloodtest || {}).map((key) => (
+                              <li key={key}>
+                                {patient.bloodtest?.[key].testName}
+                              </li>
                             ))}
                           </ul>
                         ) : (

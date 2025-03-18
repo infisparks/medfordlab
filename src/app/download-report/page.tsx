@@ -163,6 +163,9 @@ function DownloadReport() {
         const col3X = leftMargin + 2 * colWidth; // Range
         const col4X = leftMargin + 3 * colWidth; // Unit
 
+        // Line height used for each row
+        const lineHeight = 6;
+
         // Helper: Add first cover page
         const addCoverPage = async () => {
           try {
@@ -220,12 +223,167 @@ function DownloadReport() {
         // 4. Cover page
         await addCoverPage();
 
-        // 5. Loop over each test => new page
+        // This variable will track the current vertical position for each page
+        let yPosition = 0;
+
+        // Helper: Print a single parameter row with wrapped text if necessary
+        const printParameterRow = (param: Parameter) => {
+          // 1) Determine normal range string
+          let rangeStr = "";
+          if (typeof param.range === "string") {
+            rangeStr = param.range;
+          } else {
+            const arr = param.range[patientGender as keyof typeof param.range] || [];
+            for (const r of arr) {
+              const { lower, upper } = parseRangeKey(r.rangeKey);
+              if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
+                rangeStr = r.rangeValue;
+                break;
+              }
+            }
+            if (!rangeStr && arr.length > 0) {
+              rangeStr = arr[arr.length - 1].rangeValue;
+            }
+          }
+
+          // 2) Check if param.value is out of range if rangeStr is numeric like "4.0-7.0"
+          let isOutOfRange = false;
+          let outOfRangeLabel: "" | "H" | "L" = "";
+          const numericRange = parseNumericRangeString(rangeStr);
+          const numericValue = parseFloat(String(param.value));
+
+          if (numericRange && !isNaN(numericValue)) {
+            const { lower, upper } = numericRange;
+            if (numericValue < lower) {
+              isOutOfRange = true;
+              outOfRangeLabel = "L";
+            } else if (numericValue > upper) {
+              isOutOfRange = true;
+              outOfRangeLabel = "H";
+            }
+          }
+
+          const valStr = param.value !== "" ? String(param.value) + outOfRangeLabel : "-";
+
+          // Calculate wrapped lines for each cell
+          const maxTextWidth = colWidth - 4; // Adjust for padding
+          const nameLines = doc.splitTextToSize(param.name, maxTextWidth);
+          const valueLines = doc.splitTextToSize(valStr, maxTextWidth);
+          const rangeLines = doc.splitTextToSize(rangeStr, maxTextWidth);
+          const unitLines = doc.splitTextToSize(param.unit, maxTextWidth);
+
+          const maxLines = Math.max(
+            nameLines.length,
+            valueLines.length,
+            rangeLines.length,
+            unitLines.length
+          );
+
+          // Print each cell
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(9);
+          doc.setTextColor(0, 0, 0);
+          doc.text(nameLines, col1X + 2, yPosition + 4);
+
+          if (isOutOfRange) {
+            doc.setFont("helvetica", "bold");
+          }
+          doc.text(valueLines, col2X + colWidth / 2, yPosition + 4, {
+            align: "center",
+          });
+          doc.setFont("helvetica", "normal");
+
+          doc.text(rangeLines, col3X + colWidth / 2, yPosition + 4, {
+            align: "center",
+          });
+          doc.text(unitLines, col4X + colWidth / 2, yPosition + 4, {
+            align: "center",
+          });
+
+          yPosition += maxLines * lineHeight;
+
+          // 4) Subparameters (if any)
+          if (param.subparameters && param.subparameters.length > 0) {
+            for (const sp of param.subparameters) {
+              doc.setFontSize(8);
+              doc.setTextColor(80, 80, 80);
+
+              let subRangeStr = "";
+              if (typeof sp.range === "string") {
+                subRangeStr = sp.range;
+              } else {
+                const arr = sp.range[patientGender as keyof typeof sp.range] || [];
+                for (const sr of arr) {
+                  const { lower, upper } = parseRangeKey(sr.rangeKey);
+                  if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
+                    subRangeStr = sr.rangeValue;
+                    break;
+                  }
+                }
+                if (!subRangeStr && arr.length > 0) {
+                  subRangeStr = arr[arr.length - 1].rangeValue;
+                }
+              }
+
+              let isSubOutOfRange = false;
+              let subOutOfRangeLabel: "" | "H" | "L" = "";
+              const numericRange2 = parseNumericRangeString(subRangeStr);
+              const numericValue2 = parseFloat(String(sp.value));
+              if (numericRange2 && !isNaN(numericValue2)) {
+                const { lower, upper } = numericRange2;
+                if (numericValue2 < lower) {
+                  isSubOutOfRange = true;
+                  subOutOfRangeLabel = "L";
+                } else if (numericValue2 > upper) {
+                  isSubOutOfRange = true;
+                  subOutOfRangeLabel = "H";
+                }
+              }
+
+              const subValStr =
+                sp.value !== "" ? String(sp.value) + subOutOfRangeLabel : "-";
+              const subName = " - " + sp.name;
+
+              const subNameLines = doc.splitTextToSize(subName, maxTextWidth);
+              const subValueLines = doc.splitTextToSize(subValStr, maxTextWidth);
+              const subRangeLines = doc.splitTextToSize(subRangeStr, maxTextWidth);
+              const subUnitLines = doc.splitTextToSize(sp.unit, maxTextWidth);
+
+              const subMaxLines = Math.max(
+                subNameLines.length,
+                subValueLines.length,
+                subRangeLines.length,
+                subUnitLines.length
+              );
+
+              // Print subparameter row; note the name is slightly indented
+              doc.text(subNameLines, col1X + 4, yPosition + 4);
+              if (isSubOutOfRange) {
+                doc.setFont("helvetica", "bold");
+              }
+              doc.text(subValueLines, col2X + colWidth / 2, yPosition + 4, {
+                align: "center",
+              });
+              doc.setFont("helvetica", "normal");
+
+              doc.text(subRangeLines, col3X + colWidth / 2, yPosition + 4, {
+                align: "center",
+              });
+              doc.text(subUnitLines, col4X + colWidth / 2, yPosition + 4, {
+                align: "center",
+              });
+
+              yPosition += subMaxLines * lineHeight;
+            }
+          }
+        };
+
+        // 5. Loop over each test => new page per test
         const bloodtest = data.bloodtest;
         for (const testKey in bloodtest) {
           doc.addPage();
           await addLetterhead();
-          let yPosition = addHeader();
+          yPosition = addHeader();
 
           // Barcode on top-right
           const canvas = document.createElement("canvas");
@@ -253,7 +411,6 @@ function DownloadReport() {
           doc.setDrawColor(0, 51, 102);
           doc.setLineWidth(0.5);
           doc.line(leftMargin, 76, pageWidth - leftMargin, 76);
-          yPosition += 0;
 
           // Test name (centered, bigger, bold)
           doc.setFont("helvetica", "bold");
@@ -270,7 +427,6 @@ function DownloadReport() {
           doc.setFillColor(0, 51, 102);
           doc.rect(leftMargin, yPosition, totalTableWidth, 7, "F");
           doc.setTextColor(255, 255, 255);
-
           doc.text("PARAMETER", col1X + 2, yPosition + 5);
           doc.text("VALUE", col2X + colWidth / 2, yPosition + 5, {
             align: "center",
@@ -299,152 +455,26 @@ function DownloadReport() {
             (p) => !subheadingParamNames.includes(p.name)
           );
 
-          // Helper: Print a single parameter row
-          const printParameterRow = (param: Parameter) => {
-            // 1) Determine normal range string
-            let rangeStr = "";
-            if (typeof param.range === "string") {
-              rangeStr = param.range;
-            } else {
-              // param.range is {male: AgeRangeItem[], female: AgeRangeItem[]}
-              const arr = param.range[patientGender as keyof typeof param.range] || [];
-              for (const r of arr) {
-                const { lower, upper } = parseRangeKey(r.rangeKey);
-                if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
-                  rangeStr = r.rangeValue;
-                  break;
-                }
-              }
-              if (!rangeStr && arr.length > 0) {
-                rangeStr = arr[arr.length - 1].rangeValue;
-              }
-            }
-
-            // 2) Check if param.value is out of range if rangeStr is numeric like "4.0-7.0"
-            let isOutOfRange = false;
-            let outOfRangeLabel: "" | "H" | "L" = "";
-            const numericRange = parseNumericRangeString(rangeStr);
-            const numericValue = parseFloat(String(param.value));
-
-            if (numericRange && !isNaN(numericValue)) {
-              const { lower, upper } = numericRange;
-              if (numericValue < lower) {
-                isOutOfRange = true;
-                outOfRangeLabel = "L";
-              } else if (numericValue > upper) {
-                isOutOfRange = true;
-                outOfRangeLabel = "H";
-              }
-            }
-
-            // 3) Print row
-            // If out of range => bold the value
-            doc.setFont("helvetica", "normal");
-            doc.setFontSize(9);
-            doc.setTextColor(0, 0, 0);
-
-            doc.text(param.name, col1X + 2, yPosition + 4);
-            if (isOutOfRange) {
-              doc.setFont("helvetica", "bold");
-            }
-            const valStr = param.value !== "" ? String(param.value) + outOfRangeLabel : "-";
-            doc.text(valStr, col2X + colWidth / 2, yPosition + 4, {
-              align: "center",
-            });
-            // revert font to normal after printing
-            doc.setFont("helvetica", "normal");
-
-            doc.text(rangeStr, col3X + colWidth / 2, yPosition + 4, {
-              align: "center",
-            });
-            doc.text(param.unit, col4X + colWidth / 2, yPosition + 4, {
-              align: "center",
-            });
-
-            yPosition += 6;
-
-            // 4) Subparameters
-            if (param.subparameters && param.subparameters.length > 0) {
-              for (const sp of param.subparameters) {
-                doc.setFontSize(8);
-                doc.setTextColor(80, 80, 80);
-
-                // parse sub range similarly
-                let subRangeStr = "";
-                if (typeof sp.range === "string") {
-                  subRangeStr = sp.range;
-                } else if (sp.range) {
-                  const arr = sp.range[patientGender as keyof typeof sp.range] || [];
-                  for (const sr of arr) {
-                    const { lower, upper } = parseRangeKey(sr.rangeKey);
-                    if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
-                      subRangeStr = sr.rangeValue;
-                      break;
-                    }
-                  }
-                  if (!subRangeStr && arr.length > 0) {
-                    subRangeStr = arr[arr.length - 1].rangeValue;
-                  }
-                }
-
-                // check out-of-range
-                let isSubOutOfRange = false;
-                let subOutOfRangeLabel: "" | "H" | "L" = "";
-                const numericRange2 = parseNumericRangeString(subRangeStr);
-                const numericValue2 = parseFloat(String(sp.value));
-                if (numericRange2 && !isNaN(numericValue2)) {
-                  const { lower, upper } = numericRange2;
-                  if (numericValue2 < lower) {
-                    isSubOutOfRange = true;
-                    subOutOfRangeLabel = "L";
-                  } else if (numericValue2 > upper) {
-                    isSubOutOfRange = true;
-                    subOutOfRangeLabel = "H";
-                  }
-                }
-
-                doc.text(" - " + sp.name, col1X + 4, yPosition + 4);
-                if (isSubOutOfRange) {
-                  doc.setFont("helvetica", "bold");
-                }
-                const subValStr =
-                  sp.value !== "" ? String(sp.value) + subOutOfRangeLabel : "-";
-                doc.text(subValStr, col2X + colWidth / 2, yPosition + 4, {
-                  align: "center",
-                });
-                // revert to normal font after
-                doc.setFont("helvetica", "normal");
-                doc.text(subRangeStr, col3X + colWidth / 2, yPosition + 4, {
-                  align: "center",
-                });
-                doc.text(sp.unit, col4X + colWidth / 2, yPosition + 4, {
-                  align: "center",
-                });
-                yPosition += 7;
-              }
-            }
-          };
-
           // 6. Print global parameters (no heading)
           for (const gp of globalParams) {
             printParameterRow(gp);
           }
 
-          // 7. Print subheadings
+          // 7. Print subheadings (if any)
           if (subheadings.length > 0) {
             for (const sh of subheadings) {
               const subParams = parameters.filter((p) =>
                 sh.parameterNames.includes(p.name)
               );
               if (subParams.length > 0) {
-                // subheading label
+                // Subheading label
                 doc.setFont("helvetica", "bold");
                 doc.setFontSize(10);
                 doc.setTextColor(0, 51, 102);
                 doc.text(sh.title, col1X, yPosition + 5);
                 yPosition += 6;
 
-                // print subheading parameters
+                // Print each subheading parameter
                 for (const sp of subParams) {
                   printParameterRow(sp);
                 }

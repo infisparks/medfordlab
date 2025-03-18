@@ -213,11 +213,11 @@ const Sidebar: React.FC<SidebarProps> = ({ open, role }) => {
           <div className="flex items-center px-2">
             <div className="flex-shrink-0">
               <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center">
-                <span className="text-xs text-slate-300">JD</span>
+                <span className="text-xs text-slate-300">IC</span>
               </div>
             </div>
             <div className="ml-3">
-              <p className="text-sm font-medium text-slate-200">John Doe</p>
+              <p className="text-sm font-medium text-slate-200">InfiCare</p>
               <p className="text-xs text-slate-400">
                 {role === "admin"
                   ? "Administrator"

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { database } from "../../firebase"; // adjust path if needed
 import { ref, get, update, remove, push, set } from "firebase/database";
 import {
@@ -20,6 +20,9 @@ import {
   FaSave,
   FaPlus,
   FaPlusCircle,
+  FaCopy,
+  FaSyncAlt,
+  FaCode,
 } from "react-icons/fa";
 
 // -----------------------------
@@ -33,6 +36,7 @@ export interface AgeRangeItem {
 export interface Parameter {
   name: string;
   unit: string;
+  valueType: "text" | "number"; // New property to indicate accepted value type
   range: {
     male: AgeRangeItem[];
     female: AgeRangeItem[];
@@ -44,18 +48,13 @@ export interface Subheading {
   parameterNames: string[];
 }
 
-export interface Subpricing {
-  subpricingName: string;
-  price: number;
-  includedParameters: string[];
-}
-
+// Added isOutsource flag
 export interface BloodTestFormInputs {
   testName: string;
   price: number;
   parameters: Parameter[];
   subheadings: Subheading[];
-  subpricing: Subpricing[];
+  isOutsource?: boolean;
 }
 
 export interface TestData extends BloodTestFormInputs {
@@ -110,6 +109,11 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
     index.toString(),
     "unit",
   ]);
+  const paramValueTypeErr = getFieldErrorMessage(errors, [
+    "parameters",
+    index.toString(),
+    "valueType",
+  ]);
 
   return (
     <div className="border p-4 rounded mb-4 bg-gray-50">
@@ -138,10 +142,26 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
         <label className="block text-xs">Unit</label>
         <input
           type="text"
-          {...register(`parameters.${index}.unit`, { required: "Required" })}
+          {...register(`parameters.${index}.unit`)}
           className="w-full border rounded px-2 py-1"
         />
         {paramUnitErr && <p className="text-red-500 text-xs">{paramUnitErr}</p>}
+      </div>
+
+      {/* Value Type Selection */}
+      <div className="mt-2">
+        <label className="block text-xs">Value Type</label>
+        <select
+          {...register(`parameters.${index}.valueType`, { required: "Required" })}
+          className="w-full border rounded px-2 py-1"
+        >
+          <option value="">Select Value Type</option>
+          <option value="text">Text</option>
+          <option value="number">Number</option>
+        </select>
+        {paramValueTypeErr && (
+          <p className="text-red-500 text-xs">{paramValueTypeErr}</p>
+        )}
       </div>
 
       {/* Male Ranges */}
@@ -168,18 +188,12 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
             <div key={field.id} className="flex items-center space-x-2 mt-1">
               <input
                 type="text"
-                {...register(
-                  `parameters.${index}.range.male.${mIndex}.rangeKey`,
-                  { required: "Required" }
-                )}
+                {...register(`parameters.${index}.range.male.${mIndex}.rangeKey`)}
                 className="w-1/2 border rounded px-2 py-1"
               />
               <input
                 type="text"
-                {...register(
-                  `parameters.${index}.range.male.${mIndex}.rangeValue`,
-                  { required: "Required" }
-                )}
+                {...register(`parameters.${index}.range.male.${mIndex}.rangeValue`)}
                 className="w-1/2 border rounded px-2 py-1"
               />
               <button
@@ -227,18 +241,12 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
             <div key={field.id} className="flex items-center space-x-2 mt-1">
               <input
                 type="text"
-                {...register(
-                  `parameters.${index}.range.female.${fIndex}.rangeKey`,
-                  { required: "Required" }
-                )}
+                {...register(`parameters.${index}.range.female.${fIndex}.rangeKey`)}
                 className="w-1/2 border rounded px-2 py-1"
               />
               <input
                 type="text"
-                {...register(
-                  `parameters.${index}.range.female.${fIndex}.rangeValue`,
-                  { required: "Required" }
-                )}
+                {...register(`parameters.${index}.range.female.${fIndex}.rangeValue`)}
                 className="w-1/2 border rounded px-2 py-1"
               />
               <button
@@ -300,14 +308,11 @@ const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
     "title",
   ]);
 
-  // Called on parameter select
+  // Called on parameter select to avoid duplicate usage across subheadings
   const handleParameterChange = (pIndex: number, newValue: string) => {
     if (!newValue) return;
-    // Gather *all* subheading param names across all subheadings
     const allSubheadings = getValues("subheadings") || [];
-    // The parameter the user changed
     for (let shIndex = 0; shIndex < allSubheadings.length; shIndex++) {
-      // skip the one we're editing
       if (shIndex === index) continue;
       const paramNames = allSubheadings[shIndex]?.parameterNames || [];
       if (paramNames.includes(newValue)) {
@@ -362,9 +367,8 @@ const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
               <select
                 {...register(`subheadings.${index}.parameterNames.${pIndex}`, {
                   required: "Required",
-                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
-                    handleParameterChange(pIndex, e.target.value);
-                  },
+                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) =>
+                    handleParameterChange(pIndex, e.target.value),
                 })}
                 className="w-full border rounded px-2 py-1"
               >
@@ -401,173 +405,10 @@ const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
 };
 
 // -----------------------------
-// SUBPRICING EDITOR
-// -----------------------------
-interface SubpricingEditorProps {
-  index: number;
-  control: any;
-  register: any;
-  errors: FieldErrorsImpl<any>;
-  remove: (index: number) => void;
-  getValues: UseFormGetValues<BloodTestFormInputs>;
-  setValue: UseFormSetValue<BloodTestFormInputs>;
-}
-
-const SubpricingEditor: React.FC<SubpricingEditorProps> = ({
-  index,
-  control,
-  register,
-  errors,
-  remove,
-  getValues,
-  setValue,
-}) => {
-  const includedParamsArray = useFieldArray({
-    control,
-    name: `subpricing.${index}.includedParameters`,
-  });
-  const globalParameters = useWatch({ control, name: "parameters" }) || [];
-
-  const subpricingNameErr = getFieldErrorMessage(errors, [
-    "subpricing",
-    index.toString(),
-    "subpricingName",
-  ]);
-  const subpricingPriceErr = getFieldErrorMessage(errors, [
-    "subpricing",
-    index.toString(),
-    "price",
-  ]);
-
-  const handleIncludedParamChange = (incIndex: number, newVal: string) => {
-    if (!newVal) return;
-    // Check across ALL subpricing objects
-    const allSubpricing = getValues("subpricing") || [];
-    for (let spIndex = 0; spIndex < allSubpricing.length; spIndex++) {
-      if (spIndex === index) continue; // skip current
-      const paramNames = allSubpricing[spIndex]?.includedParameters || [];
-      if (paramNames.includes(newVal)) {
-        alert(
-          `Parameter "${newVal}" is already used in a different subpricing block!`
-        );
-        setValue(
-          `subpricing.${index}.includedParameters.${incIndex}`,
-          ""
-        );
-        return;
-      }
-    }
-
-    // Auto-fill subpricingName if it's empty and this is the only param
-    const incParams = getValues(`subpricing.${index}.includedParameters`);
-    const nonEmpty = incParams.filter((p) => p).length;
-    const currentName = getValues(`subpricing.${index}.subpricingName`);
-    if (!currentName && nonEmpty === 1) {
-      setValue(`subpricing.${index}.subpricingName`, newVal);
-    }
-  };
-
-  return (
-    <div className="border p-4 rounded mb-4 bg-gray-50">
-      <div className="flex justify-between items-center">
-        <h3 className="text-sm font-semibold">Subpricing #{index + 1}</h3>
-        <button
-          type="button"
-          onClick={() => remove(index)}
-          className="text-red-500 hover:text-red-700"
-        >
-          <FaTrash />
-        </button>
-      </div>
-
-      {/* subpricingName */}
-      <div className="mt-2">
-        <label className="block text-xs">Subpricing Name</label>
-        <input
-          type="text"
-          {...register(`subpricing.${index}.subpricingName`, {
-            required: "Required",
-          })}
-          className="w-full border rounded px-2 py-1"
-        />
-        {subpricingNameErr && (
-          <p className="text-red-500 text-xs">{subpricingNameErr}</p>
-        )}
-      </div>
-
-      {/* price */}
-      <div className="mt-2">
-        <label className="block text-xs">Subpricing Price (Rs.)</label>
-        <input
-          type="number"
-          step="0.01"
-          {...register(`subpricing.${index}.price`, {
-            required: "Required",
-            valueAsNumber: true,
-          })}
-          className="w-full border rounded px-2 py-1"
-        />
-        {subpricingPriceErr && (
-          <p className="text-red-500 text-xs">{subpricingPriceErr}</p>
-        )}
-      </div>
-
-      {/* includedParameters */}
-      <div className="mt-2">
-        <h4 className="text-xs font-medium">Included Parameters</h4>
-        {includedParamsArray.fields.map((field, incIndex) => {
-          const incParamErr = getFieldErrorMessage(errors, [
-            "subpricing",
-            index.toString(),
-            "includedParameters",
-            incIndex.toString(),
-          ]);
-          return (
-            <div key={field.id} className="flex items-center space-x-2 mt-1">
-              <select
-                {...register(`subpricing.${index}.includedParameters.${incIndex}`, {
-                  required: "Required",
-                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => handleIncludedParamChange(incIndex, e.target.value),
-                })}
-                className="w-full border rounded px-2 py-1"
-              >
-                <option value="">Select Parameter</option>
-                {globalParameters.map((param: { name: string }, pIdx: number) => (
-                  <option key={pIdx} value={param.name}>
-                    {param.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => includedParamsArray.remove(incIndex)}
-                className="text-red-500 hover:text-red-700"
-              >
-                <FaTrash />
-              </button>
-              {incParamErr && (
-                <p className="text-red-500 text-xs w-full">{incParamErr}</p>
-              )}
-            </div>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => includedParamsArray.append("")}
-          className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
-        >
-          <FaPlus className="mr-1" /> Add Parameter
-        </button>
-      </div>
-    </div>
-  );
-};
-
-// -----------------------------
-// TEST MODAL (Create & Edit)
+// TEST MODAL (Create & Edit) with JSON Editor Mode
 // -----------------------------
 interface TestModalProps {
-  testData?: TestData; 
+  testData?: TestData;
   onClose: () => void;
   onTestUpdated: () => void;
 }
@@ -577,30 +418,34 @@ const TestModal: React.FC<TestModalProps> = ({
   onClose,
   onTestUpdated,
 }) => {
-  const defaultValues: BloodTestFormInputs = testData
-    ? {
-        testName: testData.testName,
-        price: testData.price,
-        parameters: testData.parameters,
-        subheadings: testData.subheadings,
-        subpricing: testData.subpricing || [],
-      }
-    : {
-        testName: "",
-        price: 0,
-        parameters: [
-          {
-            name: "",
-            unit: "",
-            range: {
-              male: [{ rangeKey: "", rangeValue: "" }],
-              female: [{ rangeKey: "", rangeValue: "" }],
+  // Memoize default values so that they do not trigger re-renders
+  const defaultValues = useMemo<BloodTestFormInputs>(() => {
+    return testData
+      ? {
+          testName: testData.testName,
+          price: testData.price,
+          parameters: testData.parameters,
+          subheadings: testData.subheadings,
+          isOutsource: testData.isOutsource || false,
+        }
+      : {
+          testName: "",
+          price: 0,
+          parameters: [
+            {
+              name: "",
+              unit: "",
+              valueType: "text", // default valueType
+              range: {
+                male: [{ rangeKey: "", rangeValue: "" }],
+                female: [{ rangeKey: "", rangeValue: "" }],
+              },
             },
-          },
-        ],
-        subheadings: [],
-        subpricing: [],
-      };
+          ],
+          subheadings: [],
+          isOutsource: false,
+        };
+  }, [testData]);
 
   const {
     register,
@@ -609,14 +454,23 @@ const TestModal: React.FC<TestModalProps> = ({
     formState: { errors },
     getValues,
     setValue,
+    reset,
   } = useForm<BloodTestFormInputs>({ defaultValues });
 
   const paramFields = useFieldArray({ control, name: "parameters" });
   const subheadingFields = useFieldArray({ control, name: "subheadings" });
-  const subpricingFields = useFieldArray({ control, name: "subpricing" });
 
   const testNameErr = getFieldErrorMessage(errors, ["testName"]);
   const testPriceErr = getFieldErrorMessage(errors, ["price"]);
+
+  // State to toggle between form mode and JSON editor mode
+  const [isJsonEditor, setIsJsonEditor] = useState(false);
+  const [jsonContent, setJsonContent] = useState("");
+
+  // Initialize JSON content only when defaultValues change
+  useEffect(() => {
+    setJsonContent(JSON.stringify(defaultValues, null, 2));
+  }, [defaultValues]);
 
   const onSubmit: SubmitHandler<BloodTestFormInputs> = async (data) => {
     try {
@@ -661,6 +515,45 @@ const TestModal: React.FC<TestModalProps> = ({
     }
   };
 
+  // Handler for saving changes when in JSON mode
+  const handleSaveJson = async () => {
+    try {
+      const parsedData = JSON.parse(jsonContent);
+      if (testData) {
+        const testRef = ref(database, `bloodTests/${testData.key}`);
+        await update(testRef, {
+          ...parsedData,
+          updatedAt: new Date().toISOString(),
+        });
+        alert("Test updated successfully!");
+      } else {
+        const testsRef = ref(database, "bloodTests");
+        const newTestRef = push(testsRef);
+        await set(newTestRef, {
+          ...parsedData,
+          createdAt: new Date().toISOString(),
+        });
+        alert("Test created successfully!");
+      }
+      onTestUpdated();
+      onClose();
+    } catch (error) {
+      console.error("Error saving JSON:", error);
+      alert("Invalid JSON. Please check your input.");
+    }
+  };
+
+  // Toggle from JSON editor back to form view.
+  const handleSwitchToForm = () => {
+    try {
+      const parsedData = JSON.parse(jsonContent);
+      reset(parsedData);
+      setIsJsonEditor(false);
+    } catch (error) {
+      alert("Invalid JSON. Cannot switch to form view.");
+    }
+  };
+
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
       <div className="bg-white p-6 rounded-lg w-full max-w-3xl max-h-[85vh] overflow-y-auto">
@@ -681,153 +574,178 @@ const TestModal: React.FC<TestModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          {/* Test Name */}
-          <div>
-            <label className="block text-sm font-medium">Test Name</label>
-            <input
-              type="text"
-              {...register("testName", { required: "Test name is required" })}
-              className="w-full border rounded px-3 py-2"
-            />
-            {testNameErr && <p className="text-red-500 text-xs">{testNameErr}</p>}
-          </div>
+        {/* Toggle Editor Mode */}
+        <div className="flex justify-end mb-4">
+          {isJsonEditor ? (
+            <button
+              onClick={handleSwitchToForm}
+              className="inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50 mr-2"
+            >
+              <FaSyncAlt className="mr-1" /> Switch to Form Editor
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                // Update JSON content from current form values and switch mode
+                setJsonContent(JSON.stringify(getValues(), null, 2));
+                setIsJsonEditor(true);
+              }}
+              className="inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50 mr-2"
+            >
+              <FaCode className="mr-1" /> Switch to JSON Editor
+            </button>
+          )}
+          {isJsonEditor && (
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(jsonContent);
+                alert("JSON copied to clipboard!");
+              }}
+              className="inline-flex items-center px-3 py-1 border border-green-600 text-green-600 rounded hover:bg-green-50"
+            >
+              <FaCopy className="mr-1" /> Copy JSON
+            </button>
+          )}
+        </div>
 
-          {/* Price */}
+        {isJsonEditor ? (
+          // JSON Editor Mode
           <div>
-            <label className="block text-sm font-medium">
-              Price (Rs.)
-              <FaRupeeSign className="inline-block ml-1 text-green-600" />
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              {...register("price", {
-                required: "Price is required",
-                valueAsNumber: true,
-              })}
-              className="w-full border rounded px-3 py-2"
+            <textarea
+              value={jsonContent}
+              onChange={(e) => setJsonContent(e.target.value)}
+              className="w-full h-80 border rounded px-3 py-2 font-mono"
             />
-            {testPriceErr && <p className="text-red-500 text-xs">{testPriceErr}</p>}
+            <div className="flex justify-end mt-4 space-x-2">
+              <button
+                onClick={handleSaveJson}
+                className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                <FaSave className="mr-1" /> Save JSON
+              </button>
+            </div>
           </div>
-
-          {/* Parameters */}
-          <div>
-            <label className="block text-sm font-medium">Global Parameters</label>
-            {paramFields.fields.map((field, pIndex) => (
-              <ParameterEditor
-                key={field.id}
-                index={pIndex}
-                control={control}
-                register={register}
-                errors={errors as FieldErrorsImpl<any>}
-                remove={paramFields.remove}
+        ) : (
+          // Form Mode
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            {/* Test Name */}
+            <div>
+              <label className="block text-sm font-medium">Test Name</label>
+              <input
+                type="text"
+                {...register("testName", { required: "Test name is required" })}
+                className="w-full border rounded px-3 py-2"
               />
-            ))}
-            <button
-              type="button"
-              onClick={() =>
-                paramFields.append({
-                  name: "",
-                  unit: "",
-                  range: {
-                    male: [{ rangeKey: "", rangeValue: "" }],
-                    female: [{ rangeKey: "", rangeValue: "" }],
-                  },
-                })
-              }
-              className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
-            >
-              <FaPlus className="mr-1" /> Add Global Parameter
-            </button>
-          </div>
+              {testNameErr && <p className="text-red-500 text-xs">{testNameErr}</p>}
+            </div>
 
-          {/* Subheadings */}
-          <div>
-            <label className="block text-sm font-medium">Subheadings</label>
-            <div className="space-y-4">
-              {subheadingFields.fields.map((field, sIndex) => (
-                <SubheadingEditor
+            {/* Price */}
+            <div>
+              <label className="block text-sm font-medium">
+                Price (Rs.)
+                <FaRupeeSign className="inline-block ml-1 text-green-600" />
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                {...register("price", {
+                  required: "Price is required",
+                  valueAsNumber: true,
+                })}
+                className="w-full border rounded px-3 py-2"
+              />
+              {testPriceErr && <p className="text-red-500 text-xs">{testPriceErr}</p>}
+            </div>
+
+            {/* Outsource Checkbox */}
+            <div>
+              <label className="block text-sm font-medium">
+                Outsource Test?
+              </label>
+              <input type="checkbox" {...register("isOutsource")} className="ml-2" />
+            </div>
+
+            {/* Parameters */}
+            <div>
+              <label className="block text-sm font-medium">Global Parameters</label>
+              {paramFields.fields.map((field, pIndex) => (
+                <ParameterEditor
                   key={field.id}
-                  index={sIndex}
+                  index={pIndex}
                   control={control}
                   register={register}
                   errors={errors as FieldErrorsImpl<any>}
-                  remove={subheadingFields.remove}
-                  getValues={getValues}
-                  setValue={setValue}
+                  remove={paramFields.remove}
                 />
               ))}
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                subheadingFields.append({ title: "", parameterNames: [] })
-              }
-              className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
-            >
-              <FaPlus className="mr-1" /> Add Subheading
-            </button>
-          </div>
-
-          {/* Subpricing */}
-          <div>
-            <label className="block text-sm font-medium">
-              Parameter-Based Pricing (Optional)
-            </label>
-            <p className="text-xs text-gray-500 mb-2">
-              If subpricing #1 uses   Hemoglobin,  no other subpricing can use  Hemoglobin. 
-              If only one parameter is chosen, subpricingName auto-fills. You can still edit it.
-            </p>
-            <div className="space-y-4">
-              {subpricingFields.fields.map((field, spIndex) => (
-                <SubpricingEditor
-                  key={field.id}
-                  index={spIndex}
-                  control={control}
-                  register={register}
-                  errors={errors as FieldErrorsImpl<any>}
-                  remove={subpricingFields.remove}
-                  getValues={getValues}
-                  setValue={setValue}
-                />
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                subpricingFields.append({
-                  subpricingName: "",
-                  price: 0,
-                  includedParameters: [],
-                })
-              }
-              className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
-            >
-              <FaPlus className="mr-1" /> Add Subpricing
-            </button>
-          </div>
-
-          {/* Buttons */}
-          <div className="flex justify-between items-center mt-4">
-            {testData && (
               <button
                 type="button"
-                onClick={handleDelete}
-                className="inline-flex items-center px-3 py-1 border border-red-600 text-red-600 rounded hover:bg-red-50"
+                onClick={() =>
+                  paramFields.append({
+                    name: "",
+                    unit: "",
+                    valueType: "text",
+                    range: {
+                      male: [{ rangeKey: "", rangeValue: "" }],
+                      female: [{ rangeKey: "", rangeValue: "" }],
+                    },
+                  })
+                }
+                className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
               >
-                <FaTrash className="mr-1" /> Delete Test
+                <FaPlus className="mr-1" /> Add Global Parameter
               </button>
-            )}
-            <button
-              type="submit"
-              className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-            >
-              <FaSave className="mr-1" />
-              {testData ? "Save Changes" : "Create Test"}
-            </button>
-          </div>
-        </form>
+            </div>
+
+            {/* Subheadings */}
+            <div>
+              <label className="block text-sm font-medium">Subheadings</label>
+              <div className="space-y-4">
+                {subheadingFields.fields.map((field, sIndex) => (
+                  <SubheadingEditor
+                    key={field.id}
+                    index={sIndex}
+                    control={control}
+                    register={register}
+                    errors={errors as FieldErrorsImpl<any>}
+                    remove={subheadingFields.remove}
+                    getValues={getValues}
+                    setValue={setValue}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  subheadingFields.append({ title: "", parameterNames: [] })
+                }
+                className="mt-2 inline-flex items-center px-3 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+              >
+                <FaPlus className="mr-1" /> Add Subheading
+              </button>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex justify-between items-center mt-4">
+              {testData && (
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  className="inline-flex items-center px-3 py-1 border border-red-600 text-red-600 rounded hover:bg-red-50"
+                >
+                  <FaTrash className="mr-1" /> Delete Test
+                </button>
+              )}
+              <button
+                type="submit"
+                className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                <FaSave className="mr-1" />
+                {testData ? "Save Changes" : "Create Test"}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -900,7 +818,6 @@ const ManageBloodTests: React.FC = () => {
               <th className="border px-4 py-2">Price (Rs.)</th>
               <th className="border px-4 py-2">Parameters</th>
               <th className="border px-4 py-2">Subheadings</th>
-              <th className="border px-4 py-2">Subpricing</th>
               <th className="border px-4 py-2">Created At</th>
               <th className="border px-4 py-2">Actions</th>
             </tr>
@@ -908,16 +825,20 @@ const ManageBloodTests: React.FC = () => {
           <tbody>
             {tests.map((t) => (
               <tr key={t.key} className="hover:bg-gray-50">
-                <td className="border px-4 py-2">{t.testName}</td>
+                <td className="border px-4 py-2">
+                  {t.testName}
+                  {t.isOutsource && (
+                    <span className="ml-2 inline-block px-2 py-1 text-xs font-medium bg-yellow-200 text-yellow-800 rounded">
+                      Outsource Test
+                    </span>
+                  )}
+                </td>
                 <td className="border px-4 py-2">₹{t.price}</td>
                 <td className="border px-4 py-2">
                   {t.parameters?.length || 0} parameters
                 </td>
                 <td className="border px-4 py-2">
                   {t.subheadings?.length || 0} subheadings
-                </td>
-                <td className="border px-4 py-2">
-                  {t.subpricing?.length || 0} subpricing
                 </td>
                 <td className="border px-4 py-2">
                   {new Date(t.createdAt).toLocaleDateString()}
@@ -935,7 +856,7 @@ const ManageBloodTests: React.FC = () => {
             {tests.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={6}
                   className="border px-4 py-6 text-center text-gray-500"
                 >
                   No blood tests found.

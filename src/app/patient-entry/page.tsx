@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import { useForm, useFieldArray,   SubmitHandler } from "react-hook-form";
+import { useForm, useFieldArray, SubmitHandler } from "react-hook-form";
 import { database, auth, medfordFamilyDatabase } from "../../firebase";
 import { ref, push, set, get } from "firebase/database";
 import { UserCircleIcon, PhoneIcon } from "@heroicons/react/24/outline";
@@ -9,17 +9,11 @@ import { UserCircleIcon, PhoneIcon } from "@heroicons/react/24/outline";
 // -------------------------
 // Interfaces
 // -------------------------
-interface Parameter {
-  name: string;
-  unit: string;
-  // any other fields if needed
-}
-
 interface BloodTestSelection {
   testId: string;
   testName: string;
   price: number;
-  selectedParameters?: string[];
+  testType: string;
 }
 
 interface IFormInput {
@@ -52,83 +46,6 @@ interface FamilyPatient {
   contact: string;
   patientId: string;
 }
-
-// -------------------------
-// Parameter Selection Modal
-// -------------------------
-interface ParameterSelectionModalProps {
-  show: boolean;
-  availableParameters: Parameter[];
-  initialSelection: string[];
-  onSave: (selected: string[]) => void;
-  onClose: () => void;
-}
-
-const ParameterSelectionModal: React.FC<ParameterSelectionModalProps> = ({
-  show,
-  availableParameters,
-  initialSelection,
-  onSave,
-  onClose,
-}) => {
-  const [selected, setSelected] = useState<string[]>(initialSelection);
-
-  useEffect(() => {
-    setSelected(initialSelection);
-  }, [initialSelection]);
-
-  const toggleSelection = (paramName: string) => {
-    if (selected.includes(paramName)) {
-      setSelected(selected.filter((name) => name !== paramName));
-    } else {
-      setSelected([...selected, paramName]);
-    }
-  };
-
-  if (!show) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black opacity-50"
-        onClick={onClose}
-      />
-      <div className="bg-white rounded-lg p-6 z-10 w-full max-w-sm mx-4">
-        <h3 className="text-lg font-semibold mb-4 text-gray-800">
-          Select Specific Parameters
-        </h3>
-        <div className="max-h-60 overflow-y-auto mb-4 space-y-2">
-          {availableParameters.map((param, index) => (
-            <div key={index} className="flex items-center">
-              <input
-                type="checkbox"
-                checked={selected.includes(param.name)}
-                onChange={() => toggleSelection(param.name)}
-                className="mr-2"
-              />
-              <label className="text-gray-700">{param.name}</label>
-            </div>
-          ))}
-        </div>
-        <div className="flex justify-end space-x-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 border rounded text-gray-600 hover:bg-gray-100"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => onSave(selected)}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 // -------------------------
 // Main Patient Entry Page
@@ -164,7 +81,9 @@ const PatientEntryPage: React.FC = () => {
       email: "",
       doctorName: "",
       doctorId: "",
-      bloodTests: [{ testId: "", testName: "", price: 0 }],
+      bloodTests: [
+        { testId: "", testName: "", price: 0, testType: "inhospital" },
+      ],
       discountPercentage: 0,
       amountPaid: 0,
       paymentMode: "online",
@@ -173,9 +92,11 @@ const PatientEntryPage: React.FC = () => {
   });
 
   // 3) Data & States
-  const [doctorList, setDoctorList] = useState<{ id: string; doctorName: string }[]>([]);
+  const [doctorList, setDoctorList] = useState<
+    { id: string; doctorName: string }[]
+  >([]);
   const [availableBloodTests, setAvailableBloodTests] = useState<
-    { id: string; testName: string; price: number; parameters?: Parameter[] }[]
+    { id: string; testName: string; price: number; type: string }[]
   >([]);
   const [availablePackages, setAvailablePackages] = useState<PackageType[]>([]);
   const [familyPatients, setFamilyPatients] = useState<FamilyPatient[]>([]);
@@ -205,7 +126,7 @@ const PatientEntryPage: React.FC = () => {
     fetchDoctorList();
   }, []);
 
-  // 5) Fetch Blood Tests with parameters
+  // 5) Fetch Blood Tests (noting the DB property is "type")
   useEffect(() => {
     const fetchBloodTests = async () => {
       try {
@@ -217,7 +138,8 @@ const PatientEntryPage: React.FC = () => {
             id: key,
             testName: data[key].testName,
             price: Number(data[key].price),
-            parameters: data[key].parameters || [],
+            // If there's a "type" property in your DB that can be "outsource" or "inhospital"
+            type: data[key].type || "inhospital",
           }));
           setAvailableBloodTests(testsArray);
         }
@@ -302,7 +224,10 @@ const PatientEntryPage: React.FC = () => {
   const discountPercentage = watch("discountPercentage");
   const amountPaid = watch("amountPaid");
 
-  const totalAmount = bloodTests.reduce((sum, test) => sum + Number(test.price || 0), 0);
+  const totalAmount = bloodTests.reduce(
+    (sum, test) => sum + Number(test.price || 0),
+    0
+  );
   const discountValue = totalAmount * (Number(discountPercentage) / 100);
   const remainingAmount = totalAmount - discountValue - Number(amountPaid);
 
@@ -316,32 +241,7 @@ const PatientEntryPage: React.FC = () => {
     return result;
   };
 
-  // 12) Parameter Modal state
-  const [modalVisible, setModalVisible] = useState(false);
-  const [currentTestIndex, setCurrentTestIndex] = useState<number | null>(null);
-
-  const openParameterModal = (index: number) => {
-    setCurrentTestIndex(index);
-    setModalVisible(true);
-  };
-
-  const handleModalSave = (selected: string[]) => {
-    if (currentTestIndex !== null) {
-      setValue(`bloodTests.${currentTestIndex}.selectedParameters`, selected);
-    }
-    setModalVisible(false);
-    setCurrentTestIndex(null);
-  };
-
-  const getTestParameters = (testId: string): Parameter[] => {
-    const test = availableBloodTests.find((t) => t.id === testId);
-    if (test?.parameters) {
-      return test.parameters;
-    }
-    return [];
-  };
-
-  // 13) onSubmit
+  // 12) onSubmit
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     try {
       const userEmail = currentUser?.email || "Unknown User";
@@ -351,7 +251,8 @@ const PatientEntryPage: React.FC = () => {
         data.patientId = patientId;
       }
 
-      const multiplier = data.dayType === "year" ? 360 : data.dayType === "month" ? 30 : 1;
+      const multiplier =
+        data.dayType === "year" ? 360 : data.dayType === "month" ? 30 : 1;
       const total_day = data.age * multiplier;
 
       // Insert new patient record
@@ -375,7 +276,9 @@ const PatientEntryPage: React.FC = () => {
       // Construct WhatsApp message
       const testNames = data.bloodTests.map((test) => test.testName).join(", ");
       const discountLine =
-        data.discountPercentage > 0 ? `Discount: ${data.discountPercentage}%\n` : "";
+        data.discountPercentage > 0
+          ? `Discount: ${data.discountPercentage}%\n`
+          : "";
       const message = `Dear ${data.name},\n
 Thank you for choosing our services. We have received your request for the following test(s): ${testNames}.\n
 Total Amount: Rs. ${totalAmount.toFixed(2)}
@@ -385,6 +288,7 @@ We appreciate your trust in us. If you have any questions, please reach out to o
 Regards,
 MedBliss`;
 
+      // Example: sending to your custom WhatsApp endpoint
       await fetch("https://wa.medblisss.com/send-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -416,7 +320,7 @@ MedBliss`;
     );
   }
 
-  // 14) Render
+  // 13) Render
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
       <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-lg">
@@ -449,7 +353,9 @@ MedBliss`;
                   <UserCircleIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
                 {errors.name && (
-                  <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.name.message}
+                  </p>
                 )}
                 {showPatientSuggestions && filteredPatientSuggestions.length > 0 && (
                   <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-1 rounded-md max-h-40 overflow-y-auto">
@@ -491,7 +397,9 @@ MedBliss`;
                   <PhoneIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
                 {errors.contact && (
-                  <p className="text-red-500 text-sm mt-1">{errors.contact.message}</p>
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.contact.message}
+                  </p>
                 )}
               </div>
 
@@ -510,7 +418,9 @@ MedBliss`;
                     className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
                   />
                   {errors.age && (
-                    <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.age.message}
+                    </p>
                   )}
                 </div>
                 <div>
@@ -526,7 +436,9 @@ MedBliss`;
                     <option value="day">Day</option>
                   </select>
                   {errors.dayType && (
-                    <p className="text-red-500 text-sm mt-1">{errors.dayType.message}</p>
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.dayType.message}
+                    </p>
                   )}
                 </div>
                 <div>
@@ -543,7 +455,9 @@ MedBliss`;
                     <option value="Other">Other</option>
                   </select>
                   {errors.gender && (
-                    <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>
+                    <p className="text-red-500 text-sm mt-1">
+                      {errors.gender.message}
+                    </p>
                   )}
                 </div>
               </div>
@@ -579,7 +493,9 @@ MedBliss`;
 
             {/* Doctor Referral */}
             <div className="space-y-4 relative">
-              <h3 className="text-lg font-semibold text-gray-700">Doctor Referral</h3>
+              <h3 className="text-lg font-semibold text-gray-700">
+                Doctor Referral
+              </h3>
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   Doctor Name
@@ -631,7 +547,10 @@ MedBliss`;
                     );
                     if (selectedPackage) {
                       setValue("bloodTests", selectedPackage.tests);
-                      setValue("discountPercentage", selectedPackage.discountPercentage);
+                      setValue(
+                        "discountPercentage",
+                        selectedPackage.discountPercentage
+                      );
                     }
                   }}
                   className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -651,132 +570,122 @@ MedBliss`;
                   Select Blood Tests
                 </label>
                 <div className="space-y-4">
-                  {bloodTestFields.map((field, index) => {
-                    const currentTestId = watch(`bloodTests.${index}.testId`);
-                    const selectedParams =
-                      watch(`bloodTests.${index}.selectedParameters`) || [];
-                    const testParams = getTestParameters(currentTestId);
-
-                    return (
-                      <div
-                        key={field.id}
-                        className="border p-4 rounded-lg space-y-4"
-                      >
-                        {/* Row 1: Test Name & Price */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 mb-1">
-                              Test Name
-                            </label>
-                            <select
-                              {...register(`bloodTests.${index}.testId`, {
-                                required: "Blood test is required",
-                              })}
-                              onChange={(e) => {
-                                const selectedId = e.target.value;
-                                const selectedTest = availableBloodTests.find(
-                                  (t) => t.id === selectedId
+                  {bloodTestFields.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="border p-4 rounded-lg space-y-4"
+                    >
+                      {/* Row 1: Test Name & Price */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">
+                            Test Name
+                          </label>
+                          <select
+                            {...register(`bloodTests.${index}.testId`, {
+                              required: "Blood test is required",
+                            })}
+                            onChange={(e) => {
+                              const selectedId = e.target.value;
+                              const selectedTest = availableBloodTests.find(
+                                (t) => t.id === selectedId
+                              );
+                              if (selectedTest) {
+                                // set the test name & price
+                                setValue(
+                                  `bloodTests.${index}.testName`,
+                                  selectedTest.testName
                                 );
-                                if (selectedTest) {
-                                  setValue(
-                                    `bloodTests.${index}.testName`,
-                                    selectedTest.testName
-                                  );
-                                  setValue(
-                                    `bloodTests.${index}.price`,
-                                    selectedTest.price
-                                  );
-                                  // reset any selectedParameters
-                                  setValue(
-                                    `bloodTests.${index}.selectedParameters`,
-                                    []
-                                  );
-                                } else {
-                                  setValue(`bloodTests.${index}.testName`, "");
-                                  setValue(`bloodTests.${index}.price`, 0);
-                                  setValue(`bloodTests.${index}.selectedParameters`, []);
-                                }
-                              }}
-                              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            >
-                              <option value="">Select a test</option>
-                              {availableBloodTests.map((test) => (
-                                <option key={test.id} value={test.id}>
-                                  {test.testName}
-                                </option>
-                              ))}
-                            </select>
-                            {errors.bloodTests?.[index]?.testId && (
-                              <p className="text-red-500 text-xs mt-1">
-                                {errors.bloodTests[index]?.testId?.message}
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 mb-1">
-                              Price (Rs.)
-                            </label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              {...register(`bloodTests.${index}.price`, {
-                                required: "Price is required",
-                                valueAsNumber: true,
-                              })}
-                              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                              placeholder="Auto-filled"
-                              readOnly
-                            />
-                            {errors.bloodTests?.[index]?.price && (
-                              <p className="text-red-500 text-xs mt-1">
-                                {errors.bloodTests[index]?.price?.message}
-                              </p>
-                            )}
-                          </div>
+                                setValue(
+                                  `bloodTests.${index}.price`,
+                                  selectedTest.price
+                                );
+                                // auto-set testType if DB says "outsource"
+                                setValue(
+                                  `bloodTests.${index}.testType`,
+                                  selectedTest.type
+                                );
+                              } else {
+                                // fallback if user picks none
+                                setValue(`bloodTests.${index}.testName`, "");
+                                setValue(`bloodTests.${index}.price`, 0);
+                                setValue(
+                                  `bloodTests.${index}.testType`,
+                                  "inhospital"
+                                );
+                              }
+                            }}
+                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">Select a test</option>
+                            {availableBloodTests.map((test) => (
+                              <option key={test.id} value={test.id}>
+                                {test.testName}
+                              </option>
+                            ))}
+                          </select>
+                          {errors.bloodTests?.[index]?.testId && (
+                            <p className="text-red-500 text-xs mt-1">
+                              {errors.bloodTests[index]?.testId?.message}
+                            </p>
+                          )}
                         </div>
-
-                        {/* Row 2: Book Specific Parameter */}
-                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between">
-                          <div className="mt-2 mb-2 sm:mb-0">
-                            <button
-                              type="button"
-                              onClick={() => openParameterModal(index)}
-                              className="inline-flex items-center px-4 py-2 border border-green-600 text-green-600 rounded hover:bg-green-50 transition-colors"
-                              disabled={!currentTestId || testParams.length === 0}
-                            >
-                              Book Specific Parameter
-                            </button>
-                          </div>
-                          <div>
-                            {selectedParams && selectedParams.length > 0 ? (
-                              <p className="text-sm text-gray-600">
-                                <strong>Booked Parameters: </strong>
-                                {selectedParams.join(", ")}
-                              </p>
-                            ) : (
-                              <p className="text-sm text-gray-600">
-                                <strong>All parameters</strong> will be booked
-                              </p>
-                            )}
-                          </div>
-                          <div>
-                            <button
-                              type="button"
-                              onClick={() => remove(index)}
-                              className="text-red-500 hover:text-red-700 text-sm"
-                            >
-                              Remove Test
-                            </button>
-                          </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">
+                            Price (Rs.)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            {...register(`bloodTests.${index}.price`, {
+                              required: "Price is required",
+                              valueAsNumber: true,
+                            })}
+                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                            placeholder="Auto-filled"
+                            readOnly
+                          />
+                          {errors.bloodTests?.[index]?.price && (
+                            <p className="text-red-500 text-xs mt-1">
+                              {errors.bloodTests[index]?.price?.message}
+                            </p>
+                          )}
                         </div>
                       </div>
-                    );
-                  })}
+                      {/* Test Type Dropdown */}
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">
+                          Test Type
+                        </label>
+                        <select
+                          {...register(`bloodTests.${index}.testType`)}
+                          className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="inhospital">In Hospital</option>
+                          <option value="outsource">Outsource</option>
+                        </select>
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => remove(index)}
+                          className="text-red-500 hover:text-red-700 text-sm"
+                        >
+                          Remove Test
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
                 <button
                   type="button"
                   onClick={() =>
-                    append({ testId: "", testName: "", price: 0 })
+                    append({
+                      testId: "",
+                      testName: "",
+                      price: 0,
+                      testType: "inhospital",
+                    })
                   }
                   className="mt-4 inline-flex items-center px-4 py-2 border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
                 >
@@ -835,7 +744,8 @@ MedBliss`;
                   Discount: <strong>Rs. {discountValue.toFixed(2)}</strong>
                 </p>
                 <p className="text-sm text-gray-700">
-                  Remaining Amount: <strong>Rs. {remainingAmount.toFixed(2)}</strong>
+                  Remaining Amount:{" "}
+                  <strong>Rs. {remainingAmount.toFixed(2)}</strong>
                 </p>
               </div>
 
@@ -879,21 +789,6 @@ MedBliss`;
           </form>
         </div>
       </div>
-
-      {/* Parameter Selection Modal */}
-      {modalVisible && currentTestIndex !== null && (
-        <ParameterSelectionModal
-          show={modalVisible}
-          availableParameters={getTestParameters(
-            watch(`bloodTests.${currentTestIndex}.testId`)
-          )}
-          initialSelection={
-            watch(`bloodTests.${currentTestIndex}.selectedParameters`) || []
-          }
-          onSave={handleModalSave}
-          onClose={() => setModalVisible(false)}
-        />
-      )}
     </div>
   );
 };
