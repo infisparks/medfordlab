@@ -5,7 +5,6 @@ import {
   useForm,
   SubmitHandler,
   Path,
- 
 } from "react-hook-form";
 import { useSearchParams, useRouter } from "next/navigation";
 import { database } from "../../../firebase";
@@ -22,10 +21,6 @@ import { FaCalculator } from "react-icons/fa";
 // -------------------------
 // Interfaces
 // -------------------------
-
-// AgeRangeItem remains unchanged
-
-// TestParameterValue now includes a "valueType" property and supports string or number values.
 interface TestParameterValue {
   name: string;
   unit: string;
@@ -55,7 +50,6 @@ interface BloodValuesFormInputs {
 // -------------------------
 // Helper: parseRangeKey
 // -------------------------
-
 const parseRangeKey = (key: string): { lower: number; upper: number } => {
   key = key.trim();
   const suffix = key.slice(-1);
@@ -63,6 +57,7 @@ const parseRangeKey = (key: string): { lower: number; upper: number } => {
   if (suffix === "d") multiplier = 1;
   else if (suffix === "m") multiplier = 30;
   else if (suffix === "y") multiplier = 365;
+
   const rangePart = key.slice(0, -1);
   const parts = rangePart.split("-");
   if (parts.length !== 2) {
@@ -74,9 +69,8 @@ const parseRangeKey = (key: string): { lower: number; upper: number } => {
 };
 
 // -------------------------
-// Helper: roundToTwo decimals
+// Helper: roundToTwo
 // -------------------------
-
 function roundToTwo(num: number): number {
   return parseFloat(num.toFixed(2));
 }
@@ -84,7 +78,6 @@ function roundToTwo(num: number): number {
 // -------------------------
 // Component: BloodValuesForm
 // -------------------------
-
 const BloodValuesForm: React.FC = () => {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -105,7 +98,9 @@ const BloodValuesForm: React.FC = () => {
     },
   });
 
+  // -------------------------
   // 1) Fetch patient data, booked tests, and any stored results
+  // -------------------------
   useEffect(() => {
     if (!patientId) return;
 
@@ -140,7 +135,7 @@ const BloodValuesForm: React.FC = () => {
             }
 
             const testDefinition = definitionSnap.val();
-            const allParams = testDefinition.parameters;
+            const allParams = testDefinition.parameters || [];
             let filteredParams;
             if (testObj.selectedParameters?.length) {
               filteredParams = allParams.filter((p: any) =>
@@ -152,8 +147,9 @@ const BloodValuesForm: React.FC = () => {
 
             const parameters = filteredParams.map((param: any) => {
               const gender = patientData.gender?.toLowerCase() === "male" ? "male" : "female";
-              const rangesForGender = param.range[gender] || [];
+              const rangesForGender = param.range?.[gender] || [];
               let normalRange = "";
+
               for (const rng of rangesForGender) {
                 const { lower, upper } = parseRangeKey(rng.rangeKey);
                 if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
@@ -165,14 +161,16 @@ const BloodValuesForm: React.FC = () => {
                 normalRange = rangesForGender[rangesForGender.length - 1].rangeValue;
               }
 
-              const testKey = testDefinition.testName.toLowerCase().replace(/\s+/g, "_");
+              const testKey = testDefinition.testName
+                .toLowerCase()
+                .replace(/\s+/g, "_");
               const storedParamObj =
                 storedBloodTests?.[testKey]?.parameters?.find((p: any) => p.name === param.name);
 
-              let subparams: TestParameterValue[] | undefined = undefined;
+              let subparams: TestParameterValue[] | undefined;
               if (param.subparameters && Array.isArray(param.subparameters)) {
                 subparams = param.subparameters.map((subParam: any) => {
-                  const subRanges = subParam.range[gender] || [];
+                  const subRanges = subParam.range?.[gender] || [];
                   let subRangeStr = "";
                   for (const sr of subRanges) {
                     const { lower, upper } = parseRangeKey(sr.rangeKey);
@@ -186,12 +184,12 @@ const BloodValuesForm: React.FC = () => {
                   }
                   const storedSubParam =
                     storedParamObj?.subparameters?.find((sp: any) => sp.name === subParam.name);
+
                   return {
                     name: subParam.name,
                     unit: subParam.unit,
                     value: storedSubParam ? storedSubParam.value : "",
                     range: subRangeStr,
-                    // Inherit valueType from parent if defined; else default to "number"
                     valueType: subParam.valueType || "number",
                   };
                 });
@@ -203,7 +201,6 @@ const BloodValuesForm: React.FC = () => {
                 value: storedParamObj ? storedParamObj.value : "",
                 range: normalRange,
                 formula: param.formula || "",
-                // Add valueType property; default to "number" if not provided
                 valueType: param.valueType || "number",
                 ...(subparams ? { subparameters: subparams } : {}),
               };
@@ -233,7 +230,9 @@ const BloodValuesForm: React.FC = () => {
     fetchPatientData();
   }, [patientId, reset]);
 
-  // 2) Manual formula calculation button (only for numeric type)
+  // -------------------------
+  // 2) Manual formula calculation (button click). Also 2 decimals.
+  // -------------------------
   const handleCalculateFormula = (testIndex: number, paramIndex: number) => {
     const tests = watch("tests");
     const currentTest = tests[testIndex];
@@ -243,88 +242,185 @@ const BloodValuesForm: React.FC = () => {
     if (!param?.formula?.trim()) return;
     if (param.valueType !== "number") return; // Only calculate for numeric values
 
-    // Build dictionary of parameter values for the current test.
+    // Gather parameter values for this test
     const paramValues: Record<string, number> = {};
     currentTest.parameters.forEach((p: TestParameterValue) => {
-      if (p.value !== "" && !isNaN(Number(p.value))) {
-        paramValues[p.name] = Number(p.value);
+      const val = parseFloat(String(p.value));
+      if (!isNaN(val)) {
+        paramValues[p.name] = val;
       }
     });
 
+    // Replace references in formula
     let expr = param.formula;
     Object.entries(paramValues).forEach(([name, val]) => {
-      const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const rgx = new RegExp(safeName, "g");
       expr = expr.replace(rgx, val.toString());
     });
+
     try {
       const result = Function('"use strict";return (' + expr + ')')();
       if (!isNaN(result)) {
+        // Round to two decimals and set
         const newVal = roundToTwo(Number(result));
-        setValue(`tests.${testIndex}.parameters.${paramIndex}.value`, newVal);
+        setValue(`tests.${testIndex}.parameters.${paramIndex}.value`, newVal.toFixed(2));
       }
     } catch (err) {
       console.error("Error evaluating formula for", param.name, err);
     }
   };
 
-  // 3) Optional auto-calc effect (only for numeric parameters)
+  // -------------------------
+  // 3) Auto-effect: handle formulas (for real-time calculation) + ensure two decimals
+  // -------------------------
   const testsWatch = watch("tests");
   useEffect(() => {
-    testsWatch.forEach((test, testIndex) => {
+    // Make a clone so we can safely modify
+    const newTests = JSON.parse(JSON.stringify(testsWatch)) as TestValueEntry[];
+    let changed = false;
+
+    newTests.forEach((test, testIndex) => {
+      // Gather paramValues for formula references
       const paramValues: Record<string, number> = {};
-      test.parameters.forEach((param) => {
-        if (param.value !== "" && !isNaN(Number(param.value))) {
-          paramValues[param.name] = Number(param.value);
+      test.parameters.forEach((p) => {
+        const val = parseFloat(String(p.value));
+        if (!isNaN(val)) {
+          paramValues[p.name] = val;
         }
       });
+
+      // Loop parameters for formula + rounding
       test.parameters.forEach((param, paramIndex) => {
+        // 1) If there's a formula, try to auto-calc
         if (param.formula?.trim() && param.valueType === "number") {
           let expr = param.formula;
           Object.entries(paramValues).forEach(([name, val]) => {
-            const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const rgx = new RegExp(safeName, "g");
             expr = expr.replace(rgx, val.toString());
           });
           try {
             const result = Function('"use strict";return (' + expr + ')')();
-            if (!isNaN(result) && result !== param.value) {
+            if (!isNaN(result)) {
               const newVal = roundToTwo(Number(result));
-              setValue(`tests.${testIndex}.parameters.${paramIndex}.value`, newVal);
+              const newValStr = newVal.toFixed(2);
+              if (String(param.value) !== newValStr) {
+                newTests[testIndex].parameters[paramIndex].value = newValStr;
+                changed = true;
+              }
             }
           } catch (err) {
             console.error("Error evaluating formula for", param.name, err);
           }
         }
+
+        // 2) Ensure numeric values always have 2 decimals
+        if (param.valueType === "number" && param.value !== "") {
+          const numericVal = parseFloat(String(param.value));
+          if (!isNaN(numericVal)) {
+            const str2dec = numericVal.toFixed(2);
+            if (String(param.value) !== str2dec) {
+              newTests[testIndex].parameters[paramIndex].value = str2dec;
+              changed = true;
+            }
+          }
+        }
+
+        // 3) Subparameters: also ensure 2 decimals if numeric
+        if (param.subparameters && Array.isArray(param.subparameters)) {
+          param.subparameters.forEach((sp, spIndex) => {
+            if (sp.valueType === "number" && sp.value !== "") {
+              const spVal = parseFloat(String(sp.value));
+              if (!isNaN(spVal)) {
+                const spStr2dec = spVal.toFixed(2);
+                if (String(sp.value) !== spStr2dec) {
+                  newTests[testIndex].parameters[paramIndex].subparameters![spIndex].value =
+                    spStr2dec;
+                  changed = true;
+                }
+              }
+            }
+          });
+        }
       });
     });
+
+    // If any changes, update form state
+    if (changed) {
+      setValue("tests", newTests, { shouldValidate: false });
+    }
   }, [testsWatch, setValue]);
 
-  // 4) Submit results to Firebase
-  const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
+  // -------------------------
+  // 4) Submit results to Firebase (skip empty values, store numeric as float)
+  // -------------------------
+  const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (formData) => {
     try {
-      for (const test of data.tests) {
+      for (const test of formData.tests) {
+        // Construct a safe key for the test
         const testKey = test.testName
-  .toLowerCase()
-  .replace(/\s+/g, "_")
-  .replace(/[.#$[\]]/g, "");
-;
-        const dbRef = ref(database, `patients/${data.patientId}/bloodtest/${testKey}`);
-        await set(dbRef, {
-          parameters: test.parameters,
+          .toLowerCase()
+          .replace(/\s+/g, "_")
+          .replace(/[.#$[\]]/g, "");
+
+        // Filter out any parameters (and their subparameters) that have empty values
+        const filteredParams = test.parameters
+          .map((param) => {
+            const filteredSubparams =
+              param.subparameters?.filter((sp) => sp.value !== "") ?? [];
+
+            // Keep the param if main value != "" or it has subparams with non-empty values
+            if (param.value !== "" || filteredSubparams.length > 0) {
+              return {
+                ...param,
+                subparameters: filteredSubparams,
+              };
+            }
+            return null;
+          })
+          .filter(Boolean) as TestParameterValue[];
+
+        // Convert any numeric param/subparam strings to float
+        // so they are stored in DB as actual numbers rather than strings
+        filteredParams.forEach((p) => {
+          if (p.valueType === "number" && p.value !== "") {
+            p.value = parseFloat(String(p.value));
+          }
+          p.subparameters?.forEach((sp) => {
+            if (sp.valueType === "number" && sp.value !== "") {
+              sp.value = parseFloat(String(sp.value));
+            }
+          });
+        });
+
+        // (Optional) If you want to skip the entire test if no parameters remain:
+        // if (!filteredParams.length) {
+        //   continue;
+        // }
+
+        const dbRefTest = ref(
+          database,
+          `patients/${formData.patientId}/bloodtest/${testKey}`
+        );
+        await set(dbRefTest, {
+          parameters: filteredParams,
           subheadings: test.subheadings || [],
           createdAt: new Date().toISOString(),
         });
       }
+
       alert("Blood test values saved successfully!");
-      router.push(`/download-report?patientId=${data.patientId}`);
+      router.push(`/download-report?patientId=${formData.patientId}`);
     } catch (error) {
       console.error("Error saving blood test values:", error);
       alert("Failed to save blood test values. Please try again.");
     }
   };
 
+  // -------------------------
   // 5) Render
+  // -------------------------
   if (!patientId) {
     return (
       <div className="p-4 flex items-center justify-center min-h-screen bg-gray-50">
@@ -382,7 +478,7 @@ const BloodValuesForm: React.FC = () => {
                 </h3>
               </div>
 
-              {/* Render parameters */}
+              {/* If subheadings exist, group parameters by subheading */}
               {test.subheadings && test.subheadings.length > 0 ? (
                 <>
                   {test.subheadings.map((subheading, subIndex) => {
@@ -406,12 +502,15 @@ const BloodValuesForm: React.FC = () => {
                                 </label>
                                 <div className="relative">
                                   <input
-                                    // If valueType is "text", allow text input; otherwise (or if undefined) use number input.
-                                    type={ (item.valueType ?? "number") === "text" ? "text" : "number" }
+                                    type={
+                                      (item.valueType ?? "number") === "text"
+                                        ? "text"
+                                        : "number"
+                                    }
                                     step="any"
                                     {...register(
                                       `tests.${testIndex}.parameters.${item.originalIndex}.value` as Path<BloodValuesFormInputs>,
-                                      { required: "Value is required" }
+                                      { required: false }
                                     )}
                                     className="w-full px-4 py-2 pr-16 border rounded-lg focus:ring-2 focus:ring-blue-200"
                                     placeholder="Enter value"
@@ -419,13 +518,16 @@ const BloodValuesForm: React.FC = () => {
                                   {item.formula && item.valueType === "number" && (
                                     <button
                                       type="button"
-                                      onClick={() => handleCalculateFormula(testIndex, item.originalIndex)}
+                                      onClick={() =>
+                                        handleCalculateFormula(testIndex, item.originalIndex)
+                                      }
                                       className="absolute right-3 top-2 text-blue-600 hover:text-blue-800"
                                     >
                                       <FaCalculator className="w-5 h-5" />
                                     </button>
                                   )}
-                                  {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]?.value && (
+                                  {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                    ?.value && (
                                     <FiAlertCircle className="absolute right-10 top-3 w-5 h-5 text-red-500" />
                                   )}
                                 </div>
@@ -435,6 +537,8 @@ const BloodValuesForm: React.FC = () => {
                                     {item.range}
                                   </span>
                                 </div>
+
+                                {/* Subparameters */}
                                 {item.subparameters && item.subparameters.length > 0 && (
                                   <div className="ml-4 border-l pl-4 space-y-4">
                                     {item.subparameters.map((subParam, spIndex) => (
@@ -449,21 +553,29 @@ const BloodValuesForm: React.FC = () => {
                                         </label>
                                         <div className="relative">
                                           <input
-                                            type={ (subParam.valueType ?? "number") === "text" ? "text" : "number" }
+                                            type={
+                                              (subParam.valueType ?? "number") === "text"
+                                                ? "text"
+                                                : "number"
+                                            }
                                             step="any"
                                             {...register(
                                               `tests.${testIndex}.parameters.${item.originalIndex}.subparameters.${spIndex}.value` as Path<BloodValuesFormInputs>,
-                                              { required: "Value is required" }
+                                              { required: false }
                                             )}
                                             className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-200"
                                             placeholder="Enter value"
                                           />
-                                          {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]?.subparameters?.[spIndex]?.value && (
+                                          {errors.tests?.[testIndex]?.parameters?.[
+                                            item.originalIndex
+                                          ]?.subparameters?.[spIndex]?.value && (
                                             <FiAlertCircle className="absolute right-3 top-3 w-5 h-5 text-red-500" />
                                           )}
                                         </div>
                                         <div className="flex items-center gap-2 text-sm">
-                                          <span className="text-gray-500">Normal Range:</span>
+                                          <span className="text-gray-500">
+                                            Normal Range:
+                                          </span>
                                           <span className="font-medium text-green-600">
                                             {subParam.range}
                                           </span>
@@ -485,6 +597,7 @@ const BloodValuesForm: React.FC = () => {
                     );
                   })}
 
+                  {/* Leftover (global) parameters not under any subheading */}
                   {(() => {
                     const subheadingParamNames = test.subheadings.reduce(
                       (acc: string[], sh) => acc.concat(sh.parameterNames),
@@ -496,7 +609,9 @@ const BloodValuesForm: React.FC = () => {
                     if (leftoverParams.length > 0) {
                       return (
                         <div className="mb-6">
-                          <h4 className="text-lg font-bold mb-2">Global Parameters</h4>
+                          <h4 className="text-lg font-bold mb-2">
+                            Global Parameters
+                          </h4>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             {leftoverParams.map((item) => (
                               <div key={item.originalIndex} className="space-y-4">
@@ -510,11 +625,15 @@ const BloodValuesForm: React.FC = () => {
                                 </label>
                                 <div className="relative">
                                   <input
-                                    type={ (item.valueType ?? "number") === "text" ? "text" : "number" }
+                                    type={
+                                      (item.valueType ?? "number") === "text"
+                                        ? "text"
+                                        : "number"
+                                    }
                                     step="any"
                                     {...register(
                                       `tests.${testIndex}.parameters.${item.originalIndex}.value` as Path<BloodValuesFormInputs>,
-                                      { required: "Value is required" }
+                                      { required: false }
                                     )}
                                     className="w-full px-4 py-2 pr-16 border rounded-lg focus:ring-2 focus:ring-blue-200"
                                     placeholder="Enter value"
@@ -522,13 +641,16 @@ const BloodValuesForm: React.FC = () => {
                                   {item.formula && item.valueType === "number" && (
                                     <button
                                       type="button"
-                                      onClick={() => handleCalculateFormula(testIndex, item.originalIndex)}
+                                      onClick={() =>
+                                        handleCalculateFormula(testIndex, item.originalIndex)
+                                      }
                                       className="absolute right-3 top-2 text-blue-600 hover:text-blue-800"
                                     >
                                       <FaCalculator className="w-5 h-5" />
                                     </button>
                                   )}
-                                  {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]?.value && (
+                                  {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]
+                                    ?.value && (
                                     <FiAlertCircle className="absolute right-10 top-3 w-5 h-5 text-red-500" />
                                   )}
                                 </div>
@@ -538,6 +660,8 @@ const BloodValuesForm: React.FC = () => {
                                     {item.range}
                                   </span>
                                 </div>
+
+                                {/* Subparameters */}
                                 {item.subparameters && item.subparameters.length > 0 && (
                                   <div className="ml-4 border-l pl-4 space-y-4">
                                     {item.subparameters.map((subParam, spIndex) => (
@@ -552,21 +676,29 @@ const BloodValuesForm: React.FC = () => {
                                         </label>
                                         <div className="relative">
                                           <input
-                                            type={ (subParam.valueType ?? "number") === "text" ? "text" : "number" }
+                                            type={
+                                              (subParam.valueType ?? "number") === "text"
+                                                ? "text"
+                                                : "number"
+                                            }
                                             step="any"
                                             {...register(
                                               `tests.${testIndex}.parameters.${item.originalIndex}.subparameters.${spIndex}.value` as Path<BloodValuesFormInputs>,
-                                              { required: "Value is required" }
+                                              { required: false }
                                             )}
                                             className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-200"
                                             placeholder="Enter value"
                                           />
-                                          {errors.tests?.[testIndex]?.parameters?.[item.originalIndex]?.subparameters?.[spIndex]?.value && (
+                                          {errors.tests?.[testIndex]?.parameters?.[
+                                            item.originalIndex
+                                          ]?.subparameters?.[spIndex]?.value && (
                                             <FiAlertCircle className="absolute right-3 top-3 w-5 h-5 text-red-500" />
                                           )}
                                         </div>
                                         <div className="flex items-center gap-2 text-sm">
-                                          <span className="text-gray-500">Normal Range:</span>
+                                          <span className="text-gray-500">
+                                            Normal Range:
+                                          </span>
                                           <span className="font-medium text-green-600">
                                             {subParam.range}
                                           </span>
@@ -599,11 +731,15 @@ const BloodValuesForm: React.FC = () => {
                       </label>
                       <div className="relative">
                         <input
-                          type={ (param.valueType ?? "number") === "text" ? "text" : "number" }
+                          type={
+                            (param.valueType ?? "number") === "text"
+                              ? "text"
+                              : "number"
+                          }
                           step="any"
                           {...register(
                             `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
-                            { required: "Value is required" }
+                            { required: false }
                           )}
                           className="w-full px-4 py-2 pr-16 border rounded-lg focus:ring-2 focus:ring-blue-200"
                           placeholder="Enter value"
@@ -628,6 +764,7 @@ const BloodValuesForm: React.FC = () => {
                         </span>
                       </div>
 
+                      {/* Subparameters */}
                       {param.subparameters && param.subparameters.length > 0 && (
                         <div className="ml-4 border-l pl-4 space-y-4">
                           {param.subparameters.map((subParam, spIndex) => (
@@ -642,21 +779,28 @@ const BloodValuesForm: React.FC = () => {
                               </label>
                               <div className="relative">
                                 <input
-                                  type={ (subParam.valueType ?? "number") === "text" ? "text" : "number" }
+                                  type={
+                                    (subParam.valueType ?? "number") === "text"
+                                      ? "text"
+                                      : "number"
+                                  }
                                   step="any"
                                   {...register(
                                     `tests.${testIndex}.parameters.${paramIndex}.subparameters.${spIndex}.value` as Path<BloodValuesFormInputs>,
-                                    { required: "Value is required" }
+                                    { required: false }
                                   )}
                                   className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-200"
                                   placeholder="Enter value"
                                 />
-                                {errors.tests?.[testIndex]?.parameters?.[paramIndex]?.subparameters?.[spIndex]?.value && (
+                                {errors.tests?.[testIndex]?.parameters?.[paramIndex]
+                                  ?.subparameters?.[spIndex]?.value && (
                                   <FiAlertCircle className="absolute right-3 top-3 w-5 h-5 text-red-500" />
                                 )}
                               </div>
                               <div className="flex items-center gap-2 text-sm">
-                                <span className="text-gray-500">Normal Range:</span>
+                                <span className="text-gray-500">
+                                  Normal Range:
+                                </span>
                                 <span className="font-medium text-green-600">
                                   {subParam.range}
                                 </span>

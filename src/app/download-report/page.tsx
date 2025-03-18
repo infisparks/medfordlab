@@ -38,6 +38,7 @@ interface Parameter {
 interface BloodTestData {
   parameters: Parameter[];
   subheadings?: { title: string; parameterNames: string[] }[];
+  type?: string; // <--- Added this to mark outsource tests
 }
 
 interface PatientData {
@@ -101,7 +102,7 @@ const parseRangeKey = (key: string): { lower: number; upper: number } => {
 // Helper: Try to parse a "range string" like "4.0-7.0" for numeric comparison
 // -----------------------------
 const parseNumericRangeString = (rangeStr: string) => {
-  // Example of pattern: "4-7", "4.0 - 7.1", etc.
+  // Example pattern: "4-7", "4.0 - 7.1", etc.
   const regex = /^\s*([\d.]+)\s*-\s*([\d.]+)\s*$/;
   const match = rangeStr.match(regex);
   if (!match) return null;
@@ -157,11 +158,17 @@ function DownloadReport() {
 
         // We'll do 4 columns: Param, Value, Reference Range, Unit
         const totalTableWidth = pageWidth - 2 * leftMargin;
-        const colWidth = totalTableWidth / 4;
-        const col1X = leftMargin; // Param
-        const col2X = leftMargin + colWidth; // Value
-        const col3X = leftMargin + 2 * colWidth; // Range
-        const col4X = leftMargin + 3 * colWidth; // Unit
+        // total parts = 1 (param) + 1 (value) + 1.35 (range) + 1 (unit) = 4.35
+        const baseColWidth = totalTableWidth / 4.35;
+        const paramColWidth = baseColWidth;
+        const valueColWidth = baseColWidth;
+        const rangeColWidth = 1.43 * baseColWidth;
+        const unitColWidth = baseColWidth;
+
+        const col1X = leftMargin;
+        const col2X = col1X + paramColWidth;
+        const col3X = col2X + valueColWidth;
+        const col4X = col3X + rangeColWidth;
 
         // Line height used for each row
         const lineHeight = 6;
@@ -223,7 +230,7 @@ function DownloadReport() {
         // 4. Cover page
         await addCoverPage();
 
-        // This variable will track the current vertical position for each page
+        // This variable tracks the current vertical position for each page
         let yPosition = 0;
 
         // Helper: Print a single parameter row with wrapped text if necessary
@@ -246,6 +253,11 @@ function DownloadReport() {
             }
           }
 
+          // Replace "/n" with actual newlines
+          if (rangeStr.includes("/n")) {
+            rangeStr = rangeStr.replaceAll("/n", "\n");
+          }
+
           // 2) Check if param.value is out of range if rangeStr is numeric like "4.0-7.0"
           let isOutOfRange = false;
           let outOfRangeLabel: "" | "H" | "L" = "";
@@ -266,12 +278,16 @@ function DownloadReport() {
           const valStr = param.value !== "" ? String(param.value) + outOfRangeLabel : "-";
 
           // Calculate wrapped lines for each cell
-          const maxTextWidth = colWidth - 4; // Adjust for padding
-          const nameLines = doc.splitTextToSize(param.name, maxTextWidth);
-          const valueLines = doc.splitTextToSize(valStr, maxTextWidth);
-          const rangeLines = doc.splitTextToSize(rangeStr, maxTextWidth);
-          const unitLines = doc.splitTextToSize(param.unit, maxTextWidth);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(9);
+          doc.setTextColor(0, 0, 0);
 
+          const nameLines = doc.splitTextToSize(param.name, paramColWidth - 4);
+          const valueLines = doc.splitTextToSize(valStr, valueColWidth - 4);
+          const rangeLines = doc.splitTextToSize(rangeStr, rangeColWidth - 4);
+          const unitLines = doc.splitTextToSize(param.unit, unitColWidth - 4);
+
+          // The max number of lines needed among the 4 columns
           const maxLines = Math.max(
             nameLines.length,
             valueLines.length,
@@ -280,26 +296,24 @@ function DownloadReport() {
           );
 
           // Print each cell
-          doc.setFont("helvetica", "normal");
-          doc.setFontSize(9);
-          doc.setTextColor(0, 0, 0);
           doc.text(nameLines, col1X + 2, yPosition + 4);
 
           if (isOutOfRange) {
             doc.setFont("helvetica", "bold");
           }
-          doc.text(valueLines, col2X + colWidth / 2, yPosition + 4, {
+          doc.text(valueLines, col2X + valueColWidth / 2, yPosition + 4, {
             align: "center",
           });
           doc.setFont("helvetica", "normal");
 
-          doc.text(rangeLines, col3X + colWidth / 2, yPosition + 4, {
+          doc.text(rangeLines, col3X + rangeColWidth / 2, yPosition + 4, {
             align: "center",
           });
-          doc.text(unitLines, col4X + colWidth / 2, yPosition + 4, {
+          doc.text(unitLines, col4X + unitColWidth / 2, yPosition + 4, {
             align: "center",
           });
 
+          // Move y-position by however many lines we used
           yPosition += maxLines * lineHeight;
 
           // 4) Subparameters (if any)
@@ -325,6 +339,11 @@ function DownloadReport() {
                 }
               }
 
+              // Replace "/n" with actual newlines
+              if (subRangeStr.includes("/n")) {
+                subRangeStr = subRangeStr.replaceAll("/n", "\n");
+              }
+
               let isSubOutOfRange = false;
               let subOutOfRangeLabel: "" | "H" | "L" = "";
               const numericRange2 = parseNumericRangeString(subRangeStr);
@@ -344,10 +363,18 @@ function DownloadReport() {
                 sp.value !== "" ? String(sp.value) + subOutOfRangeLabel : "-";
               const subName = " - " + sp.name;
 
-              const subNameLines = doc.splitTextToSize(subName, maxTextWidth);
-              const subValueLines = doc.splitTextToSize(subValStr, maxTextWidth);
-              const subRangeLines = doc.splitTextToSize(subRangeStr, maxTextWidth);
-              const subUnitLines = doc.splitTextToSize(sp.unit, maxTextWidth);
+              // Calculate wrapped lines for subparameter cells
+              doc.setFont("helvetica", "normal");
+              const subNameLines = doc.splitTextToSize(subName, paramColWidth - 4);
+              const subValueLines = doc.splitTextToSize(
+                subValStr,
+                valueColWidth - 4
+              );
+              const subRangeLines = doc.splitTextToSize(
+                subRangeStr,
+                rangeColWidth - 4
+              );
+              const subUnitLines = doc.splitTextToSize(sp.unit, unitColWidth - 4);
 
               const subMaxLines = Math.max(
                 subNameLines.length,
@@ -356,23 +383,24 @@ function DownloadReport() {
                 subUnitLines.length
               );
 
-              // Print subparameter row; note the name is slightly indented
+              // Print subparameter row
               doc.text(subNameLines, col1X + 4, yPosition + 4);
               if (isSubOutOfRange) {
                 doc.setFont("helvetica", "bold");
               }
-              doc.text(subValueLines, col2X + colWidth / 2, yPosition + 4, {
+              doc.text(subValueLines, col2X + valueColWidth / 2, yPosition + 4, {
                 align: "center",
               });
               doc.setFont("helvetica", "normal");
 
-              doc.text(subRangeLines, col3X + colWidth / 2, yPosition + 4, {
+              doc.text(subRangeLines, col3X + rangeColWidth / 2, yPosition + 4, {
                 align: "center",
               });
-              doc.text(subUnitLines, col4X + colWidth / 2, yPosition + 4, {
+              doc.text(subUnitLines, col4X + unitColWidth / 2, yPosition + 4, {
                 align: "center",
               });
 
+              // Move y-position by however many lines we used
               yPosition += subMaxLines * lineHeight;
             }
           }
@@ -381,6 +409,13 @@ function DownloadReport() {
         // 5. Loop over each test => new page per test
         const bloodtest = data.bloodtest;
         for (const testKey in bloodtest) {
+          const testData = bloodtest[testKey];
+
+          // Skip this test if it's marked "outsource" or if it has no parameters
+          if (testData.type === "outsource" || !testData.parameters?.length) {
+            continue;
+          }
+
           doc.addPage();
           await addLetterhead();
           yPosition = addHeader();
@@ -428,20 +463,19 @@ function DownloadReport() {
           doc.rect(leftMargin, yPosition, totalTableWidth, 7, "F");
           doc.setTextColor(255, 255, 255);
           doc.text("PARAMETER", col1X + 2, yPosition + 5);
-          doc.text("VALUE", col2X + colWidth / 2, yPosition + 5, {
+          doc.text("VALUE", col2X + valueColWidth / 2, yPosition + 5, {
             align: "center",
           });
-          doc.text("RANGE", col3X + colWidth / 2, yPosition + 5, {
+          doc.text("RANGE", col3X + rangeColWidth / 2, yPosition + 5, {
             align: "center",
           });
-          doc.text("UNIT", col4X + colWidth / 2, yPosition + 5, {
+          doc.text("UNIT", col4X + unitColWidth / 2, yPosition + 5, {
             align: "center",
           });
 
           yPosition += 9; // move below table header
 
           // Extract test data
-          const testData = bloodtest[testKey];
           const parameters = testData.parameters;
           const subheadings = testData.subheadings || [];
 
@@ -450,7 +484,8 @@ function DownloadReport() {
             (acc, sh) => acc.concat(sh.parameterNames),
             []
           );
-          // Global params: not in any subheading
+
+          // Global params: those not in any subheading
           const globalParams = parameters.filter(
             (p) => !subheadingParamNames.includes(p.name)
           );
