@@ -11,7 +11,7 @@ import {
   uploadBytes,
   getDownloadURL,
 } from "firebase/storage";
-import JsBarcode from "jsbarcode";
+// import JsBarcode from "jsbarcode";
 
 // Import images – adjust paths if needed
 import letterhead from "../../../public/letterhead.png";
