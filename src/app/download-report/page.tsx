@@ -13,7 +13,7 @@ import {
 } from "firebase/storage";
 import JsBarcode from "jsbarcode";
 
-// Import images – adjust paths as needed
+// Import images – adjust paths if needed
 import letterhead from "../../../public/letterhead.png";
 import firstpage from "../../../public/fisrt.png";
 import stamp from "../../../public/stamp.png";
@@ -30,15 +30,20 @@ interface Parameter {
   name: string;
   value: string | number;
   unit: string;
-  // range can be string or { male: AgeRangeItem[]; female: AgeRangeItem[] }
   range: string | { male: AgeRangeItem[]; female: AgeRangeItem[] };
   subparameters?: Parameter[];
+
+  // If present, indicates we want to hide this parameter entirely
+  visibility?: string;
+
+  // If a formula is present, you might want it as well
+  formula?: string;
 }
 
 interface BloodTestData {
   parameters: Parameter[];
   subheadings?: { title: string; parameterNames: string[] }[];
-  type?: string; // <--- Added this to mark outsource tests
+  type?: string; // e.g. "in-house" or "outsource"
 }
 
 interface PatientData {
@@ -49,6 +54,13 @@ interface PatientData {
   createdAt: string;
   contact: string;
   total_day?: string | number;
+  sampleCollectedAt?: string;
+
+  // Optional fields to fix TS errors
+  doctorName?: string;
+  hospitalName?: string;
+
+  // Bloodtest data
   bloodtest?: Record<string, BloodTestData>;
 }
 
@@ -137,20 +149,49 @@ function DownloadReport() {
           return;
         }
         const data = snapshot.val() as PatientData;
-        setPatientData(data);
-
         if (!data.bloodtest) {
           alert("No report found for this patient.");
           return;
         }
 
-        // 2. Age in days + gender
+        // ---------------------------------------------
+        // 2. FILTER OUT ANY HIDDEN PARAMETERS FIRST
+        // ---------------------------------------------
+        const filteredBloodtest: Record<string, BloodTestData> = {};
+
+        for (const testKey in data.bloodtest) {
+          const originalTestData = data.bloodtest[testKey];
+          // Make a shallow copy
+          const newTestData: BloodTestData = {
+            ...originalTestData,
+            parameters: [],
+          };
+
+          // Filter out hidden parameters
+          const visibleParams = originalTestData.parameters
+            .filter((p) => p.visibility !== "hidden")
+            .map((p) => {
+              // Also filter subparameters
+              const newSubparams =
+                p.subparameters?.filter((sp) => sp.visibility !== "hidden") || [];
+              return { ...p, subparameters: newSubparams };
+            });
+
+          newTestData.parameters = visibleParams;
+          filteredBloodtest[testKey] = newTestData;
+        }
+
+        // Assign the filtered version
+        data.bloodtest = filteredBloodtest;
+        setPatientData(data);
+
+        // 3. Age in days + gender
         const patientAgeInDays = data.total_day
           ? Number(data.total_day)
           : Number(data.age) * 365;
         const patientGender = data.gender?.toLowerCase() || "";
 
-        // 3. Initialize jsPDF
+        // 4. Initialize jsPDF
         const doc = new jsPDF("p", "mm", "a4");
         const pageWidth = doc.internal.pageSize.getWidth();
         const pageHeight = doc.internal.pageSize.getHeight();
@@ -170,10 +211,12 @@ function DownloadReport() {
         const col3X = col2X + valueColWidth;
         const col4X = col3X + rangeColWidth;
 
-        // Line height used for each row
+        // Line height for each row
         const lineHeight = 6;
 
+        // -----------------------------
         // Helper: Add first cover page
+        // -----------------------------
         const addCoverPage = async () => {
           try {
             const coverBase64 = await loadImageAsCompressedJPEG(firstpage.src, 0.5);
@@ -183,7 +226,9 @@ function DownloadReport() {
           }
         };
 
+        // -----------------------------
         // Helper: Add letterhead
+        // -----------------------------
         const addLetterhead = async () => {
           try {
             const letterheadBase64 = await loadImageAsCompressedJPEG(letterhead.src, 0.5);
@@ -193,48 +238,63 @@ function DownloadReport() {
           }
         };
 
-        // Helper: Add patient info at top
+        // -----------------------------
+        // Helper: Add patient info
+        // -----------------------------
         const addHeader = () => {
-          let y = 50;
+          const leftLineHeight = 7;
           doc.setFont("helvetica", "normal");
           doc.setFontSize(10);
           doc.setTextColor(0, 0, 0);
 
-          // Left side
-          doc.text(`Name: ${data.name}`, leftMargin, y);
-          y += 7;
-          doc.text(`Age: ${data.age}`, leftMargin, y);
-          y += 7;
-          doc.text(`Gender: ${data.gender}`, leftMargin, y);
+          // Left side details (all in uppercase)
+          const leftX = leftMargin;
+          let yLeft = 50;
+          doc.text(`PATIENT NAME: ${data.name}`.toUpperCase(), leftX, yLeft);
+          yLeft += leftLineHeight;
+          doc.text(`AGE/SEX: ${data.age} / ${data.gender}`.toUpperCase(), leftX, yLeft);
+          yLeft += leftLineHeight;
+          doc.text(`REF. DOCTOR: ${data.doctorName || "-"}`.toUpperCase(), leftX, yLeft);
+          yLeft += leftLineHeight;
+          doc.text(`HOSPITAL: ${data.hospitalName || "-"}`.toUpperCase(), leftX, yLeft);
 
-          // Right side
+          // Right side details (all in uppercase)
+          const rightX = pageWidth - leftMargin;
+          const rightY = 50;
+          doc.text(`PATIENT ID: ${data.patientId}`.toUpperCase(), rightX, rightY, {
+            align: "right",
+          });
           doc.text(
-            `Registration On: ${new Date(data.createdAt).toLocaleString()}`,
-            pageWidth - leftMargin,
-            50,
+            `REGISTRATION ON: ${new Date(data.createdAt).toLocaleString()}`.toUpperCase(),
+            rightX,
+            rightY + leftLineHeight,
             { align: "right" }
           );
-          doc.text(
-            `Reported On: ${new Date().toLocaleString()}`,
-            pageWidth - leftMargin,
-            57,
-            { align: "right" }
-          );
-          doc.text(`Patient ID: ${data.patientId}`, pageWidth - leftMargin, 64, {
+          const sampledOn = data.sampleCollectedAt
+            ? new Date(data.sampleCollectedAt).toLocaleString()
+            : new Date(data.createdAt).toLocaleString();
+          doc.text(`SAMPLED ON: ${sampledOn}`.toUpperCase(), rightX, rightY + leftLineHeight * 2, {
+            align: "right",
+          });
+          doc.text(`REPORTED ON: ${new Date().toLocaleString()}`.toUpperCase(), rightX, rightY + leftLineHeight * 3, {
             align: "right",
           });
 
-          return Math.max(y, 74) + 10;
+          return Math.max(yLeft, rightY + leftLineHeight * 3) + 10;
         };
 
-        // 4. Cover page
+        // Add cover page first
         await addCoverPage();
 
         // This variable tracks the current vertical position for each page
         let yPosition = 0;
 
-        // Helper: Print a single parameter row with wrapped text if necessary
+        // -----------------------------
+        // Helper: Print a single parameter row
+        // -----------------------------
         const printParameterRow = (param: Parameter) => {
+          // (No need to check param.visibility here, we already removed hidden)
+
           // 1) Determine normal range string
           let rangeStr = "";
           if (typeof param.range === "string") {
@@ -253,12 +313,12 @@ function DownloadReport() {
             }
           }
 
-          // Replace "/n" with actual newlines
+          // Replace "/n" with actual newlines in the range
           if (rangeStr.includes("/n")) {
             rangeStr = rangeStr.replaceAll("/n", "\n");
           }
 
-          // 2) Check if param.value is out of range if rangeStr is numeric like "4.0-7.0"
+          // 2) Check if param.value is out of range if rangeStr is numeric
           let isOutOfRange = false;
           let outOfRangeLabel: "" | "H" | "L" = "";
           const numericRange = parseNumericRangeString(rangeStr);
@@ -277,7 +337,7 @@ function DownloadReport() {
 
           const valStr = param.value !== "" ? String(param.value) + outOfRangeLabel : "-";
 
-          // Calculate wrapped lines for each cell
+          // Calculate wrapped lines for each column cell
           doc.setFont("helvetica", "normal");
           doc.setFontSize(9);
           doc.setTextColor(0, 0, 0);
@@ -316,7 +376,7 @@ function DownloadReport() {
           // Move y-position by however many lines we used
           yPosition += maxLines * lineHeight;
 
-          // 4) Subparameters (if any)
+          // 4) Subparameters (we’ve already filtered hidden ones out)
           if (param.subparameters && param.subparameters.length > 0) {
             for (const sp of param.subparameters) {
               doc.setFontSize(8);
@@ -339,7 +399,6 @@ function DownloadReport() {
                 }
               }
 
-              // Replace "/n" with actual newlines
               if (subRangeStr.includes("/n")) {
                 subRangeStr = subRangeStr.replaceAll("/n", "\n");
               }
@@ -359,21 +418,14 @@ function DownloadReport() {
                 }
               }
 
-              const subValStr =
-                sp.value !== "" ? String(sp.value) + subOutOfRangeLabel : "-";
+              const subValStr = sp.value !== "" ? String(sp.value) + subOutOfRangeLabel : "-";
               const subName = " - " + sp.name;
 
-              // Calculate wrapped lines for subparameter cells
+              // Calculate wrapped lines
               doc.setFont("helvetica", "normal");
               const subNameLines = doc.splitTextToSize(subName, paramColWidth - 4);
-              const subValueLines = doc.splitTextToSize(
-                subValStr,
-                valueColWidth - 4
-              );
-              const subRangeLines = doc.splitTextToSize(
-                subRangeStr,
-                rangeColWidth - 4
-              );
+              const subValueLines = doc.splitTextToSize(subValStr, valueColWidth - 4);
+              const subRangeLines = doc.splitTextToSize(subRangeStr, rangeColWidth - 4);
               const subUnitLines = doc.splitTextToSize(sp.unit, unitColWidth - 4);
 
               const subMaxLines = Math.max(
@@ -400,47 +452,33 @@ function DownloadReport() {
                 align: "center",
               });
 
-              // Move y-position by however many lines we used
               yPosition += subMaxLines * lineHeight;
             }
           }
         };
 
-        // 5. Loop over each test => new page per test
-        const bloodtest = data.bloodtest;
+        // 5. Now generate the PDF pages from the filtered data
+        const { bloodtest } = data;
+        // If no tests remain after filtering, we won't have pages
+        if (!bloodtest || Object.keys(bloodtest).length === 0) {
+          alert("No in-house test or visible parameters to display.");
+          return;
+        }
+
+        // Add cover page first
+        // (We already did, but if you want the letterhead on the second page, that's fine.)
+
         for (const testKey in bloodtest) {
           const testData = bloodtest[testKey];
-
-          // Skip this test if it's marked "outsource" or if it has no parameters
+          // Skip if it's an outsourced test or no parameters
           if (testData.type === "outsource" || !testData.parameters?.length) {
             continue;
           }
 
+          // Start a new page for each test (after cover)
           doc.addPage();
           await addLetterhead();
           yPosition = addHeader();
-
-          // Barcode on top-right
-          const canvas = document.createElement("canvas");
-          JsBarcode(canvas, patientId || "", {
-            format: "CODE128",
-            displayValue: false,
-            width: 2,
-            height: 40,
-          });
-          const barcodeDataUrl = canvas.toDataURL("image/png");
-          const barcodeWidth = 30;
-          const barcodeHeight = 10;
-          const barcodeY = 65;
-          doc.addImage(
-            barcodeDataUrl,
-            "PNG",
-            pageWidth - leftMargin - barcodeWidth,
-            barcodeY,
-            barcodeWidth,
-            barcodeHeight
-          );
-          yPosition = Math.max(yPosition, barcodeY + barcodeHeight + 2);
 
           // Horizontal line under header
           doc.setDrawColor(0, 51, 102);
@@ -451,7 +489,7 @@ function DownloadReport() {
           doc.setFont("helvetica", "bold");
           doc.setFontSize(13);
           doc.setTextColor(0, 51, 102);
-          doc.text(testKey.toUpperCase(), pageWidth / 2, yPosition, {
+          doc.text(testKey.replace(/_/g, " ").toUpperCase(), pageWidth / 2, yPosition, {
             align: "center",
           });
           yPosition += 2;
@@ -475,12 +513,11 @@ function DownloadReport() {
 
           yPosition += 9; // move below table header
 
-          // Extract test data
-          const parameters = testData.parameters;
-          const subheadings = testData.subheadings || [];
+          const { parameters, subheadings } = testData;
+          const sub = subheadings || [];
 
           // Identify subheading param names
-          const subheadingParamNames = subheadings.reduce<string[]>(
+          const subheadingParamNames = sub.reduce<string[]>(
             (acc, sh) => acc.concat(sh.parameterNames),
             []
           );
@@ -490,17 +527,19 @@ function DownloadReport() {
             (p) => !subheadingParamNames.includes(p.name)
           );
 
-          // 6. Print global parameters (no heading)
+          // 6. Print global parameters
           for (const gp of globalParams) {
             printParameterRow(gp);
           }
 
           // 7. Print subheadings (if any)
-          if (subheadings.length > 0) {
-            for (const sh of subheadings) {
+          if (sub.length > 0) {
+            for (const sh of sub) {
+              // Find subheading parameters
               const subParams = parameters.filter((p) =>
                 sh.parameterNames.includes(p.name)
               );
+
               if (subParams.length > 0) {
                 // Subheading label
                 doc.setFont("helvetica", "bold");

@@ -17,6 +17,7 @@ interface BloodTestSelection {
 }
 
 interface IFormInput {
+  hospitalName: string; // new field for hospital name
   name: string;
   contact: string; // 10-digit
   age: number;
@@ -72,6 +73,7 @@ const PatientEntryPage: React.FC = () => {
     reset,
   } = useForm<IFormInput>({
     defaultValues: {
+      hospitalName: "MEDFORD", // default hospital name
       name: "",
       contact: "",
       age: 0,
@@ -196,7 +198,7 @@ const PatientEntryPage: React.FC = () => {
     fetchFamilyPatients();
   }, []);
 
-  // 8) Filtered Suggestions
+  // 8) Filtered Suggestions for Doctor & Patient
   const watchDoctorName = watch("doctorName") ?? "";
   const filteredDoctorSuggestions = useMemo(() => {
     if (!watchDoctorName.trim()) return [];
@@ -207,9 +209,11 @@ const PatientEntryPage: React.FC = () => {
 
   const watchPatientName = watch("name") ?? "";
   const filteredPatientSuggestions = useMemo(() => {
-    if (!watchPatientName.trim()) return [];
+    // Only show suggestions when at least 2 characters are entered
+    if (watchPatientName.trim().length < 2) return [];
+    const searchQuery = watchPatientName.toUpperCase();
     return familyPatients.filter((patient) =>
-      patient.name.toLowerCase().startsWith(watchPatientName.toLowerCase())
+      patient.name.toUpperCase().includes(searchQuery)
     );
   }, [watchPatientName, familyPatients]);
 
@@ -255,7 +259,7 @@ const PatientEntryPage: React.FC = () => {
         data.dayType === "year" ? 360 : data.dayType === "month" ? 30 : 1;
       const total_day = data.age * multiplier;
 
-      // Insert new patient record
+      // Insert new patient record into main database
       const patientsRef = ref(database, "patients");
       const newPatientRef = push(patientsRef);
       await set(newPatientRef, {
@@ -266,11 +270,36 @@ const PatientEntryPage: React.FC = () => {
         createdAt: new Date().toISOString(),
       });
 
-      // Insert minimal info to family database
+      // Calculate DOB from age using the dayType
+      const today = new Date();
+      let dob: Date;
+      if (data.dayType === "year") {
+        dob = new Date(
+          today.getFullYear() - data.age,
+          today.getMonth(),
+          today.getDate()
+        );
+      } else if (data.dayType === "month") {
+        const years = Math.floor(data.age / 12);
+        const months = data.age % 12;
+        dob = new Date(
+          today.getFullYear() - years,
+          today.getMonth() - months,
+          today.getDate()
+        );
+      } else {
+        // For days
+        dob = new Date(today.getTime() - data.age * 24 * 60 * 60 * 1000);
+      }
+
+      // Insert minimal info to family database with DOB and gender (not raw age)
       await set(ref(medfordFamilyDatabase, "patients/" + patientId), {
         name: data.name,
         contact: data.contact,
         patientId: patientId,
+        dob: dob.toISOString(), // saving calculated DOB
+        gender: data.gender,
+        hospitalName: data.hospitalName, // saving hospital name if needed
       });
 
       // Construct WhatsApp message
@@ -336,6 +365,27 @@ MedBliss`;
               <h3 className="text-lg font-semibold text-gray-700">
                 Patient Information
               </h3>
+              {/* Hospital Name Field */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  Hospital Name
+                </label>
+                <select
+                  {...register("hospitalName", {
+                    required: "Hospital name is required",
+                  })}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="MEDFORD">MEDFORD</option>
+                  {/* Add more hospital options if needed */}
+                  <option value="Other">Other</option>
+                </select>
+                {errors.hospitalName && (
+                  <p className="text-red-500 text-sm mt-1">
+                    {errors.hospitalName.message}
+                  </p>
+                )}
+              </div>
               {/* Name */}
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
@@ -345,10 +395,14 @@ MedBliss`;
                   <input
                     {...register("name", {
                       required: "Name is required",
-                      onChange: () => setShowPatientSuggestions(true),
+                      onChange: (e) => {
+                        // Force the name input to always be uppercase
+                        setShowPatientSuggestions(true);
+                        setValue("name", e.target.value.toUpperCase());
+                      },
                     })}
                     className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="John Doe"
+                    placeholder="JOHN DOE"
                   />
                   <UserCircleIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
@@ -357,24 +411,24 @@ MedBliss`;
                     {errors.name.message}
                   </p>
                 )}
-                {showPatientSuggestions && filteredPatientSuggestions.length > 0 && (
-                  <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-1 rounded-md max-h-40 overflow-y-auto">
-                    {filteredPatientSuggestions.map((patient) => (
-                      <li
-                        key={patient.patientId}
-                        className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
-                        onClick={() => {
-                          setValue("name", patient.name);
-                          setValue("contact", patient.contact);
-                          setValue("patientId", patient.patientId);
-                          setShowPatientSuggestions(false);
-                        }}
-                      >
-                        {patient.name} – {patient.patientId}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {showPatientSuggestions &&
+                  filteredPatientSuggestions.length > 0 && (
+                    <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-1 rounded-md max-h-40 overflow-y-auto">
+                      {filteredPatientSuggestions.map((patient) => (
+                        <li
+                          key={patient.patientId}
+                          className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
+                          onClick={() => {
+                            setValue("name", patient.name.toUpperCase());
+                            setValue("contact", patient.contact);
+                            setShowPatientSuggestions(false);
+                          }}
+                        >
+                          {patient.name.toUpperCase()} – {patient.contact}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
               </div>
 
               {/* Contact */}
@@ -591,7 +645,6 @@ MedBliss`;
                                 (t) => t.id === selectedId
                               );
                               if (selectedTest) {
-                                // set the test name & price
                                 setValue(
                                   `bloodTests.${index}.testName`,
                                   selectedTest.testName
@@ -600,13 +653,11 @@ MedBliss`;
                                   `bloodTests.${index}.price`,
                                   selectedTest.price
                                 );
-                                // auto-set testType if DB says "outsource"
                                 setValue(
                                   `bloodTests.${index}.testType`,
                                   selectedTest.type
                                 );
                               } else {
-                                // fallback if user picks none
                                 setValue(`bloodTests.${index}.testName`, "");
                                 setValue(`bloodTests.${index}.price`, 0);
                                 setValue(
