@@ -12,7 +12,6 @@ import {
   DocumentPlusIcon,
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
-// import Image from "next/image";
 
 interface BloodTest {
   testId: string;
@@ -68,6 +67,25 @@ export default function Dashboard() {
   };
 
   // -----------------------------
+  // Helper: Determine rank for sorting patients
+  // -----------------------------
+  const getRank = (patient: Patient): number => {
+    // Rank 1: Sample not collected
+    if (!patient.sampleCollectedAt) {
+      return 1;
+    }
+    // Rank 2: Sample collected but values not added (i.e. no bloodtest data)
+    else if (patient.sampleCollectedAt && (!patient.bloodtest || Object.keys(patient.bloodtest).length === 0)) {
+      return 2;
+    }
+    // Rank 3: Completed (bloodtest exists)
+    else if (patient.bloodtest && Object.keys(patient.bloodtest).length > 0) {
+      return 3;
+    }
+    return 4; // fallback (should not reach here)
+  };
+
+  // -----------------------------
   // Fetch patients from Firebase
   // -----------------------------
   useEffect(() => {
@@ -84,20 +102,18 @@ export default function Dashboard() {
           report: Boolean(data[key].report),
         }));
 
-        // Sort so that completed patients appear first, then by date descending
+        // Sort patients based on:
+        // 1. Rank: Not Collected (rank 1) > Sample Collected (rank 2) > Completed (rank 3)
+        // 2. Within same rank, sort by createdAt descending (most recent on top)
         const sortedPatients = patientList.sort((a, b) => {
-          const aComplete = a.bloodtest && Object.keys(a.bloodtest).length > 0;
-          const bComplete = b.bloodtest && Object.keys(b.bloodtest).length > 0;
-
-          if (aComplete && !bComplete) return -1;
-          if (!aComplete && bComplete) return 1;
-
-          return (
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          );
+          const rankA = getRank(a);
+          const rankB = getRank(b);
+          if (rankA !== rankB) {
+            return rankA - rankB; // lower rank number comes first
+          }
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         });
 
-        // Remove the slice so that all patients are displayed
         setPatients(sortedPatients);
 
         // Compute metrics
@@ -218,9 +234,7 @@ export default function Dashboard() {
         <div className="flex items-center space-x-4">
           <div className="text-right">
             <p className="text-3xl font-medium text-blue-600">InfiCare</p>
-            {/* <p className="text-xs text-gray-400">Pathologist</p> */}
           </div>
-         
         </div>
       </header>
 

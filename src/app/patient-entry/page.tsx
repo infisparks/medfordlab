@@ -89,7 +89,7 @@ const PatientEntryPage: React.FC = () => {
       discountPercentage: 0,
       amountPaid: 0,
       paymentMode: "online",
-      patientId: "",
+      patientId: "", // will be set if a family patient is selected
     },
   });
 
@@ -143,7 +143,11 @@ const PatientEntryPage: React.FC = () => {
             // If there's a "type" property in your DB that can be "outsource" or "inhospital"
             type: data[key].type || "inhospital",
           }));
-          setAvailableBloodTests(testsArray);
+          // Sort the tests alphabetically by testName
+          const sortedTestsArray = testsArray.sort((a, b) =>
+            a.testName.localeCompare(b.testName)
+          );
+          setAvailableBloodTests(sortedTestsArray);
         }
       } catch (error) {
         console.error("Error fetching blood tests:", error);
@@ -250,6 +254,7 @@ const PatientEntryPage: React.FC = () => {
     try {
       const userEmail = currentUser?.email || "Unknown User";
       let patientId = data.patientId;
+      // If no patientId is set (i.e. no family patient selected), generate one.
       if (!patientId || patientId.trim() === "") {
         patientId = generatePatientId();
         data.patientId = patientId;
@@ -292,15 +297,21 @@ const PatientEntryPage: React.FC = () => {
         dob = new Date(today.getTime() - data.age * 24 * 60 * 60 * 1000);
       }
 
-      // Insert minimal info to family database with DOB and gender (not raw age)
-      await set(ref(medfordFamilyDatabase, "patients/" + patientId), {
-        name: data.name,
-        contact: data.contact,
-        patientId: patientId,
-        dob: dob.toISOString(), // saving calculated DOB
-        gender: data.gender,
-        hospitalName: data.hospitalName, // saving hospital name if needed
-      });
+      // Only create a new record in medfordFamilyDatabase if this patient wasn't selected from the dropdown.
+      // We check if a family patient with this patientId already exists.
+      const familyExists = familyPatients.some(
+        (fp) => fp.patientId === patientId
+      );
+      if (!familyExists) {
+        await set(ref(medfordFamilyDatabase, "patients/" + patientId), {
+          name: data.name,
+          contact: data.contact,
+          patientId: patientId,
+          dob: dob.toISOString(), // saving calculated DOB
+          gender: data.gender,
+          hospitalName: data.hospitalName, // saving hospital name if needed
+        });
+      }
 
       // Construct WhatsApp message
       const testNames = data.bloodTests.map((test) => test.testName).join(", ");
@@ -421,6 +432,8 @@ MedBliss`;
                           onClick={() => {
                             setValue("name", patient.name.toUpperCase());
                             setValue("contact", patient.contact);
+                            // Set the hidden patientId so we know a family patient was selected.
+                            setValue("patientId", patient.patientId);
                             setShowPatientSuggestions(false);
                           }}
                         >
