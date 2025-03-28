@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { database } from "../firebase";
-import { ref, onValue, update } from "firebase/database";
+import { ref, onValue, update, remove } from "firebase/database";
 import {
   UserIcon,
   ChartBarIcon,
@@ -54,6 +54,7 @@ export default function Dashboard() {
    *  "all", "notCollected", "sampleCollected", "completed" 
    */
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
 
   // -----------------------------
   // Helper: Calculate amounts
@@ -185,6 +186,25 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Error collecting sample:", error);
       alert("Error collecting sample. Please try again.");
+    }
+  };
+
+  // -----------------------------
+  // "Delete Patient" action
+  // -----------------------------
+  const handleDeletePatient = async (patient: Patient) => {
+    if (!window.confirm(`Are you sure you want to delete ${patient.name}?`)) return;
+    try {
+      const patientRef = ref(database, `patients/${patient.id}`);
+      await remove(patientRef);
+      alert(`${patient.name} has been deleted.`);
+      // If the row is expanded, collapse it.
+      if (expandedPatientId === patient.id) {
+        setExpandedPatientId(null);
+      }
+    } catch (error) {
+      console.error("Error deleting patient:", error);
+      alert("Error deleting patient. Please try again.");
     }
   };
 
@@ -359,111 +379,136 @@ export default function Dashboard() {
                   const { remaining } = calculateAmounts(patient);
 
                   return (
-                    <tr key={patient.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4">
-                        <div>
-                          <p className="font-medium">{patient.name}</p>
-                          <p className="text-sm text-gray-500">
-                            {patient.age}y • {patient.gender}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        {patient.bloodTests && patient.bloodTests.length > 0 ? (
-                          <ul className="list-disc pl-4">
-                            {patient.bloodTests.map((test) => (
-                              <li key={test.testId}>{test.testName}</li>
-                            ))}
-                          </ul>
-                        ) : patient.bloodtest &&
-                          Object.keys(patient.bloodtest).length > 0 ? (
-                          <ul className="list-disc pl-4">
-                            {Object.keys(patient.bloodtest || {}).map((key) => (
-                              <li key={key}>
-                                {patient.bloodtest?.[key].testName}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <span className="text-gray-400">No tests</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        {new Date(patient.createdAt).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4">
-                        {statusLabel === "Not Collected" && (
-                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">
-                            Not Collected
-                          </span>
-                        )}
-                        {statusLabel === "Sample Collected" && (
-                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
-                            Sample Collected
-                          </span>
-                        )}
-                        {statusLabel === "Completed" && (
-                          <span className="px-3 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">
-                            Completed
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        {remaining > 0 ? `₹${remaining.toFixed(2)}` : "0"}
-                      </td>
-                      <td className="px-6 py-4 space-x-2">
-                        {/* Action buttons based on sampleCollectedAt & bloodtest */}
-                        {!hasSampleCollected ? (
+                    <React.Fragment key={patient.id}>
+                      <tr className="hover:bg-gray-50">
+                        <td className="px-6 py-4">
+                          <div>
+                            <p className="font-medium">{patient.name}</p>
+                            <p className="text-sm text-gray-500">
+                              {patient.age}y • {patient.gender}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-sm">
+                          {patient.bloodTests && patient.bloodTests.length > 0 ? (
+                            <ul className="list-disc pl-4">
+                              {patient.bloodTests.map((test) => (
+                                <li key={test.testId}>{test.testName}</li>
+                              ))}
+                            </ul>
+                          ) : patient.bloodtest &&
+                            Object.keys(patient.bloodtest).length > 0 ? (
+                            <ul className="list-disc pl-4">
+                              {Object.keys(patient.bloodtest || {}).map((key) => (
+                                <li key={key}>
+                                  {patient.bloodtest?.[key].testName}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <span className="text-gray-400">No tests</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-sm">
+                          {new Date(patient.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4">
+                          {statusLabel === "Not Collected" && (
+                            <span className="px-3 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">
+                              Not Collected
+                            </span>
+                          )}
+                          {statusLabel === "Sample Collected" && (
+                            <span className="px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
+                              Sample Collected
+                            </span>
+                          )}
+                          {statusLabel === "Completed" && (
+                            <span className="px-3 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">
+                              Completed
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-sm">
+                          {remaining > 0 ? `₹${remaining.toFixed(2)}` : "0"}
+                        </td>
+                        <td className="px-6 py-4">
                           <button
-                            onClick={() => handleCollectSample(patient)}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 transition-colors"
+                            onClick={() =>
+                              setExpandedPatientId(
+                                expandedPatientId === patient.id ? null : patient.id
+                              )
+                            }
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
                           >
-                            Collect Sample
+                            Actions
                           </button>
-                        ) : hasBloodtest ? (
-                          <>
-                            <Link
-                              href={`/download-report?patientId=${patient.id}`}
-                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 transition-colors"
-                            >
-                              <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                              Download Report
-                            </Link>
-                            <Link
-                              href={`/blood-values/new?patientId=${patient.id}`}
-                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 transition-colors"
-                            >
-                              Edit Test
-                            </Link>
-                          </>
-                        ) : (
-                          <Link
-                            href={`/blood-values/new?patientId=${patient.id}`}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-                          >
-                            <DocumentPlusIcon className="h-4 w-4 mr-2" />
-                            Add Value
-                          </Link>
-                        )}
-                        {/* Update Amount button */}
-                        <button
-                          onClick={() => {
-                            setSelectedPatient(patient);
-                            setNewAmountPaid(0);
-                          }}
-                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
-                        >
-                          Update Amount
-                        </button>
-                        {/* New "Edit Details" button */}
-                        <Link
-                          href={`/patient-detail?patientId=${patient.id}`}
-                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 transition-colors"
-                        >
-                          Edit Details
-                        </Link>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {expandedPatientId === patient.id && (
+                        <tr>
+                          <td colSpan={6} className="bg-gray-50">
+                            <div className="p-4 flex flex-wrap gap-2">
+                              {!hasSampleCollected && (
+                                <button
+                                  onClick={() => handleCollectSample(patient)}
+                                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 transition-colors"
+                                >
+                                  Collect Sample
+                                </button>
+                              )}
+                              {hasSampleCollected && !hasBloodtest && (
+                                <Link
+                                  href={`/blood-values/new?patientId=${patient.id}`}
+                                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+                                >
+                                  <DocumentPlusIcon className="h-4 w-4 mr-2" />
+                                  Add Value
+                                </Link>
+                              )}
+                              {hasBloodtest && (
+                                <>
+                                  <Link
+                                    href={`/download-report?patientId=${patient.id}`}
+                                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 transition-colors"
+                                  >
+                                    <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                    Download Report
+                                  </Link>
+                                  <Link
+                                    href={`/blood-values/new?patientId=${patient.id}`}
+                                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 transition-colors"
+                                  >
+                                    Edit Test
+                                  </Link>
+                                </>
+                              )}
+                              <button
+                                onClick={() => {
+                                  setSelectedPatient(patient);
+                                  setNewAmountPaid(0);
+                                }}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+                              >
+                                Update Payment
+                              </button>
+                              <Link
+                                href={`/patient-detail?patientId=${patient.id}`}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 transition-colors"
+                              >
+                                Edit Details
+                              </Link>
+                              <button
+                                onClick={() => handleDeletePatient(patient)}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gray-600 hover:bg-gray-700 transition-colors"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>

@@ -111,17 +111,32 @@ const parseRangeKey = (key: string): { lower: number; upper: number } => {
 };
 
 // -----------------------------
-// Helper: Try to parse a "range string" like "4.0-7.0" for numeric comparison
+// Helper: Try to parse a "range string" for numeric comparison
 // -----------------------------
+// This function now supports formats like "1-20", "1 to 20", and "up to 20"
+// where "up to 20" is interpreted as "1 to 20".
 const parseNumericRangeString = (rangeStr: string) => {
-  // Example pattern: "4-7", "4.0 - 7.1", etc.
-  const regex = /^\s*([\d.]+)\s*-\s*([\d.]+)\s*$/;
+  // Check for "up to" format (e.g., "up to 20")
+  const regexUp = /^\s*up\s*(?:to\s*)?([\d.]+)\s*$/i;
+  const matchUp = rangeStr.match(regexUp);
+  if (matchUp) {
+    const upper = parseFloat(matchUp[1]);
+    if (!isNaN(upper)) {
+      return { lower: 1, upper };
+    }
+  }
+
+  // Support both "-" and "to" as separator (e.g., "1-20" or "1 to 20")
+  const regex = /^\s*([\d.]+)\s*(?:-|to)\s*([\d.]+)\s*$/i;
   const match = rangeStr.match(regex);
-  if (!match) return null;
-  const lower = parseFloat(match[1]);
-  const upper = parseFloat(match[2]);
-  if (isNaN(lower) || isNaN(upper)) return null;
-  return { lower, upper };
+  if (match) {
+    const lower = parseFloat(match[1]);
+    const upper = parseFloat(match[2]);
+    if (!isNaN(lower) && !isNaN(upper)) {
+      return { lower, upper };
+    }
+  }
+  return null;
 };
 
 function DownloadReport() {
@@ -256,7 +271,7 @@ function DownloadReport() {
           yLeft += leftLineHeight;
           doc.text(`REF. DOCTOR: ${data.doctorName || "-"}`.toUpperCase(), leftX, yLeft);
           yLeft += leftLineHeight;
-          doc.text(`HOSPITAL: ${data.hospitalName || "-"}`.toUpperCase(), leftX, yLeft);
+          doc.text(`CENTER: ${data.hospitalName || "-"}`.toUpperCase(), leftX, yLeft);
 
           // Right side details (all in uppercase)
           const rightX = pageWidth - leftMargin;
@@ -293,8 +308,6 @@ function DownloadReport() {
         // Helper: Print a single parameter row
         // -----------------------------
         const printParameterRow = (param: Parameter) => {
-          // (No need to check param.visibility here, we already removed hidden)
-
           // 1) Determine normal range string
           let rangeStr = "";
           if (typeof param.range === "string") {
