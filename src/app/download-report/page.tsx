@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
 import { ref as dbRef, get } from "firebase/database";
@@ -32,7 +32,7 @@ interface Parameter {
   unit: string;
   range: string | { male: AgeRangeItem[]; female: AgeRangeItem[] };
   subparameters?: Parameter[];
-  visibility?: string; // indicates if we want to hide this parameter
+  visibility?: string;
   formula?: string;
 }
 
@@ -53,7 +53,6 @@ interface PatientData {
   sampleCollectedAt?: string;
   doctorName?: string;
   hospitalName?: string;
-  // Bloodtest data
   bloodtest?: Record<string, BloodTestData>;
 }
 
@@ -96,7 +95,7 @@ const parseRangeKey = (key: string): { lower: number; upper: number } => {
   if (suffix === "m") multiplier = 30;
   else if (suffix === "y") multiplier = 365;
 
-  const rangePart = key.replace(/[dmy]$/, ""); // remove suffix
+  const rangePart = key.replace(/[dmy]$/, "");
   const [lowStr, highStr] = rangePart.split("-");
   const lower = Number(lowStr) * multiplier || 0;
   const upper = Number(highStr) * multiplier || Infinity;
@@ -104,11 +103,9 @@ const parseRangeKey = (key: string): { lower: number; upper: number } => {
 };
 
 // -----------------------------
-// Helper: Try to parse a "range string" for numeric comparison
+// Helper: Parse numeric range string (e.g., "1-20" or "up to 20")
 // -----------------------------
-// This function supports formats like "1-20", "1 to 20", "up to 20".
 const parseNumericRangeString = (rangeStr: string) => {
-  // Check for "up to" format (e.g., "up to 20")
   const regexUp = /^\s*up\s*(?:to\s*)?([\d.]+)\s*$/i;
   const matchUp = rangeStr.match(regexUp);
   if (matchUp) {
@@ -117,8 +114,6 @@ const parseNumericRangeString = (rangeStr: string) => {
       return { lower: 1, upper };
     }
   }
-
-  // Support both "-" and "to" as separator (e.g., "1-20" or "1 to 20")
   const regex = /^\s*([\d.]+)\s*(?:-|to)\s*([\d.]+)\s*$/i;
   const match = rangeStr.match(regex);
   if (match) {
@@ -144,26 +139,16 @@ function DownloadReport() {
   const searchParams = useSearchParams();
   const patientId = searchParams.get("patientId");
 
-  // We'll store two separate PDF blobs:
-  //  1) pdfBlobWithLetterhead (the normal version)
-  //  2) pdfBlobNoLetterhead   (a version that omits the letterhead)
-  const [pdfBlobWithLetterhead, setPdfBlobWithLetterhead] = useState<Blob | null>(null);
-  const [pdfBlobNoLetterhead, setPdfBlobNoLetterhead] = useState<Blob | null>(null);
-
   const [patientData, setPatientData] = useState<PatientData | null>(null);
   const [isSending, setIsSending] = useState(false);
 
-  // Prevents duplicate PDF generation on re-render
-  const pdfGenerated = useRef(false);
-
   // -----------------------------
-  //  useEffect to fetch data & generate both PDF versions
+  // Fetch Patient Data
   // -----------------------------
   useEffect(() => {
-    if (!patientId || pdfGenerated.current) return;
-    pdfGenerated.current = true;
+    if (!patientId) return;
 
-    const fetchDataAndGeneratePDFs = async () => {
+    const fetchData = async () => {
       try {
         const patientRef = dbRef(database, `patients/${patientId}`);
         const snapshot = await get(patientRef);
@@ -176,76 +161,59 @@ function DownloadReport() {
           alert("No report found for this patient.");
           return;
         }
-
-        // Filter out hidden parameters
-        const filtered = filterOutHiddenParameters(data);
-        data.bloodtest = filtered;
-
+        data.bloodtest = filterOutHiddenParameters(data);
         setPatientData(data);
-
-        // Generate both PDFs in parallel
-        const [blobLetterhead, blobNoLetterhead] = await Promise.all([
-          generatePDFReport(data, true),   // with letterhead
-          generatePDFReport(data, false),  // no letterhead
-        ]);
-
-        setPdfBlobWithLetterhead(blobLetterhead);
-        setPdfBlobNoLetterhead(blobNoLetterhead);
-
       } catch (err) {
         console.error("Error:", err);
-        alert("Error generating report. Please try again.");
+        alert("Error fetching patient data. Please try again.");
       }
     };
 
-    fetchDataAndGeneratePDFs();
+    fetchData();
   }, [patientId, router]);
 
   // -----------------------------
   // Helper: Filter out hidden parameters
   // -----------------------------
   const filterOutHiddenParameters = (data: PatientData): Record<string, BloodTestData> => {
-    const filteredBloodtest: Record<string, BloodTestData> = {};
+    const filtered: Record<string, BloodTestData> = {};
     if (!data.bloodtest) return {};
 
     for (const testKey in data.bloodtest) {
-      const originalTestData = data.bloodtest[testKey];
-      const newTestData: BloodTestData = {
-        ...originalTestData,
-        parameters: [],
+      const original = data.bloodtest[testKey];
+      const newTest: BloodTestData = {
+        ...original,
+        parameters: original.parameters
+          .filter((p) => p.visibility !== "hidden")
+          .map((p) => ({
+            ...p,
+            subparameters: p.subparameters?.filter((sp) => sp.visibility !== "hidden") || [],
+          })),
       };
-
-      // Filter out hidden parameters
-      const visibleParams = originalTestData.parameters
-        .filter((p) => p.visibility !== "hidden")
-        .map((p) => {
-          // Also filter subparameters
-          const newSubparams =
-            p.subparameters?.filter((sp) => sp.visibility !== "hidden") || [];
-          return { ...p, subparameters: newSubparams };
-        });
-
-      newTestData.parameters = visibleParams;
-      filteredBloodtest[testKey] = newTestData;
+      filtered[testKey] = newTest;
     }
-    return filteredBloodtest;
+    return filtered;
   };
 
   // -----------------------------
   // Main PDF Generation Function
-  // Takes a "skipLetterhead" argument
+  // Parameters:
+  //    includeLetterhead: add letterhead if true
+  //    skipCover: if true, do not add the cover page (front page)
   // -----------------------------
-  const generatePDFReport = async (data: PatientData, includeLetterhead: boolean) => {
-    // Convert data to PDF & return blob
+  const generatePDFReport = async (
+    data: PatientData,
+    includeLetterhead: boolean,
+    skipCover: boolean
+  ) => {
     const doc = new jsPDF("p", "mm", "a4");
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const leftMargin = 30;
 
-    // We'll do 4 columns: Param, Value, Reference Range, Unit
+    // 4 columns: Parameter, Value, Range, Unit
     const totalTableWidth = pageWidth - 2 * leftMargin;
-    // total parts = 1 (param) + 1 (value) + 1.35 (range) + 1 (unit) = 4.35
-    const baseColWidth = totalTableWidth / 4.35;
+    const baseColWidth = totalTableWidth / 4.35; // parts: 1 + 1 + 1.35 + 1
     const paramColWidth = baseColWidth;
     const valueColWidth = baseColWidth;
     const rangeColWidth = 1.43 * baseColWidth;
@@ -256,53 +224,71 @@ function DownloadReport() {
     const col3X = col2X + valueColWidth;
     const col4X = col3X + rangeColWidth;
 
-    // For each row
     const lineHeight = 6;
-
-    // 1) Add cover page
-    await addCoverPage(doc);
-
-    // 2) We'll track yPosition to place new lines
-    let yPosition = 0;
-
-    // 3) Some data
     const patientAgeInDays = data.total_day
       ? Number(data.total_day)
       : Number(data.age) * 365;
     const patientGender = data.gender?.toLowerCase() || "";
 
-    // 4) Retrieve currently logged-in user
+    // Get current user info
     const auth = getAuth();
     let loggedInUsername = auth.currentUser?.displayName || auth.currentUser?.email || "Unknown";
-    // remove "@gmail.com" if present:
     if (loggedInUsername.endsWith("@gmail.com")) {
       loggedInUsername = loggedInUsername.replace("@gmail.com", "");
     }
 
-    // 5) For each test (in-house)
-    const { bloodtest } = data;
-    if (!bloodtest) {
-      // no tests
-      return doc.output("blob");
-    }
-
-    // define helper to add letterhead
-    const addLetterheadIfNeeded = async () => {
-      if (!includeLetterhead) return; // skip if user wants no letterhead
+    // -----------------------------
+    // Helper: Add cover page (if needed)
+    // -----------------------------
+    const addCoverPage = async () => {
       try {
-        const letterheadBase64 = await loadImageAsCompressedJPEG(
-          letterhead.src,
-          0.5
-        );
+        const coverBase64 = await loadImageAsCompressedJPEG(firstpage.src, 0.5);
+        doc.addImage(coverBase64, "JPEG", 0, 0, pageWidth, pageHeight);
+      } catch (error) {
+        console.error("Error loading cover page:", error);
+      }
+    };
+
+    // -----------------------------
+    // Helper: Add letterhead (if needed)
+    // -----------------------------
+    const addLetterheadIfNeeded = async () => {
+      if (!includeLetterhead) return;
+      try {
+        const letterheadBase64 = await loadImageAsCompressedJPEG(letterhead.src, 0.5);
         doc.addImage(letterheadBase64, "JPEG", 0, 0, pageWidth, pageHeight);
       } catch (error) {
         console.error("Error loading letterhead:", error);
       }
     };
 
-    // define helper to add patient info
+    // -----------------------------
+    // Helper: Add stamp and printed-by info
+    // -----------------------------
+    const addStampAndPrintedBy = async () => {
+      const stampWidth = 30;
+      const stampHeight = 30;
+      const stampX = pageWidth - leftMargin - stampWidth;
+      const stampY = pageHeight - stampHeight - 30;
+      try {
+        const stampBase64 = await loadImageAsCompressedJPEG(stamp.src, 0.5);
+        doc.addImage(stampBase64, "JPEG", stampX, stampY, stampWidth, stampHeight);
+      } catch (error) {
+        console.error("Error loading stamp:", error);
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text("Printed by", leftMargin, stampY + stampHeight - 8);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11);
+      doc.text(loggedInUsername, leftMargin, stampY + stampHeight - 4);
+    };
+
+    // -----------------------------
+    // Helper: Add patient header info
+    // -----------------------------
     const addHeader = () => {
-      const leftLineHeight = 7;
+      const lineGap = 7;
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
       doc.setTextColor(0, 0, 0);
@@ -310,65 +296,43 @@ function DownloadReport() {
       const leftX = leftMargin;
       let yLeft = 50;
       doc.text(`PATIENT NAME: ${data.name}`.toUpperCase(), leftX, yLeft);
-      yLeft += leftLineHeight;
-      doc.text(
-        `AGE/SEX: ${data.age} / ${data.gender}`.toUpperCase(),
-        leftX,
-        yLeft
-      );
-      yLeft += leftLineHeight;
-      doc.text(
-        `REF. DOCTOR: ${data.doctorName || "-"}`.toUpperCase(),
-        leftX,
-        yLeft
-      );
-      yLeft += leftLineHeight;
+      yLeft += lineGap;
+      doc.text(`AGE/SEX: ${data.age} / ${data.gender}`.toUpperCase(), leftX, yLeft);
+      yLeft += lineGap;
+      doc.text(`REF. DOCTOR: ${data.doctorName || "-"}`.toUpperCase(), leftX, yLeft);
+      yLeft += lineGap;
       doc.text(`CENTER: ${data.hospitalName || "-"}`.toUpperCase(), leftX, yLeft);
 
-      // Right side
+      // Right side info
       const rightX = pageWidth - leftMargin;
       const rightY = 50;
-      doc.text(`PATIENT ID: ${data.patientId}`.toUpperCase(), rightX, rightY, {
-        align: "right",
-      });
+      doc.text(`PATIENT ID: ${data.patientId}`.toUpperCase(), rightX, rightY, { align: "right" });
       doc.text(
         `REGISTRATION ON: ${new Date(data.createdAt).toLocaleString()}`.toUpperCase(),
         rightX,
-        rightY + leftLineHeight,
+        rightY + lineGap,
         { align: "right" }
       );
       const sampledOn = data.sampleCollectedAt
         ? new Date(data.sampleCollectedAt).toLocaleString()
         : new Date(data.createdAt).toLocaleString();
-      doc.text(
-        `SAMPLED ON: ${sampledOn}`.toUpperCase(),
-        rightX,
-        rightY + leftLineHeight * 2,
-        { align: "right" }
-      );
+      doc.text(`SAMPLED ON: ${sampledOn}`.toUpperCase(), rightX, rightY + 2 * lineGap, {
+        align: "right",
+      });
       doc.text(
         `REPORTED ON: ${new Date().toLocaleString()}`.toUpperCase(),
         rightX,
-        rightY + leftLineHeight * 3,
+        rightY + 3 * lineGap,
         { align: "right" }
       );
-
-      return Math.max(yLeft, rightY + leftLineHeight * 3) + 10;
+      return Math.max(yLeft, rightY + 3 * lineGap) + 10;
     };
 
-    // define helper: add cover page
-    async function addCoverPage(doc: jsPDF) {
-      try {
-        const coverBase64 = await loadImageAsCompressedJPEG(firstpage.src, 0.5);
-        doc.addImage(coverBase64, "JPEG", 0, 0, pageWidth, pageHeight);
-      } catch (error) {
-        console.error("Error loading cover page:", error);
-      }
-    }
-
-    // define helper: parse row
+    // -----------------------------
+    // Print a test's parameter row
+    // -----------------------------
+    let yPosition = 0;
     const printParameterRow = (param: Parameter) => {
-      // compute "rangeStr"
       let rangeStr = "";
       if (typeof param.range === "string") {
         rangeStr = param.range;
@@ -385,12 +349,10 @@ function DownloadReport() {
           rangeStr = arr[arr.length - 1].rangeValue;
         }
       }
-
       if (rangeStr.includes("/n")) {
         rangeStr = rangeStr.replaceAll("/n", "\n");
       }
 
-      // check out-of-range
       let isOutOfRange = false;
       let outOfRangeLabel: "" | "H" | "L" = "";
       const numericRange = parseNumericRangeString(rangeStr);
@@ -405,8 +367,7 @@ function DownloadReport() {
           outOfRangeLabel = "H";
         }
       }
-
-      const valStr = param.value !== "" ? String(param.value) + outOfRangeLabel : "-";
+      const valStr = param.value !== "" ? `${param.value}${outOfRangeLabel}` : "-";
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9);
@@ -416,33 +377,18 @@ function DownloadReport() {
       const valueLines = doc.splitTextToSize(valStr, valueColWidth - 4);
       const rangeLines = doc.splitTextToSize(rangeStr, rangeColWidth - 4);
       const unitLines = doc.splitTextToSize(param.unit, unitColWidth - 4);
-
-      const maxLines = Math.max(
-        nameLines.length,
-        valueLines.length,
-        rangeLines.length,
-        unitLines.length
-      );
+      const maxLines = Math.max(nameLines.length, valueLines.length, rangeLines.length, unitLines.length);
 
       doc.text(nameLines, col1X + 2, yPosition + 4);
       if (isOutOfRange) {
         doc.setFont("helvetica", "bold");
       }
-      doc.text(valueLines, col2X + valueColWidth / 2, yPosition + 4, {
-        align: "center",
-      });
+      doc.text(valueLines, col2X + valueColWidth / 2, yPosition + 4, { align: "center" });
       doc.setFont("helvetica", "normal");
-
-      doc.text(rangeLines, col3X + rangeColWidth / 2, yPosition + 4, {
-        align: "center",
-      });
-      doc.text(unitLines, col4X + unitColWidth / 2, yPosition + 4, {
-        align: "center",
-      });
-
+      doc.text(rangeLines, col3X + rangeColWidth / 2, yPosition + 4, { align: "center" });
+      doc.text(unitLines, col4X + unitColWidth / 2, yPosition + 4, { align: "center" });
       yPosition += maxLines * lineHeight;
 
-      // subparameters
       if (param.subparameters && param.subparameters.length > 0) {
         for (const sp of param.subparameters) {
           doc.setFontSize(8);
@@ -464,7 +410,6 @@ function DownloadReport() {
               subRangeStr = arr[arr.length - 1].rangeValue;
             }
           }
-
           if (subRangeStr.includes("/n")) {
             subRangeStr = subRangeStr.replaceAll("/n", "\n");
           }
@@ -483,15 +428,13 @@ function DownloadReport() {
               subOutOfRangeLabel = "H";
             }
           }
-
-          const subValStr = sp.value !== "" ? String(sp.value) + subOutOfRangeLabel : "-";
+          const subValStr = sp.value !== "" ? `${sp.value}${subOutOfRangeLabel}` : "-";
           const subName = " - " + sp.name;
 
           const subNameLines = doc.splitTextToSize(subName, paramColWidth - 4);
           const subValueLines = doc.splitTextToSize(subValStr, valueColWidth - 4);
           const subRangeLines = doc.splitTextToSize(subRangeStr, rangeColWidth - 4);
           const subUnitLines = doc.splitTextToSize(sp.unit, unitColWidth - 4);
-
           const subMaxLines = Math.max(
             subNameLines.length,
             subValueLines.length,
@@ -503,108 +446,83 @@ function DownloadReport() {
           if (isSubOutOfRange) {
             doc.setFont("helvetica", "bold");
           }
-          doc.text(subValueLines, col2X + valueColWidth / 2, yPosition + 4, {
-            align: "center",
-          });
+          doc.text(subValueLines, col2X + valueColWidth / 2, yPosition + 4, { align: "center" });
           doc.setFont("helvetica", "normal");
-
-          doc.text(subRangeLines, col3X + rangeColWidth / 2, yPosition + 4, {
-            align: "center",
-          });
-          doc.text(subUnitLines, col4X + unitColWidth / 2, yPosition + 4, {
-            align: "center",
-          });
-
+          doc.text(subRangeLines, col3X + rangeColWidth / 2, yPosition + 4, { align: "center" });
+          doc.text(subUnitLines, col4X + unitColWidth / 2, yPosition + 4, { align: "center" });
           yPosition += subMaxLines * lineHeight;
         }
       }
     };
 
-    // Now we iterate over each test
+    // -----------------------------
+    // Build the PDF
+    // -----------------------------
+    // If skipCover is false, add a cover page (e.g., for WhatsApp)
+    if (!skipCover) {
+      await addCoverPage();
+    }
+
+    // Retrieve tests
+    const { bloodtest } = data;
+    if (!bloodtest) return doc.output("blob");
+
+    let firstTest = true;
     for (const testKey in bloodtest) {
       const testData = bloodtest[testKey];
-      // Skip outsourced tests or no parameters
-      if (testData.type === "outsource" || !testData.parameters?.length) {
-        continue;
+      if (testData.type === "outsource" || !testData.parameters?.length) continue;
+      // For the first test in skipCover mode, use the existing first page; otherwise, add a new page.
+      if (skipCover) {
+        if (!firstTest) {
+          doc.addPage();
+        }
+      } else {
+        doc.addPage();
       }
+      firstTest = false;
 
-      // Add a new page for each test
-      doc.addPage();
-
-      // If letterhead is included, draw it
       await addLetterheadIfNeeded();
-
-      // Add top heading info
       yPosition = addHeader();
-
-      // Horizontal line
       doc.setDrawColor(0, 51, 102);
       doc.setLineWidth(0.5);
       doc.line(leftMargin, 76, pageWidth - leftMargin, 76);
 
-      // Test name
       doc.setFont("helvetica", "bold");
       doc.setFontSize(13);
       doc.setTextColor(0, 51, 102);
-      doc.text(
-        testKey.replace(/_/g, " ").toUpperCase(),
-        pageWidth / 2,
-        yPosition,
-        { align: "center" }
-      );
+      doc.text(testKey.replace(/_/g, " ").toUpperCase(), pageWidth / 2, yPosition, { align: "center" });
       yPosition += 2;
 
-      // Table header
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
       doc.setFillColor(0, 51, 102);
-      doc.rect(leftMargin, yPosition, totalTableWidth, 7, "F");
+      const rowHeight = 7;
+      doc.rect(leftMargin, yPosition, totalTableWidth, rowHeight, "F");
       doc.setTextColor(255, 255, 255);
       doc.text("PARAMETER", col1X + 2, yPosition + 5);
-      doc.text("VALUE", col2X + valueColWidth / 2, yPosition + 5, {
-        align: "center",
-      });
-      doc.text("RANGE", col3X + rangeColWidth / 2, yPosition + 5, {
-        align: "center",
-      });
-      doc.text("UNIT", col4X + unitColWidth / 2, yPosition + 5, {
-        align: "center",
-      });
-
-      yPosition += 9;
+      doc.text("VALUE", col2X + valueColWidth / 2, yPosition + 5, { align: "center" });
+      doc.text("RANGE", col3X + rangeColWidth / 2, yPosition + 5, { align: "center" });
+      doc.text("UNIT", col4X + unitColWidth / 2, yPosition + 5, { align: "center" });
+      yPosition += rowHeight + 2;
 
       const { parameters, subheadings } = testData;
       const sub = subheadings || [];
+      const subheadingParamNames = sub.reduce<string[]>((acc, sh) => acc.concat(sh.parameterNames), []);
+      const globalParams = parameters.filter((p) => !subheadingParamNames.includes(p.name));
 
-      // Identify subheading param names
-      const subheadingParamNames = sub.reduce<string[]>(
-        (acc, sh) => acc.concat(sh.parameterNames),
-        []
-      );
-
-      // Global params
-      const globalParams = parameters.filter(
-        (p) => !subheadingParamNames.includes(p.name)
-      );
-
-      // Print global first
       for (const gp of globalParams) {
         printParameterRow(gp);
       }
 
-      // Then subheading groups
       if (sub.length > 0) {
         for (const sh of sub) {
-          const subParams = parameters.filter((p) =>
-            sh.parameterNames.includes(p.name)
-          );
+          const subParams = parameters.filter((p) => sh.parameterNames.includes(p.name));
           if (subParams.length > 0) {
             doc.setFont("helvetica", "bold");
             doc.setFontSize(10);
             doc.setTextColor(0, 51, 102);
             doc.text(sh.title, col1X, yPosition + 5);
             yPosition += 6;
-
             for (const sp of subParams) {
               printParameterRow(sp);
             }
@@ -613,80 +531,103 @@ function DownloadReport() {
       }
     }
 
-    // Finally stamp
-    const stampWidth = 40;
-    const stampHeight = 40;
-    const stampX = pageWidth - leftMargin - stampWidth;
-    const stampY = pageHeight - stampHeight - 30;
-    const stampBase64 = await loadImageAsCompressedJPEG(stamp.src, 0.5);
-    doc.addImage(stampBase64, "JPEG", stampX, stampY, stampWidth, stampHeight);
-
-    // "Printed By"
-    // we've already replaced any '@gmail.com' above
-    // so "loggedInUsername" is sanitized
-    const printedByX = leftMargin;
-    const printedByY = stampY + stampHeight - 10;
-
-    // "Printed by"
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.text("Printed by", printedByX, printedByY);
-
-    // actual user
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(14);
-    doc.text(loggedInUsername, printedByX, printedByY + 6);
+    // Add stamp & printed-by info to every page
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      await addStampAndPrintedBy();
+    }
 
     return doc.output("blob");
   };
 
-  // -----------------------------------
-  //  Download PDF Functions
-  // -----------------------------------
-  const downloadReportWithLetterhead = () => {
-    if (!pdfBlobWithLetterhead || !patientData) return;
-    const url = URL.createObjectURL(pdfBlobWithLetterhead);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${patientData.name}_with_letterhead.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // -----------------------------
+  // Action Handlers
+  // -----------------------------
+  // Download PDF with letterhead (no cover page)
+  const downloadWithLetterhead = async () => {
+    if (!patientData) return;
+    try {
+      const blob = await generatePDFReport(patientData, true, true);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${patientData.name}_with_letterhead.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert("Error generating PDF. Please try again.");
+    }
   };
 
-  const downloadReportNoLetterhead = () => {
-    if (!pdfBlobNoLetterhead || !patientData) return;
-    const url = URL.createObjectURL(pdfBlobNoLetterhead);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${patientData.name}_no_letterhead.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // Download PDF without letterhead (no cover page)
+  const downloadNoLetterhead = async () => {
+    if (!patientData) return;
+    try {
+      const blob = await generatePDFReport(patientData, false, true);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${patientData.name}_no_letterhead.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert("Error generating PDF. Please try again.");
+    }
   };
 
-  // -----------------------------------
-  //  Send PDF on WhatsApp
-  // -----------------------------------
-  const sendReportOnWhatsApp = async () => {
-    if (!pdfBlobWithLetterhead || !patientData) return;
+  // Preview PDF with letterhead (no cover page)
+  const previewReport = async () => {
+    if (!patientData) return;
+    try {
+      const blob = await generatePDFReport(patientData, true, true);
+      const storage = getStorage();
+      const sRef = storageRef(storage, `reports/preview/${patientData.name}_preview.pdf`);
+      await uploadBytes(sRef, blob);
+      const downloadURL = await getDownloadURL(sRef);
+      window.open(downloadURL, "_blank");
+    } catch (error) {
+      console.error("Error previewing report:", error);
+      alert("Error generating preview. Please try again.");
+    }
+  };
+
+  // Preview PDF without letterhead (no cover page)
+  const previewReportNoLetterhead = async () => {
+    if (!patientData) return;
+    try {
+      const blob = await generatePDFReport(patientData, false, true);
+      const storage = getStorage();
+      const sRef = storageRef(storage, `reports/preview/${patientData.name}_preview_no_letterhead.pdf`);
+      await uploadBytes(sRef, blob);
+      const downloadURL = await getDownloadURL(sRef);
+      window.open(downloadURL, "_blank");
+    } catch (error) {
+      console.error("Error previewing report without letterhead:", error);
+      alert("Error generating preview. Please try again.");
+    }
+  };
+
+  // Send on WhatsApp (includes cover page)
+  const sendOnWhatsApp = async () => {
+    if (!patientData) return;
     try {
       setIsSending(true);
+      const blob = await generatePDFReport(patientData, true, false);
       const storage = getStorage();
-      const storageRefInstance = storageRef(
-        storage,
-        `reports/${patientData.name}.pdf`
-      );
-      // We send the letterhead version
-      const snapshot = await uploadBytes(storageRefInstance, pdfBlobWithLetterhead);
+      const sRef = storageRef(storage, `reports/${patientData.name}.pdf`);
+      const snapshot = await uploadBytes(sRef, blob);
       const downloadURL = await getDownloadURL(snapshot.ref);
 
-      // Replace with your valid token, phone number, etc.
-      const token = "99583991572";
+      const token = "99583991573";
       const number = "91" + patientData.contact;
       const payload = {
         token,
         number,
         imageUrl: downloadURL,
-        caption: `Dear ${patientData.name},\n\nYour blood test report is now available. Please click the link below to view/download.\n\n${downloadURL}\n\nThank you.\nYour Lab Team`,
+        caption: `Dear ${patientData.name},\n\nYour blood test report is now available:\n${downloadURL}\n\nRegards,\nYour Lab Team`,
       };
 
       const response = await fetch("https://wa.medblisss.com/send-image-url", {
@@ -703,20 +644,20 @@ function DownloadReport() {
         alert("Failed to send the report on WhatsApp. Check logs or token.");
       }
     } catch (error) {
-      console.error("Error sending report on WhatsApp:", error);
+      console.error("Error sending WhatsApp:", error);
       alert("Error sending report. Please try again.");
     } finally {
       setIsSending(false);
     }
   };
 
-  // -----------------------------------
-  //  Render
-  // -----------------------------------
+  // -----------------------------
+  // Render
+  // -----------------------------
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full space-y-6">
-        {pdfBlobWithLetterhead && pdfBlobNoLetterhead && patientData ? (
+        {patientData ? (
           <div className="bg-white rounded-xl shadow-lg p-8 space-y-6 transition-all duration-300 hover:shadow-xl">
             <h2 className="text-3xl font-bold text-gray-800 text-center mb-6">
               Report Ready
@@ -724,88 +665,68 @@ function DownloadReport() {
 
             {/* Download with Letterhead */}
             <button
-              onClick={downloadReportWithLetterhead}
+              onClick={downloadWithLetterhead}
               className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-4 rounded-xl font-medium transition-all duration-300"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              <span>Download PDF Report (Letterhead)</span>
+              <span>Download PDF (Letterhead)</span>
             </button>
 
             {/* Download without Letterhead */}
             <button
-              onClick={downloadReportNoLetterhead}
+              onClick={downloadNoLetterhead}
               className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-4 rounded-xl font-medium transition-all duration-300"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 4v16m8-8H4"
-                />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
               <span>Download PDF (No Letterhead)</span>
             </button>
 
-            {/* Send on WhatsApp */}
+            {/* Preview with Letterhead */}
             <button
-              onClick={sendReportOnWhatsApp}
-              className="w-full flex items-center justify-center space-x-3 px-6 py-4 rounded-xl font-medium transition-all duration-300 bg-[#25D366] hover:bg-[#128C7E] text-white"
+              onClick={previewReport}
+              className="w-full flex items-center justify-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-xl font-medium transition-all duration-300"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <span>Preview PDF (Letterhead)</span>
+            </button>
+
+            {/* Preview without Letterhead */}
+            <button
+              onClick={previewReportNoLetterhead}
+              className="w-full flex items-center justify-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-xl font-medium transition-all duration-300"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <span>Preview PDF (No Letterhead)</span>
+            </button>
+
+            {/* Send on WhatsApp (includes cover page) */}
+            <button
+              onClick={sendOnWhatsApp}
               disabled={isSending}
+              className="w-full flex items-center justify-center space-x-3 px-6 py-4 rounded-xl font-medium transition-all duration-300 bg-[#25D366] hover:bg-[#128C7E] text-white"
             >
               {isSending ? (
                 <>
-                  <svg
-                    className="animate-spin h-5 w-5 mr-3 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                    ></path>
+                  <svg className="animate-spin h-5 w-5 mr-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                   </svg>
-                  <span>Sending, please wait...</span>
+                  <span>Sending...</span>
                 </>
               ) : (
                 <>
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                  >
-                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884"/>
                   </svg>
                   <span>Send via WhatsApp</span>
                 </>
@@ -820,13 +741,9 @@ function DownloadReport() {
           <div className="text-center bg-white p-8 rounded-xl shadow-lg">
             <div className="flex items-center justify-center space-x-2">
               <div className="animate-spin h-8 w-8 border-4 border-indigo-500 rounded-full border-t-transparent"></div>
-              <span className="text-gray-600 font-medium">
-                Generating PDF Report...
-              </span>
+              <span className="text-gray-600 font-medium">Fetching patient data...</span>
             </div>
-            <p className="mt-4 text-sm text-gray-500">
-              This may take a few moments. Please don’t close this page.
-            </p>
+            <p className="mt-4 text-sm text-gray-500">This may take a few moments. Please don’t close this page.</p>
           </div>
         )}
       </div>

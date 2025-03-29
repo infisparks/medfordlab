@@ -333,7 +333,7 @@ MedBliss`;
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          token: "99583991572",
+          token: "99583991573 ",
           number: `91${data.contact}`,
           message,
         }),
