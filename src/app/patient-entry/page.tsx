@@ -347,6 +347,7 @@ MedBliss`;
     }
   };
 
+  
   // If user not logged in
   if (!currentUser) {
     return (
