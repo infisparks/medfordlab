@@ -140,7 +140,6 @@ const PatientEntryPage: React.FC = () => {
             id: key,
             testName: data[key].testName,
             price: Number(data[key].price),
-            // If there's a "type" property in your DB that can be "outsource" or "inhospital"
             type: data[key].type || "inhospital",
           }));
           // Sort the tests alphabetically by testName
@@ -298,7 +297,6 @@ const PatientEntryPage: React.FC = () => {
       }
 
       // Only create a new record in medfordFamilyDatabase if this patient wasn't selected from the dropdown.
-      // We check if a family patient with this patientId already exists.
       const familyExists = familyPatients.some(
         (fp) => fp.patientId === patientId
       );
@@ -307,9 +305,9 @@ const PatientEntryPage: React.FC = () => {
           name: data.name,
           contact: data.contact,
           patientId: patientId,
-          dob: dob.toISOString(), // saving calculated DOB
+          dob: dob.toISOString(),
           gender: data.gender,
-          hospitalName: data.hospitalName, // saving hospital name if needed
+          hospitalName: data.hospitalName,
         });
       }
 
@@ -329,15 +327,19 @@ Regards,
 MedBliss`;
 
       // Example: sending to your custom WhatsApp endpoint
-      await fetch("https://wa.medblisss.com/send-text", {
+      const response = await fetch("https://wa.medblisss.com/send-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          token: "99583991573 ",
+          token: "99583991573", // removed trailing space
           number: `91${data.contact}`,
           message,
         }),
       });
+      
+      if (!response.ok) {
+        throw new Error("Failed to send WhatsApp message");
+      }
 
       alert("Patient information saved and WhatsApp message sent successfully!");
       reset();
@@ -347,7 +349,6 @@ MedBliss`;
     }
   };
 
-  
   // If user not logged in
   if (!currentUser) {
     return (
@@ -389,7 +390,6 @@ MedBliss`;
                   className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="MEDFORD">MEDFORD</option>
-                  {/* Add more hospital options if needed */}
                   <option value="Other">Other</option>
                 </select>
                 {errors.hospitalName && (
@@ -408,7 +408,6 @@ MedBliss`;
                     {...register("name", {
                       required: "Name is required",
                       onChange: (e) => {
-                        // Force the name input to always be uppercase
                         setShowPatientSuggestions(true);
                         setValue("name", e.target.value.toUpperCase());
                       },
@@ -419,9 +418,7 @@ MedBliss`;
                   <UserCircleIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
                 {errors.name && (
-                  <p className="text-red-500 text-sm mt-1">
-                    {errors.name.message}
-                  </p>
+                  <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>
                 )}
                 {showPatientSuggestions &&
                   filteredPatientSuggestions.length > 0 && (
@@ -433,7 +430,6 @@ MedBliss`;
                           onClick={() => {
                             setValue("name", patient.name.toUpperCase());
                             setValue("contact", patient.contact);
-                            // Set the hidden patientId so we know a family patient was selected.
                             setValue("patientId", patient.patientId);
                             setShowPatientSuggestions(false);
                           }}
@@ -465,9 +461,7 @@ MedBliss`;
                   <PhoneIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
                 </div>
                 {errors.contact && (
-                  <p className="text-red-500 text-sm mt-1">
-                    {errors.contact.message}
-                  </p>
+                  <p className="text-red-500 text-sm mt-1">{errors.contact.message}</p>
                 )}
               </div>
 
@@ -486,9 +480,7 @@ MedBliss`;
                     className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
                   />
                   {errors.age && (
-                    <p className="text-red-500 text-sm mt-1">
-                      {errors.age.message}
-                    </p>
+                    <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>
                   )}
                 </div>
                 <div>
@@ -504,9 +496,7 @@ MedBliss`;
                     <option value="day">Day</option>
                   </select>
                   {errors.dayType && (
-                    <p className="text-red-500 text-sm mt-1">
-                      {errors.dayType.message}
-                    </p>
+                    <p className="text-red-500 text-sm mt-1">{errors.dayType.message}</p>
                   )}
                 </div>
                 <div>
@@ -523,9 +513,7 @@ MedBliss`;
                     <option value="Other">Other</option>
                   </select>
                   {errors.gender && (
-                    <p className="text-red-500 text-sm mt-1">
-                      {errors.gender.message}
-                    </p>
+                    <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>
                   )}
                 </div>
               </div>
@@ -615,10 +603,7 @@ MedBliss`;
                     );
                     if (selectedPackage) {
                       setValue("bloodTests", selectedPackage.tests);
-                      setValue(
-                        "discountPercentage",
-                        selectedPackage.discountPercentage
-                      );
+                      setValue("discountPercentage", selectedPackage.discountPercentage);
                     }
                   }}
                   className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -639,13 +624,17 @@ MedBliss`;
                 </label>
                 <div className="space-y-4">
                   {bloodTestFields.map((field, index) => (
-                    <div
-                      key={field.id}
-                      className="border p-4 rounded-lg space-y-4"
-                    >
-                      {/* Row 1: Test Name & Price */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-                        <div>
+                    <div key={field.id} className="border p-4 rounded-lg relative">
+                      {/* Remove button at top right */}
+                      <button
+                        type="button"
+                        onClick={() => remove(index)}
+                        className="absolute top-2 right-2 text-red-500 hover:text-red-700 text-sm"
+                      >
+                        Remove Test
+                      </button>
+                      <div className="flex flex-col sm:flex-row gap-4 items-end">
+                        <div className="flex-1">
                           <label className="block text-xs font-medium text-gray-600 mb-1">
                             Test Name
                           </label>
@@ -674,10 +663,7 @@ MedBliss`;
                               } else {
                                 setValue(`bloodTests.${index}.testName`, "");
                                 setValue(`bloodTests.${index}.price`, 0);
-                                setValue(
-                                  `bloodTests.${index}.testType`,
-                                  "inhospital"
-                                );
+                                setValue(`bloodTests.${index}.testType`, "inhospital");
                               }
                             }}
                             className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -695,7 +681,7 @@ MedBliss`;
                             </p>
                           )}
                         </div>
-                        <div>
+                        <div className="flex-1">
                           <label className="block text-xs font-medium text-gray-600 mb-1">
                             Price (Rs.)
                           </label>
@@ -716,28 +702,18 @@ MedBliss`;
                             </p>
                           )}
                         </div>
-                      </div>
-                      {/* Test Type Dropdown */}
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">
-                          Test Type
-                        </label>
-                        <select
-                          {...register(`bloodTests.${index}.testType`)}
-                          className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="inhospital">In Hospital</option>
-                          <option value="outsource">Outsource</option>
-                        </select>
-                      </div>
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => remove(index)}
-                          className="text-red-500 hover:text-red-700 text-sm"
-                        >
-                          Remove Test
-                        </button>
+                        <div className="flex-1">
+                          <label className="block text-xs font-medium text-gray-600 mb-1">
+                            Test Type
+                          </label>
+                          <select
+                            {...register(`bloodTests.${index}.testType`)}
+                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="inhospital">In Hospital</option>
+                            <option value="outsource">Outsource</option>
+                          </select>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -809,8 +785,7 @@ MedBliss`;
                   Discount: <strong>Rs. {discountValue.toFixed(2)}</strong>
                 </p>
                 <p className="text-sm text-gray-700">
-                  Remaining Amount:{" "}
-                  <strong>Rs. {remainingAmount.toFixed(2)}</strong>
+                  Remaining Amount: <strong>Rs. {remainingAmount.toFixed(2)}</strong>
                 </p>
               </div>
 

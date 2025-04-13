@@ -266,7 +266,7 @@ function DownloadReport() {
     // Helper: Add stamp and printed-by info
     // -----------------------------
     const addStampAndPrintedBy = async () => {
-      const stampWidth = 30;
+      const stampWidth = 40;
       const stampHeight = 30;
       const stampX = pageWidth - leftMargin - stampWidth;
       const stampY = pageHeight - stampHeight - 30;
@@ -316,7 +316,7 @@ function DownloadReport() {
       const sampledOn = data.sampleCollectedAt
         ? new Date(data.sampleCollectedAt).toLocaleString()
         : new Date(data.createdAt).toLocaleString();
-      doc.text(`SAMPLED ON: ${sampledOn}`.toUpperCase(), rightX, rightY + 2 * lineGap, {
+      doc.text(`SAMPLED COLLECTED ON: ${sampledOn}`.toUpperCase(), rightX, rightY + 2 * lineGap, {
         align: "right",
       });
       doc.text(

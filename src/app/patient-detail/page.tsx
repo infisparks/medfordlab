@@ -42,7 +42,7 @@ const PatientDetailEdit: React.FC = () => {
   const searchParams = useSearchParams();
   const patientIdQuery = searchParams.get("patientId");
 
-  // Initialize the form with default values
+  // Initialize the form with default values.
   const {
     register,
     handleSubmit,
@@ -70,12 +70,15 @@ const PatientDetailEdit: React.FC = () => {
     },
   });
 
-  // Fetch supporting data
+  // Supporting data states.
   const [doctorList, setDoctorList] = useState<{ id: string; doctorName: string }[]>([]);
-  const [availableBloodTests, setAvailableBloodTests] = useState<{ id: string; testName: string; price: number }[]>([]);
+  const [availableBloodTests, setAvailableBloodTests] = useState<
+    { id: string; testName: string; price: number }[]
+  >([]);
   const [availablePackages, setAvailablePackages] = useState<PackageType[]>([]);
   const [showDoctorSuggestions, setShowDoctorSuggestions] = useState(true);
 
+  // Fetch doctor list.
   useEffect(() => {
     const fetchDoctorList = async () => {
       try {
@@ -96,6 +99,7 @@ const PatientDetailEdit: React.FC = () => {
     fetchDoctorList();
   }, []);
 
+  // Fetch available blood tests.
   useEffect(() => {
     const fetchBloodTests = async () => {
       try {
@@ -117,6 +121,7 @@ const PatientDetailEdit: React.FC = () => {
     fetchBloodTests();
   }, []);
 
+  // Fetch available packages.
   useEffect(() => {
     const fetchPackages = async () => {
       try {
@@ -139,11 +144,11 @@ const PatientDetailEdit: React.FC = () => {
     fetchPackages();
   }, []);
 
-  // Fetch the existing patient data and prefill the form
+  // Fetch existing patient data and prefill the form.
   useEffect(() => {
     if (!patientIdQuery) {
       alert("No patient ID provided.");
-      router.push("/dashboard");
+      router.push("/");
       return;
     }
     const fetchPatient = async () => {
@@ -152,10 +157,12 @@ const PatientDetailEdit: React.FC = () => {
         const snapshot = await get(patientRef);
         if (snapshot.exists()) {
           const data = snapshot.val();
+          // If the record does not include patientId, set it manually.
+          if (!data.patientId) data.patientId = patientIdQuery;
           reset(data);
         } else {
           alert("Patient not found.");
-          router.push("/dashboard");
+          router.push("/");
         }
       } catch (error) {
         console.error("Error fetching patient:", error);
@@ -165,7 +172,7 @@ const PatientDetailEdit: React.FC = () => {
     fetchPatient();
   }, [patientIdQuery, reset, router]);
 
-  // Doctor referral auto-suggest
+  // Doctor referral autosuggest.
   const watchDoctorName = watch("doctorName") || "";
   const filteredDoctorSuggestions = useMemo(() => {
     if (!watchDoctorName.trim()) return [];
@@ -174,13 +181,13 @@ const PatientDetailEdit: React.FC = () => {
     );
   }, [watchDoctorName, doctorList]);
 
-  // Setup field array for blood tests
+  // Setup field array for blood tests.
   const { fields: bloodTestFields, append, remove } = useFieldArray({
     control,
     name: "bloodTests",
   });
 
-  // Payment calculations (for display)
+  // Payment calculations.
   const bloodTests = watch("bloodTests");
   const discountPercentage = watch("discountPercentage");
   const amountPaid = watch("amountPaid");
@@ -188,23 +195,24 @@ const PatientDetailEdit: React.FC = () => {
   const discountValue = totalAmount * (Number(discountPercentage) / 100);
   const remainingAmount = totalAmount - discountValue - Number(amountPaid);
 
-  // onSubmit: update the patient record in both databases
+  // onSubmit: update patient details.
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     try {
-      // Update in the main database
-      const patientRef = ref(database, `patients/${data.patientId}`);
+      // Use the query param patientId (idToUpdate) for updating.
+      const idToUpdate = patientIdQuery as string;
+      const patientRef = ref(database, `patients/${idToUpdate}`);
       await update(patientRef, {
         ...data,
         updatedAt: new Date().toISOString(),
       });
-      // Also update minimal details in the MedfordFamily database
-      await update(ref(medfordFamilyDatabase, `patients/${data.patientId}`), {
+      // Also update minimal details in the MedfordFamily database.
+      await update(ref(medfordFamilyDatabase, `patients/${idToUpdate}`), {
         name: data.name,
         contact: data.contact,
-        patientId: data.patientId,
+        patientId: idToUpdate,
       });
       alert("Patient details updated successfully!");
-      router.push("/dashboard");
+      router.push("/");
     } catch (error) {
       console.error("Error updating patient details:", error);
       alert("Failed to update patient details.");
@@ -218,18 +226,20 @@ const PatientDetailEdit: React.FC = () => {
         {/* Patient Information */}
         <div className="space-y-4 relative">
           <h3 className="text-lg font-semibold text-gray-700">Patient Information</h3>
-          {/* Name */}
+          {/* Full Name */}
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-1">Full Name</label>
             <div className="relative">
               <input
                 {...register("name", { required: "Name is required" })}
                 className="pl-10 pr-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
-                placeholder="Inficare"
+                placeholder="Enter full name"
               />
               <UserCircleIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
             </div>
-            {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>}
+            {errors.name && (
+              <p className="text-red-500 text-sm mt-1">{errors.name.message}</p>
+            )}
           </div>
           {/* Contact Number */}
           <div>
@@ -248,7 +258,9 @@ const PatientDetailEdit: React.FC = () => {
               />
               <PhoneIcon className="h-5 w-5 absolute left-3 top-3 text-gray-400" />
             </div>
-            {errors.contact && <p className="text-red-500 text-sm mt-1">{errors.contact.message}</p>}
+            {errors.contact && (
+              <p className="text-red-500 text-sm mt-1">{errors.contact.message}</p>
+            )}
           </div>
           {/* Age, Age Unit & Gender */}
           <div className="grid grid-cols-3 gap-4">
@@ -262,7 +274,9 @@ const PatientDetailEdit: React.FC = () => {
                 })}
                 className="px-4 py-2 w-full border rounded-lg focus:ring-2 focus:ring-blue-500"
               />
-              {errors.age && <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>}
+              {errors.age && (
+                <p className="text-red-500 text-sm mt-1">{errors.age.message}</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">Age Unit</label>
@@ -274,7 +288,9 @@ const PatientDetailEdit: React.FC = () => {
                 <option value="month">Month</option>
                 <option value="day">Day</option>
               </select>
-              {errors.dayType && <p className="text-red-500 text-sm mt-1">{errors.dayType.message}</p>}
+              {errors.dayType && (
+                <p className="text-red-500 text-sm mt-1">{errors.dayType.message}</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">Gender</label>
@@ -287,7 +303,9 @@ const PatientDetailEdit: React.FC = () => {
                 <option value="Female">Female</option>
                 <option value="Other">Other</option>
               </select>
-              {errors.gender && <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>}
+              {errors.gender && (
+                <p className="text-red-500 text-sm mt-1">{errors.gender.message}</p>
+              )}
             </div>
           </div>
         </div>
@@ -344,7 +362,7 @@ const PatientDetailEdit: React.FC = () => {
           )}
         </div>
 
-        {/* Package, Blood Test & Payment */}
+        {/* Package, Blood Test & Payment Details */}
         <div className="space-y-4 border-t pt-6">
           <h3 className="text-lg font-semibold text-gray-700">
             Package / Blood Test Selection & Payment Details
@@ -352,7 +370,9 @@ const PatientDetailEdit: React.FC = () => {
 
           {/* Package Selection */}
           <div>
-            <label className="block text-sm font-medium text-gray-600 mb-1">Select Package (Optional)</label>
+            <label className="block text-sm font-medium text-gray-600 mb-1">
+              Select Package (Optional)
+            </label>
             <select
               onChange={(e) => {
                 const selectedPackageId = e.target.value;
@@ -376,12 +396,27 @@ const PatientDetailEdit: React.FC = () => {
 
           {/* Blood Test Selection */}
           <div>
-            <label className="block text-sm font-medium text-gray-600 mb-1">Select Blood Tests</label>
+            <label className="block text-sm font-medium text-gray-600 mb-1">
+              Select Blood Tests
+            </label>
             <div className="space-y-4">
               {bloodTestFields.map((field, index) => (
-                <div key={field.id} className="flex flex-col sm:flex-row sm:space-x-4 items-start sm:items-end border p-4 rounded-lg">
+                <div
+                  key={field.id}
+                  className="relative border p-4 rounded-lg flex flex-col sm:flex-row sm:space-x-4 items-start sm:items-end"
+                >
+                  {/* Remove button positioned at the top-right */}
+                  <button
+                    type="button"
+                    onClick={() => remove(index)}
+                    className="absolute top-2 right-2 text-red-500 hover:text-red-700 text-sm"
+                  >
+                    Remove
+                  </button>
                   <div className="flex-1">
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Test Name</label>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Test Name
+                    </label>
                     <select
                       {...register(`bloodTests.${index}.testId` as const, { required: "Blood test is required" })}
                       onChange={(e) => {
@@ -405,11 +440,15 @@ const PatientDetailEdit: React.FC = () => {
                       ))}
                     </select>
                     {errors.bloodTests?.[index]?.testId && (
-                      <p className="text-red-500 text-xs mt-1">{errors.bloodTests[index]?.testId?.message}</p>
+                      <p className="text-red-500 text-xs mt-1">
+                        {errors.bloodTests[index]?.testId?.message}
+                      </p>
                     )}
                   </div>
                   <div className="flex-1 mt-4 sm:mt-0">
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Price (Rs.)</label>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Price (Rs.)
+                    </label>
                     <input
                       type="number"
                       step="0.01"
@@ -419,17 +458,10 @@ const PatientDetailEdit: React.FC = () => {
                       readOnly
                     />
                     {errors.bloodTests?.[index]?.price && (
-                      <p className="text-red-500 text-xs mt-1">{errors.bloodTests[index]?.price?.message}</p>
+                      <p className="text-red-500 text-xs mt-1">
+                        {errors.bloodTests[index]?.price?.message}
+                      </p>
                     )}
-                  </div>
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => remove(index)}
-                      className="text-red-500 hover:text-red-700 text-sm mt-4 sm:mt-0"
-                    >
-                      Remove
-                    </button>
                   </div>
                 </div>
               ))}
@@ -475,9 +507,15 @@ const PatientDetailEdit: React.FC = () => {
 
           {/* Computed Totals */}
           <div className="space-y-2">
-            <p className="text-sm text-gray-700">Total Amount: <strong>Rs. {totalAmount.toFixed(2)}</strong></p>
-            <p className="text-sm text-gray-700">Discount: <strong>Rs. {discountValue.toFixed(2)}</strong></p>
-            <p className="text-sm text-gray-700">Remaining Amount: <strong>Rs. {remainingAmount.toFixed(2)}</strong></p>
+            <p className="text-sm text-gray-700">
+              Total Amount: <strong>Rs. {totalAmount.toFixed(2)}</strong>
+            </p>
+            <p className="text-sm text-gray-700">
+              Discount: <strong>Rs. {discountValue.toFixed(2)}</strong>
+            </p>
+            <p className="text-sm text-gray-700">
+              Remaining Amount: <strong>Rs. {remainingAmount.toFixed(2)}</strong>
+            </p>
           </div>
 
           {/* Payment Mode */}

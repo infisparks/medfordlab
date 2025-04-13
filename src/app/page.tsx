@@ -13,10 +13,14 @@ import {
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 
+// -----------------------------
+// Types
+// -----------------------------
 interface BloodTest {
   testId: string;
   testName: string;
   price: number;
+  testType?: string; // optional
 }
 
 interface Patient {
@@ -30,11 +34,64 @@ interface Patient {
   amountPaid: number;
   bloodTests?: BloodTest[];
   bloodtest?: Record<string, any>;
-  /** Flag that indicates if the final report is ready. */
-  report: boolean;
-  /** If sample is collected, the timestamp goes here; otherwise undefined/null => not collected. */
+  report?: boolean;
   sampleCollectedAt?: string;
   paymentHistory?: { amount: number; paymentMode: string; time: string }[];
+}
+
+// -----------------------------
+// Helper: Convert test name -> slug used in 'bloodtest'
+// -----------------------------
+function slugifyTestName(testName: string) {
+  // e.g. "Complete Blood Count (CBC)" -> "complete_blood_count_(cbc)"
+  return testName
+    .toLowerCase()
+    .replace(/\s+/g, "_") // spaces to underscores
+    .replace(/[^\w()]/g, "_") // punctuation replaced with underscore
+    .replace(/_+/g, "_"); // condense consecutive underscores
+}
+
+// -----------------------------
+// Helper: Check if a single test is fully filled
+// -----------------------------
+function isTestFullyEntered(patient: Patient, test: BloodTest): boolean {
+  if (!patient.bloodtest) return false;
+
+  const slug = slugifyTestName(test.testName);
+  const testData = patient.bloodtest[slug];
+  if (!testData || !testData.parameters) {
+    return false; // test data missing
+  }
+  // If *any* parameter is missing a value, consider not filled
+  for (const param of testData.parameters) {
+    if (param.value === null || param.value === undefined || param.value === "") {
+      return false;
+    }
+  }
+  return true;
+}
+
+// -----------------------------
+// Helper: Check if all tests are fully filled
+// -----------------------------
+function isAllTestsComplete(patient: Patient): boolean {
+  if (!patient.bloodTests || patient.bloodTests.length === 0) {
+    // If no tests are booked, consider it "complete."
+    return true;
+  }
+  // If the patient has some tests, each must be fully filled
+  return patient.bloodTests.every((test) => isTestFullyEntered(patient, test));
+}
+
+// -----------------------------
+// Helper: Calculate amounts
+// -----------------------------
+function calculateAmounts(patient: Patient) {
+  const testTotal =
+    patient.bloodTests?.reduce((acc, bt) => acc + bt.price, 0) || 0;
+  const discountValue = testTotal * (patient.discountPercentage / 100);
+  const remaining = testTotal - discountValue - patient.amountPaid;
+  return { testTotal, discountValue, remaining };
 }
 
 export default function Dashboard() {
@@ -44,47 +101,34 @@ export default function Dashboard() {
     pendingReports: 0,
     completedTests: 0,
   });
+
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [newAmountPaid, setNewAmountPaid] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<string>("online");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedDate, setSelectedDate] = useState<string>("");
-  /** 
-   *  statusFilter has 4 options: 
-   *  "all", "notCollected", "sampleCollected", "completed" 
-   */
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
 
   // -----------------------------
-  // Helper: Calculate amounts
+  // Determine rank for sorting
+  // (1) Not Collected
+  // (2) Collected but not complete
+  // (3) Completed
+  // Then newest createdAt first
   // -----------------------------
-  const calculateAmounts = (patient: Patient) => {
-    const testTotal =
-      patient.bloodTests?.reduce((acc, bt) => acc + bt.price, 0) || 0;
-    const discountValue = testTotal * (patient.discountPercentage / 100);
-    const remaining = testTotal - discountValue - patient.amountPaid;
-    return { testTotal, discountValue, remaining };
-  };
-
-  // -----------------------------
-  // Helper: Determine rank for sorting patients
-  // -----------------------------
-  const getRank = (patient: Patient): number => {
-    // Rank 1: Sample not collected
+  function getRank(patient: Patient): number {
+    // No sample => rank 1
     if (!patient.sampleCollectedAt) {
       return 1;
     }
-    // Rank 2: Sample collected but values not added (i.e. no bloodtest data)
-    else if (patient.sampleCollectedAt && (!patient.bloodtest || Object.keys(patient.bloodtest).length === 0)) {
+    // Sample collected => check if all tests complete
+    if (isAllTestsComplete(patient)) {
+      return 3;
+    } else {
       return 2;
     }
-    // Rank 3: Completed (bloodtest exists)
-    else if (patient.bloodtest && Object.keys(patient.bloodtest).length > 0) {
-      return 3;
-    }
-    return 4; // fallback (should not reach here)
-  };
+  }
 
   // -----------------------------
   // Fetch patients from Firebase
@@ -94,43 +138,42 @@ export default function Dashboard() {
     const unsubscribe = onValue(patientsRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
-
-        // Convert the raw object into a typed array of Patients
         const patientList: Patient[] = Object.keys(data).map((key) => ({
           id: key,
           ...data[key],
           age: Number(data[key].age),
-          report: Boolean(data[key].report),
         }));
 
-        // Sort patients based on:
-        // 1. Rank: Not Collected (rank 1) > Sample Collected (rank 2) > Completed (rank 3)
-        // 2. Within same rank, sort by createdAt descending (most recent on top)
-        const sortedPatients = patientList.sort((a, b) => {
+        // Sort by rank, then by createdAt descending
+        const sorted = patientList.sort((a, b) => {
           const rankA = getRank(a);
           const rankB = getRank(b);
           if (rankA !== rankB) {
-            return rankA - rankB; // lower rank number comes first
+            return rankA - rankB;
           }
+          // same rank => compare createdAt desc
           return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         });
 
-        setPatients(sortedPatients);
+        setPatients(sorted);
 
         // Compute metrics
         const total = patientList.length;
-        const completed = patientList.filter(
-          (p) => p.bloodtest && Object.keys(p.bloodtest).length > 0
-        ).length;
-        const pending = total - completed;
+        let completedCount = 0;
+        for (const p of patientList) {
+          if (isAllTestsComplete(p) && p.sampleCollectedAt) {
+            completedCount++;
+          }
+        }
+        const pending = total - completedCount;
+
         setMetrics({
           totalTests: total,
           pendingReports: pending,
-          completedTests: completed,
+          completedTests: completedCount,
         });
       }
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -138,45 +181,39 @@ export default function Dashboard() {
   // Filter logic
   // -----------------------------
   const filteredPatients = useMemo(() => {
-    return patients.filter((patient) => {
-      const matchesSearch = patient.name
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase());
-
+    return patients.filter((p) => {
+      const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesDate = selectedDate
-        ? patient.createdAt.startsWith(selectedDate)
+        ? p.createdAt.startsWith(selectedDate)
         : true;
 
-      // Determine the status of the patient
-      const hasBloodtest =
-        patient.bloodtest && Object.keys(patient.bloodtest).length > 0;
-      const hasSampleCollected = !!patient.sampleCollectedAt;
+      // status logic
+      const sampleCollected = !!p.sampleCollectedAt;
+      const allComplete = isAllTestsComplete(p);
 
       let matchesStatus = true;
       switch (statusFilter) {
         case "notCollected":
-          matchesStatus = !hasSampleCollected;
+          matchesStatus = !sampleCollected;
           break;
         case "sampleCollected":
-          matchesStatus = hasSampleCollected && !hasBloodtest;
+          matchesStatus = sampleCollected && !allComplete;
           break;
         case "completed":
-          matchesStatus = hasBloodtest ?? false;
+          matchesStatus = sampleCollected && allComplete;
           break;
         case "all":
         default:
           matchesStatus = true;
-          break;
       }
-
       return matchesSearch && matchesDate && matchesStatus;
     });
   }, [patients, searchTerm, selectedDate, statusFilter]);
 
   // -----------------------------
-  // "Collect Sample" action
+  // Collect Sample
   // -----------------------------
-  const handleCollectSample = async (patient: Patient) => {
+  async function handleCollectSample(patient: Patient) {
     try {
       const patientRef = ref(database, `patients/${patient.id}`);
       await update(patientRef, {
@@ -187,18 +224,19 @@ export default function Dashboard() {
       console.error("Error collecting sample:", error);
       alert("Error collecting sample. Please try again.");
     }
-  };
+  }
 
   // -----------------------------
-  // "Delete Patient" action
+  // Delete Patient
   // -----------------------------
-  const handleDeletePatient = async (patient: Patient) => {
-    if (!window.confirm(`Are you sure you want to delete ${patient.name}?`)) return;
+  async function handleDeletePatient(patient: Patient) {
+    if (!window.confirm(`Are you sure you want to delete ${patient.name}?`)) {
+      return;
+    }
     try {
       const patientRef = ref(database, `patients/${patient.id}`);
       await remove(patientRef);
       alert(`${patient.name} has been deleted.`);
-      // If the row is expanded, collapse it.
       if (expandedPatientId === patient.id) {
         setExpandedPatientId(null);
       }
@@ -206,27 +244,24 @@ export default function Dashboard() {
       console.error("Error deleting patient:", error);
       alert("Error deleting patient. Please try again.");
     }
-  };
+  }
 
   // -----------------------------
-  // "Update Payment" action
+  // Update Payment
   // -----------------------------
-  const handleUpdateAmount = async (e: React.FormEvent) => {
+  async function handleUpdateAmount(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedPatient) return;
-
     try {
       const updatedAmount = selectedPatient.amountPaid + newAmountPaid;
       const { testTotal, discountValue } = calculateAmounts(selectedPatient);
-      const newRemaining = testTotal - discountValue - updatedAmount;
+      // const newRemaining = testTotal - discountValue - updatedAmount;
       const patientRef = ref(database, `patients/${selectedPatient.id}`);
-      const epsilon = 1;
-      const isComplete = newRemaining <= epsilon;
 
-      // Update in Firebase: amountPaid, report status, paymentHistory
+      // Update in Firebase
       await update(patientRef, {
         amountPaid: updatedAmount,
-        report: isComplete,
+        // push to the end of paymentHistory
         paymentHistory: [
           ...(selectedPatient.paymentHistory || []),
           {
@@ -245,22 +280,20 @@ export default function Dashboard() {
       console.error("Error updating amount:", error);
       alert("Error updating amount. Please try again.");
     }
-  };
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
         <div className="flex items-center space-x-4">
-          <div className="text-right">
-            <p className="text-3xl font-medium text-blue-600">InfiCare</p>
-          </div>
+          <p className="text-3xl font-medium text-blue-600">InfiCare</p>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="p-4 md:p-6">
-        {/* Filter Section */}
+        {/* Filters */}
         <div className="mb-4 flex flex-col md:flex-row gap-4">
           <input
             type="text"
@@ -275,7 +308,6 @@ export default function Dashboard() {
             onChange={(e) => setSelectedDate(e.target.value)}
             className="p-2 border rounded-md"
           />
-          {/* Status Filter */}
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -283,12 +315,12 @@ export default function Dashboard() {
           >
             <option value="all">All</option>
             <option value="notCollected">Not Collected</option>
-            <option value="sampleCollected">Sample Collected</option>
+            <option value="sampleCollected">Pending</option>
             <option value="completed">Completed</option>
           </select>
         </div>
 
-        {/* Metrics Grid */}
+        {/* Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
             <div className="flex items-center space-x-4">
@@ -301,7 +333,6 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
             <div className="flex items-center space-x-4">
               <div className="p-3 bg-yellow-50 rounded-lg">
@@ -315,7 +346,6 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-
           <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
             <div className="flex items-center space-x-4">
               <div className="p-3 bg-green-50 rounded-lg">
@@ -365,14 +395,13 @@ export default function Dashboard() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filteredPatients.map((patient) => {
-                  const hasBloodtest =
-                    patient.bloodtest &&
-                    Object.keys(patient.bloodtest).length > 0;
-                  const hasSampleCollected = !!patient.sampleCollectedAt;
+                  const sampleCollected = !!patient.sampleCollectedAt;
+                  const allComplete = isAllTestsComplete(patient);
+
                   let statusLabel = "Not Collected";
-                  if (hasSampleCollected && !hasBloodtest) {
-                    statusLabel = "Sample Collected";
-                  } else if (hasBloodtest) {
+                  if (sampleCollected && !allComplete) {
+                    statusLabel = "Pending";
+                  } else if (sampleCollected && allComplete) {
                     statusLabel = "Completed";
                   }
 
@@ -392,18 +421,21 @@ export default function Dashboard() {
                         <td className="px-6 py-4 text-sm">
                           {patient.bloodTests && patient.bloodTests.length > 0 ? (
                             <ul className="list-disc pl-4">
-                              {patient.bloodTests.map((test) => (
-                                <li key={test.testId}>{test.testName}</li>
-                              ))}
-                            </ul>
-                          ) : patient.bloodtest &&
-                            Object.keys(patient.bloodtest).length > 0 ? (
-                            <ul className="list-disc pl-4">
-                              {Object.keys(patient.bloodtest || {}).map((key) => (
-                                <li key={key}>
-                                  {patient.bloodtest?.[key].testName}
-                                </li>
-                              ))}
+                              {patient.bloodTests.map((test) => {
+                                const completed = isTestFullyEntered(patient, test);
+                                return (
+                                  <li
+                                    key={test.testId}
+                                    className={
+                                      completed
+                                        ? "text-green-600"
+                                        : "text-red-500"
+                                    }
+                                  >
+                                    {test.testName}
+                                  </li>
+                                );
+                              })}
                             </ul>
                           ) : (
                             <span className="text-gray-400">No tests</span>
@@ -418,9 +450,9 @@ export default function Dashboard() {
                               Not Collected
                             </span>
                           )}
-                          {statusLabel === "Sample Collected" && (
+                          {statusLabel === "Pending" && (
                             <span className="px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
-                              Sample Collected
+                              Pending
                             </span>
                           )}
                           {statusLabel === "Completed" && (
@@ -430,7 +462,13 @@ export default function Dashboard() {
                           )}
                         </td>
                         <td className="px-6 py-4 text-sm">
-                          {remaining > 0 ? `₹${remaining.toFixed(2)}` : "0"}
+                          {remaining > 0 ? (
+                            <span className="text-red-600 font-bold">
+                              ₹{remaining.toFixed(2)}
+                            </span>
+                          ) : (
+                            "0"
+                          )}
                         </td>
                         <td className="px-6 py-4">
                           <button
@@ -449,7 +487,7 @@ export default function Dashboard() {
                         <tr>
                           <td colSpan={6} className="bg-gray-50">
                             <div className="p-4 flex flex-wrap gap-2">
-                              {!hasSampleCollected && (
+                              {!sampleCollected && (
                                 <button
                                   onClick={() => handleCollectSample(patient)}
                                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 transition-colors"
@@ -457,16 +495,16 @@ export default function Dashboard() {
                                   Collect Sample
                                 </button>
                               )}
-                              {hasSampleCollected && !hasBloodtest && (
+                              {sampleCollected && !allComplete && (
                                 <Link
                                   href={`/blood-values/new?patientId=${patient.id}`}
                                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                                 >
                                   <DocumentPlusIcon className="h-4 w-4 mr-2" />
-                                  Add Value
+                                  Add/Edit Values
                                 </Link>
                               )}
-                              {hasBloodtest && (
+                              {sampleCollected && allComplete && (
                                 <>
                                   <Link
                                     href={`/download-report?patientId=${patient.id}`}
