@@ -13,6 +13,10 @@ import {
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 
+// Import jsPDF and AutoTable
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+
 // -----------------------------
 // Types
 // -----------------------------
@@ -46,8 +50,8 @@ function slugifyTestName(testName: string) {
   // e.g. "Complete Blood Count (CBC)" -> "complete_blood_count_(cbc)"
   return testName
     .toLowerCase()
-    .replace(/\s+/g, "_") // spaces to underscores
-    .replace(/[^\w()]/g, "_") // punctuation replaced with underscore
+    .replace(/\s+/g, "_") // convert spaces to underscores
+    .replace(/[^\w()]/g, "_") // replace punctuation with underscore
     .replace(/_+/g, "_"); // condense consecutive underscores
 }
 
@@ -56,13 +60,12 @@ function slugifyTestName(testName: string) {
 // -----------------------------
 function isTestFullyEntered(patient: Patient, test: BloodTest): boolean {
   if (!patient.bloodtest) return false;
-
   const slug = slugifyTestName(test.testName);
   const testData = patient.bloodtest[slug];
   if (!testData || !testData.parameters) {
     return false; // test data missing
   }
-  // If *any* parameter is missing a value, consider not filled
+  // If any parameter is missing a value, consider the test incomplete
   for (const param of testData.parameters) {
     if (param.value === null || param.value === undefined || param.value === "") {
       return false;
@@ -79,7 +82,6 @@ function isAllTestsComplete(patient: Patient): boolean {
     // If no tests are booked, consider it "complete."
     return true;
   }
-  // If the patient has some tests, each must be fully filled
   return patient.bloodTests.every((test) => isTestFullyEntered(patient, test));
 }
 
@@ -101,7 +103,6 @@ export default function Dashboard() {
     pendingReports: 0,
     completedTests: 0,
   });
-
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [newAmountPaid, setNewAmountPaid] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<string>("online");
@@ -111,23 +112,16 @@ export default function Dashboard() {
   const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
 
   // -----------------------------
-  // Determine rank for sorting
-  // (1) Not Collected
-  // (2) Collected but not complete
-  // (3) Completed
-  // Then newest createdAt first
+  // Determine rank for sorting:
+  //   1 = Not Collected,
+  //   2 = Collected but incomplete,
+  //   3 = Completed
   // -----------------------------
   function getRank(patient: Patient): number {
-    // No sample => rank 1
     if (!patient.sampleCollectedAt) {
       return 1;
     }
-    // Sample collected => check if all tests complete
-    if (isAllTestsComplete(patient)) {
-      return 3;
-    } else {
-      return 2;
-    }
+    return isAllTestsComplete(patient) ? 3 : 2;
   }
 
   // -----------------------------
@@ -144,20 +138,17 @@ export default function Dashboard() {
           age: Number(data[key].age),
         }));
 
-        // Sort by rank, then by createdAt descending
         const sorted = patientList.sort((a, b) => {
           const rankA = getRank(a);
           const rankB = getRank(b);
           if (rankA !== rankB) {
             return rankA - rankB;
           }
-          // same rank => compare createdAt desc
           return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         });
 
         setPatients(sorted);
 
-        // Compute metrics
         const total = patientList.length;
         let completedCount = 0;
         for (const p of patientList) {
@@ -165,11 +156,9 @@ export default function Dashboard() {
             completedCount++;
           }
         }
-        const pending = total - completedCount;
-
         setMetrics({
           totalTests: total,
-          pendingReports: pending,
+          pendingReports: total - completedCount,
           completedTests: completedCount,
         });
       }
@@ -183,14 +172,10 @@ export default function Dashboard() {
   const filteredPatients = useMemo(() => {
     return patients.filter((p) => {
       const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesDate = selectedDate
-        ? p.createdAt.startsWith(selectedDate)
-        : true;
+      const matchesDate = selectedDate ? p.createdAt.startsWith(selectedDate) : true;
 
-      // status logic
       const sampleCollected = !!p.sampleCollectedAt;
       const allComplete = isAllTestsComplete(p);
-
       let matchesStatus = true;
       switch (statusFilter) {
         case "notCollected":
@@ -202,7 +187,6 @@ export default function Dashboard() {
         case "completed":
           matchesStatus = sampleCollected && allComplete;
           break;
-        case "all":
         default:
           matchesStatus = true;
       }
@@ -216,9 +200,7 @@ export default function Dashboard() {
   async function handleCollectSample(patient: Patient) {
     try {
       const patientRef = ref(database, `patients/${patient.id}`);
-      await update(patientRef, {
-        sampleCollectedAt: new Date().toISOString(),
-      });
+      await update(patientRef, { sampleCollectedAt: new Date().toISOString() });
       alert(`Sample collected for ${patient.name}!`);
     } catch (error) {
       console.error("Error collecting sample:", error);
@@ -254,14 +236,9 @@ export default function Dashboard() {
     if (!selectedPatient) return;
     try {
       const updatedAmount = selectedPatient.amountPaid + newAmountPaid;
-      // const { testTotal, discountValue } = calculateAmounts(selectedPatient);
-      // const newRemaining = testTotal - discountValue - updatedAmount;
       const patientRef = ref(database, `patients/${selectedPatient.id}`);
-
-      // Update in Firebase
       await update(patientRef, {
         amountPaid: updatedAmount,
-        // push to the end of paymentHistory
         paymentHistory: [
           ...(selectedPatient.paymentHistory || []),
           {
@@ -271,7 +248,6 @@ export default function Dashboard() {
           },
         ],
       });
-
       alert("Amount updated successfully!");
       setSelectedPatient(null);
       setNewAmountPaid(0);
@@ -280,6 +256,73 @@ export default function Dashboard() {
       console.error("Error updating amount:", error);
       alert("Error updating amount. Please try again.");
     }
+  }
+
+  // -----------------------------
+  // Download Bill: Generate a professional bill PDF with tables
+  // -----------------------------
+  function handleDownloadBill() {
+    if (!selectedPatient) return;
+    const doc = new jsPDF();
+    let y = 10;
+    
+    // Header
+    doc.setFontSize(18);
+    doc.text("Diagnostic Bill", 105, y, { align: "center" });
+    y += 10;
+    
+    // Patient Information
+    doc.setFontSize(12);
+    doc.text(`Patient Name: ${selectedPatient.name}`, 14, y);
+    y += 6;
+    doc.text(`Contact: ${selectedPatient.contact || "N/A"}`, 14, y);
+    y += 8;
+    
+    // Tests Table using autoTable
+    const tableColumns = [["Test Name", "Price (₹)"]];
+    const tableRows: Array<Array<string>> = [];
+    if (selectedPatient.bloodTests && selectedPatient.bloodTests.length > 0) {
+      selectedPatient.bloodTests.forEach((test) => {
+        tableRows.push([test.testName, test.price.toFixed(2)]);
+      });
+    }
+    
+    autoTable(doc, {
+      head: tableColumns,
+      body: tableRows,
+      startY: y,
+      theme: "grid",
+      headStyles: { fillColor: [22, 160, 133] },
+      styles: { fontSize: 11 },
+    });
+    y = (doc as any).lastAutoTable.finalY + 10;
+    
+    // Amount Summary Table
+    const { testTotal, discountValue, remaining } = calculateAmounts(selectedPatient);
+    const summaryRows: Array<Array<string>> = [
+      ["Test Total", `₹${testTotal.toFixed(2)}`],
+    ];
+    if (selectedPatient.discountPercentage > 0) {
+      summaryRows.push(["Discount", `₹${discountValue.toFixed(2)}`]);
+    }
+    summaryRows.push(["Amount Paid", `₹${selectedPatient.amountPaid.toFixed(2)}`]);
+    summaryRows.push(["Remaining", `₹${remaining.toFixed(2)}`]);
+    
+    autoTable(doc, {
+      head: [["Description", "Amount"]],
+      body: summaryRows,
+      startY: y,
+      theme: "plain",
+      styles: { fontSize: 11 },
+    });
+    y = (doc as any).lastAutoTable.finalY + 10;
+    
+    // Footer
+    doc.setFontSize(10);
+    doc.text("Thank you for choosing our services!", 105, y, { align: "center" });
+    
+    // Save PDF
+    doc.save(`Bill_${selectedPatient.name}.pdf`);
   }
 
   return (
@@ -340,9 +383,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <p className="text-sm text-gray-500 mb-1">Pending Reports</p>
-                <p className="text-2xl font-semibold">
-                  {metrics.pendingReports}
-                </p>
+                <p className="text-2xl font-semibold">{metrics.pendingReports}</p>
               </div>
             </div>
           </div>
@@ -353,9 +394,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <p className="text-sm text-gray-500 mb-1">Completed Tests</p>
-                <p className="text-2xl font-semibold">
-                  {metrics.completedTests}
-                </p>
+                <p className="text-2xl font-semibold">{metrics.completedTests}</p>
               </div>
             </div>
           </div>
@@ -397,16 +436,13 @@ export default function Dashboard() {
                 {filteredPatients.map((patient) => {
                   const sampleCollected = !!patient.sampleCollectedAt;
                   const allComplete = isAllTestsComplete(patient);
-
                   let statusLabel = "Not Collected";
                   if (sampleCollected && !allComplete) {
                     statusLabel = "Pending";
                   } else if (sampleCollected && allComplete) {
                     statusLabel = "Completed";
                   }
-
                   const { remaining } = calculateAmounts(patient);
-
                   return (
                     <React.Fragment key={patient.id}>
                       <tr className="hover:bg-gray-50">
@@ -426,11 +462,7 @@ export default function Dashboard() {
                                 return (
                                   <li
                                     key={test.testId}
-                                    className={
-                                      completed
-                                        ? "text-green-600"
-                                        : "text-red-500"
-                                    }
+                                    className={completed ? "text-green-600" : "text-red-500"}
                                   >
                                     {test.testName}
                                   </li>
@@ -530,6 +562,15 @@ export default function Dashboard() {
                               >
                                 Update Payment
                               </button>
+                              {selectedPatient?.id === patient.id && (
+                                <button
+                                  onClick={handleDownloadBill}
+                                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-teal-600 hover:bg-teal-700 transition-colors"
+                                >
+                                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                  Download Bill
+                                </button>
+                              )}
                               <Link
                                 href={`/patient-detail?patientId=${patient.id}`}
                                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 transition-colors"
@@ -574,37 +615,41 @@ export default function Dashboard() {
               Update Payment for {selectedPatient.name}
             </h3>
             {(() => {
-              const { testTotal, discountValue, remaining } =
-                calculateAmounts(selectedPatient);
+              const { testTotal, discountValue, remaining } = calculateAmounts(selectedPatient);
               return (
                 <div className="mb-4 space-y-2">
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Test Total:</span>
-                    <span className="text-sm font-medium">
-                      ₹{testTotal.toFixed(2)}
-                    </span>
+                    <span className="text-sm font-medium">₹{testTotal.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Discount:</span>
                     <span className="text-sm font-medium">
-                      ₹{discountValue.toFixed(2)}
+                      {selectedPatient.discountPercentage > 0
+                        ? `₹${discountValue.toFixed(2)}`
+                        : "N/A"}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Current Paid:</span>
-                    <span className="text-sm font-medium">
-                      ₹{selectedPatient.amountPaid.toFixed(2)}
-                    </span>
+                    <span className="text-sm font-medium">₹{selectedPatient.amountPaid.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Remaining:</span>
-                    <span className="text-sm font-medium">
-                      ₹{remaining.toFixed(2)}
-                    </span>
+                    <span className="text-sm font-medium">₹{remaining.toFixed(2)}</span>
                   </div>
                 </div>
               );
             })()}
+            {/* Download Bill Button */}
+            <div className="mb-4">
+              <button
+                onClick={handleDownloadBill}
+                className="w-full bg-teal-600 text-white py-3 rounded-lg font-medium hover:bg-teal-700 transition-colors"
+              >
+                Download Bill
+              </button>
+            </div>
             <form onSubmit={handleUpdateAmount}>
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700">
