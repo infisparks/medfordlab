@@ -22,11 +22,6 @@ import { FaCalculator } from "react-icons/fa";
 // Interfaces
 // -------------------------------------------------------------------
 
-/**
- * We split `subparameters` into a separate interface so that
- * React Hook Form’s `Path` can correctly infer paths like
- * `tests.${number}.parameters.${number}.subparameters.${number}.value`.
- */
 interface SubParameterValue {
   name: string;
   unit: string;
@@ -43,8 +38,6 @@ interface TestParameterValue {
   range: string;
   formula?: string; 
   valueType: "number" | "text";
-  // Note: subparameters do NOT contain further sub-subparameters,
-  // so there's no infinite recursion now.
   subparameters?: SubParameterValue[];
 }
 
@@ -64,11 +57,11 @@ interface BloodValuesFormInputs {
   tests: TestValueEntry[];
 }
 
-// This type helps us keep all original parameter properties plus an "originalIndex"
+// Quick type for referencing the "originalIndex" if needed
 type IndexedParam = TestParameterValue & { originalIndex: number };
 
 // -------------------------------------------------------------------
-// Helper: parseRangeKey
+// Helpers
 // -------------------------------------------------------------------
 const parseRangeKey = (key: string): { lower: number; upper: number } => {
   key = key.trim();
@@ -88,18 +81,16 @@ const parseRangeKey = (key: string): { lower: number; upper: number } => {
   return { lower, upper };
 };
 
-// -------------------------------------------------------------------
-// Helper: roundToTwo
-// -------------------------------------------------------------------
 function roundToTwo(num: number): number {
   return parseFloat(num.toFixed(2));
 }
-
-// Quick helper to see if a string is a valid number:
 function isNumeric(str: string) {
   return !isNaN(parseFloat(str)) && isFinite(parseFloat(str));
 }
 
+// -------------------------------------------------------------------
+// BloodValuesForm
+// -------------------------------------------------------------------
 const BloodValuesForm: React.FC = () => {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -115,9 +106,7 @@ const BloodValuesForm: React.FC = () => {
     subIndex?: number;
   } | null>(null);
 
-  // Our form
   const {
-    
     handleSubmit,
     reset,
     watch,
@@ -130,7 +119,9 @@ const BloodValuesForm: React.FC = () => {
     },
   });
 
-  // 1) Fetch patient data, booked tests, stored results
+  // ─────────────────────────────────────────────
+  // 1) Fetch patient data, booked tests, etc.
+  // ─────────────────────────────────────────────
   useEffect(() => {
     if (!patientId) return;
     const fetchPatientData = async () => {
@@ -149,7 +140,7 @@ const BloodValuesForm: React.FC = () => {
           ? Number(patientData.total_day)
           : Number(patientData.age) * 365;
 
-        // Build the tests array by fetching test definitions from "bloodTests"
+        // Build the tests array by fetching test definitions
         const testsData: TestValueEntry[] = await Promise.all(
           patientTests.map(async (testObj: any) => {
             const definitionRef = ref(database, `bloodTests/${testObj.testId}`);
@@ -270,7 +261,9 @@ const BloodValuesForm: React.FC = () => {
     fetchPatientData();
   }, [patientId, reset]);
 
-  // 2) handleCalculateFormula
+  // ─────────────────────────────────────────────
+  // 2) Single param's calculator
+  // ─────────────────────────────────────────────
   const handleCalculateFormula = (testIndex: number, paramIndex: number) => {
     const tests = watch("tests");
     const currentTest = tests[testIndex];
@@ -309,7 +302,66 @@ const BloodValuesForm: React.FC = () => {
     }
   };
 
-  // 2a) handleNumericInputChange
+  // ─────────────────────────────────────────────
+  // 2b) SHIFT => recalc all formula fields
+  // ─────────────────────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // If user pressed SHIFT, run all formulas
+      if (e.key === "Shift") {
+        runAllFormulas();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [/* dependencies not strictly needed */]);
+
+  const runAllFormulas = () => {
+    const testsArray = watch("tests");
+    // We'll do the same formula logic for every param that has a formula
+    // and is valueType = "number".
+    // 1) Build a dictionary of paramName => numericValue.
+    // 2) Evaluate the param formula. 3) setValue(…).
+    testsArray.forEach((test: TestValueEntry, testIndex: number) => {
+      const paramValues: Record<string, number> = {};
+      // gather all param numeric values
+      test.parameters.forEach((p) => {
+        const val = parseFloat(String(p.value));
+        if (!isNaN(val)) {
+          paramValues[p.name] = val;
+        }
+      });
+      // loop
+      test.parameters.forEach((param, paramIndex) => {
+        if (param.formula?.trim() && param.valueType === "number") {
+          let expr = param.formula;
+          Object.entries(paramValues).forEach(([name, val]) => {
+            const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            expr = expr.replace(new RegExp(safeName, "g"), val.toString());
+          });
+          try {
+            const result = Function('"use strict";return (' + expr + ')')();
+            if (!isNaN(result)) {
+              const newVal = roundToTwo(Number(result));
+              setValue(
+                `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
+                newVal.toFixed(2)
+              );
+            }
+          } catch (err) {
+            console.error("Error evaluating formula for", param.name, err);
+          }
+        }
+      });
+    });
+  };
+
+  // ─────────────────────────────────────────────
+  // 2c) handleNumericInputChange
+  // ─────────────────────────────────────────────
   const handleNumericInputChange = (
     e: React.ChangeEvent<HTMLInputElement>,
     testIndex: number,
@@ -317,7 +369,6 @@ const BloodValuesForm: React.FC = () => {
     subParamIndex?: number
   ) => {
     const inputVal = e.target.value;
-    // If numeric (or empty), just set as usual:
     if (inputVal === "" || isNumeric(inputVal)) {
       setShowSuggest(null);
       setSuggestions([]);
@@ -334,26 +385,24 @@ const BloodValuesForm: React.FC = () => {
         );
       }
     } else {
-      // user typed non-numeric => store in textHistory if not present
+      // typed non-numeric => store
       if (!textHistory.includes(inputVal)) {
         setTextHistory((old) => [...old, inputVal]);
       }
-      // Build suggestions from textHistory that includes the typed string
       const matched = textHistory.filter((t) =>
         t.toLowerCase().includes(inputVal.toLowerCase())
       );
       setSuggestions(matched);
       setShowSuggest({ testIndex, paramIndex, subIndex: subParamIndex });
 
-      // update form with raw text
       if (subParamIndex === undefined) {
         setValue(
-          `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
+          `tests.${testIndex}.parameters.${paramIndex}.value`,
           inputVal
         );
       } else {
         setValue(
-          `tests.${testIndex}.parameters.${paramIndex}.subparameters.${subParamIndex}.value` as Path<BloodValuesFormInputs>,
+          `tests.${testIndex}.parameters.${paramIndex}.subparameters.${subParamIndex}.value`,
           inputVal
         );
       }
@@ -382,7 +431,9 @@ const BloodValuesForm: React.FC = () => {
     setSuggestions([]);
   };
 
+  // ─────────────────────────────────────────────
   // 3) auto-effect for formula calc + rounding
+  // ─────────────────────────────────────────────
   const testsWatch = watch("tests");
   useEffect(() => {
     const newTests = JSON.parse(JSON.stringify(testsWatch)) as TestValueEntry[];
@@ -455,7 +506,9 @@ const BloodValuesForm: React.FC = () => {
     }
   }, [testsWatch, setValue]);
 
+  // ─────────────────────────────────────────────
   // 4) onSubmit => push to firebase
+  // ─────────────────────────────────────────────
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (formData) => {
     try {
       for (const test of formData.tests) {
@@ -508,13 +561,17 @@ const BloodValuesForm: React.FC = () => {
     }
   };
 
+  // ─────────────────────────────────────────────
   // 5) Render
+  // ─────────────────────────────────────────────
   if (!patientId) {
     return (
       <div className="p-4 flex items-center justify-center min-h-screen bg-gray-50">
         <div className="text-center max-w-md p-8 bg-white rounded-xl shadow-lg">
           <FiUser className="w-12 h-12 text-blue-600 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-gray-800 mb-2">Patient Not Found</h2>
+          <h2 className="text-xl font-bold text-gray-800 mb-2">
+            Patient Not Found
+          </h2>
           <p className="text-gray-600 mb-4">
             No patient ID provided. Please return to the dashboard.
           </p>
@@ -540,7 +597,7 @@ const BloodValuesForm: React.FC = () => {
     );
   }
 
-  const tests = watch("tests"); // Watch entire tests array
+  const tests = watch("tests"); // watch entire tests array
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-2">
       <div className="max-w-3xl w-full bg-white p-4 rounded-xl shadow-lg relative">
@@ -549,7 +606,9 @@ const BloodValuesForm: React.FC = () => {
             <FiDroplet className="w-6 h-6 text-blue-600" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-gray-800">Blood Test Analysis</h1>
+            <h1 className="text-lg font-bold text-gray-800">
+              Blood Test Analysis
+            </h1>
             <p className="text-gray-600 text-sm">Patient ID: {patientId}</p>
           </div>
         </div>
@@ -583,7 +642,9 @@ const BloodValuesForm: React.FC = () => {
                 {/* (A) Global parameters if subheadings */}
                 {subheadings.length > 0 && globalParams.length > 0 && (
                   <div className="mb-2">
-                    <h4 className="text-sm font-bold mb-1">Global Parameters</h4>
+                    <h4 className="text-sm font-bold mb-1">
+                      Global Parameters
+                    </h4>
                     {globalParams.map((param) => (
                       <div key={param.originalIndex} className="pl-2 mb-1">
                         <div className="flex items-center text-sm border rounded px-2 py-1 relative">
@@ -620,9 +681,9 @@ const BloodValuesForm: React.FC = () => {
                                 type="text"
                                 className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                 placeholder="Value"
-                                // Use the watched value
                                 value={String(
-                                  tests[testIndex].parameters[param.originalIndex].value ?? ""
+                                  tests[testIndex].parameters[param.originalIndex]
+                                    .value ?? ""
                                 )}
                                 onChange={(e) =>
                                   handleNumericInputChange(
@@ -632,30 +693,34 @@ const BloodValuesForm: React.FC = () => {
                                   )
                                 }
                               />
-                              {errors.tests?.[testIndex]?.parameters?.[param.originalIndex]
-                                ?.value && (
+                              {errors.tests?.[testIndex]?.parameters?.[
+                                param.originalIndex
+                              ]?.value && (
                                 <FiAlertCircle className="absolute right-1 top-1.5 w-4 h-4 text-red-500" />
                               )}
                             </div>
                           ) : (
                             <div className="mx-2 w-28 relative">
-                              {/* normal text */}
                               <input
                                 type="text"
                                 className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                 placeholder="Value"
                                 value={String(
-                                  tests[testIndex].parameters[param.originalIndex].value ?? ""
+                                  tests[testIndex].parameters[param.originalIndex]
+                                    .value ?? ""
                                 )}
                                 onChange={(e) =>
                                   setValue(
-                                    `tests.${testIndex}.parameters.${param.originalIndex}.value` as Path<BloodValuesFormInputs>,
+                                    `tests.${testIndex}.parameters.${param.originalIndex}.value` as Path<
+                                      BloodValuesFormInputs
+                                    >,
                                     e.target.value
                                   )
                                 }
                               />
-                              {errors.tests?.[testIndex]?.parameters?.[param.originalIndex]
-                                ?.value && (
+                              {errors.tests?.[testIndex]?.parameters?.[
+                                param.originalIndex
+                              ]?.value && (
                                 <FiAlertCircle className="absolute right-1 top-1.5 w-4 h-4 text-red-500" />
                               )}
                             </div>
@@ -692,7 +757,9 @@ const BloodValuesForm: React.FC = () => {
                                         className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                         placeholder="Value"
                                         value={String(
-                                          tests[testIndex].parameters[param.originalIndex].subparameters?.[spIndex].value ?? ""
+                                          tests[testIndex].parameters[
+                                            param.originalIndex
+                                          ].subparameters?.[spIndex].value ?? ""
                                         )}
                                         onChange={(e) =>
                                           handleNumericInputChange(
@@ -711,11 +778,15 @@ const BloodValuesForm: React.FC = () => {
                                         className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                         placeholder="Value"
                                         value={String(
-                                          tests[testIndex].parameters[param.originalIndex].subparameters?.[spIndex].value ?? ""
+                                          tests[testIndex].parameters[
+                                            param.originalIndex
+                                          ].subparameters?.[spIndex].value ?? ""
                                         )}
                                         onChange={(e) =>
                                           setValue(
-                                            `tests.${testIndex}.parameters.${param.originalIndex}.subparameters.${spIndex}.value` as Path<BloodValuesFormInputs>,
+                                            `tests.${testIndex}.parameters.${param.originalIndex}.subparameters.${spIndex}.value` as Path<
+                                              BloodValuesFormInputs
+                                            >,
                                             e.target.value
                                           )
                                         }
@@ -798,7 +869,9 @@ const BloodValuesForm: React.FC = () => {
                                           className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                           placeholder="Value"
                                           value={String(
-                                            tests[testIndex].parameters[item.originalIndex].value ?? ""
+                                            tests[testIndex].parameters[
+                                              item.originalIndex
+                                            ].value ?? ""
                                           )}
                                           onChange={(e) =>
                                             handleNumericInputChange(
@@ -816,11 +889,15 @@ const BloodValuesForm: React.FC = () => {
                                           className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                           placeholder="Value"
                                           value={String(
-                                            tests[testIndex].parameters[item.originalIndex].value ?? ""
+                                            tests[testIndex].parameters[
+                                              item.originalIndex
+                                            ].value ?? ""
                                           )}
                                           onChange={(e) =>
                                             setValue(
-                                              `tests.${testIndex}.parameters.${item.originalIndex}.value` as Path<BloodValuesFormInputs>,
+                                              `tests.${testIndex}.parameters.${item.originalIndex}.value` as Path<
+                                                BloodValuesFormInputs
+                                              >,
                                               e.target.value
                                             )
                                           }
@@ -839,7 +916,10 @@ const BloodValuesForm: React.FC = () => {
                                   {item.subparameters?.length && (
                                     <div className="ml-2 mt-1">
                                       {item.subparameters.map((sp, spIndex) => (
-                                        <div key={spIndex} className="mb-1 relative">
+                                        <div
+                                          key={spIndex}
+                                          className="mb-1 relative"
+                                        >
                                           <div className="flex items-center text-sm border rounded px-2 py-1">
                                             <div className="flex-1">
                                               <span className="font-medium text-gray-700">
@@ -858,7 +938,10 @@ const BloodValuesForm: React.FC = () => {
                                                   className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                                   placeholder="Value"
                                                   value={String(
-                                                    tests[testIndex].parameters[item.originalIndex].subparameters?.[spIndex].value ?? ""
+                                                    tests[testIndex].parameters[
+                                                      item.originalIndex
+                                                    ].subparameters?.[spIndex]
+                                                      .value ?? ""
                                                   )}
                                                   onChange={(e) =>
                                                     handleNumericInputChange(
@@ -877,11 +960,16 @@ const BloodValuesForm: React.FC = () => {
                                                   className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                                   placeholder="Value"
                                                   value={String(
-                                                    tests[testIndex].parameters[item.originalIndex].subparameters?.[spIndex].value ?? ""
+                                                    tests[testIndex].parameters[
+                                                      item.originalIndex
+                                                    ].subparameters?.[spIndex]
+                                                      .value ?? ""
                                                   )}
                                                   onChange={(e) =>
                                                     setValue(
-                                                      `tests.${testIndex}.parameters.${item.originalIndex}.subparameters.${spIndex}.value` as Path<BloodValuesFormInputs>,
+                                                      `tests.${testIndex}.parameters.${item.originalIndex}.subparameters.${spIndex}.value` as Path<
+                                                        BloodValuesFormInputs
+                                                      >,
                                                       e.target.value
                                                     )
                                                   }
@@ -905,7 +993,9 @@ const BloodValuesForm: React.FC = () => {
                           ) : (
                             <div className="bg-yellow-50 p-2 rounded flex items-center gap-2 text-yellow-700 text-sm">
                               <FiAlertCircle className="w-4 h-4" />
-                              <span>No parameters found under this subheading.</span>
+                              <span>
+                                No parameters found under this subheading.
+                              </span>
                             </div>
                           )}
                         </div>
@@ -947,7 +1037,8 @@ const BloodValuesForm: React.FC = () => {
                                 className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                 placeholder="Value"
                                 value={String(
-                                  tests[testIndex].parameters[paramIndex].value ?? ""
+                                  tests[testIndex].parameters[paramIndex].value ??
+                                    ""
                                 )}
                                 onChange={(e) =>
                                   handleNumericInputChange(
@@ -965,11 +1056,14 @@ const BloodValuesForm: React.FC = () => {
                                 className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                 placeholder="Value"
                                 value={String(
-                                  tests[testIndex].parameters[paramIndex].value ?? ""
+                                  tests[testIndex].parameters[paramIndex].value ??
+                                    ""
                                 )}
                                 onChange={(e) =>
                                   setValue(
-                                    `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
+                                    `tests.${testIndex}.parameters.${paramIndex}.value` as Path<
+                                      BloodValuesFormInputs
+                                    >,
                                     e.target.value
                                   )
                                 }
@@ -1007,7 +1101,8 @@ const BloodValuesForm: React.FC = () => {
                                         className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                         placeholder="Value"
                                         value={String(
-                                          tests[testIndex].parameters[paramIndex].subparameters?.[spIndex].value ?? ""
+                                          tests[testIndex].parameters[paramIndex]
+                                            .subparameters?.[spIndex].value ?? ""
                                         )}
                                         onChange={(e) =>
                                           handleNumericInputChange(
@@ -1026,11 +1121,14 @@ const BloodValuesForm: React.FC = () => {
                                         className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
                                         placeholder="Value"
                                         value={String(
-                                          tests[testIndex].parameters[paramIndex].subparameters?.[spIndex].value ?? ""
+                                          tests[testIndex].parameters[paramIndex]
+                                            .subparameters?.[spIndex].value ?? ""
                                         )}
                                         onChange={(e) =>
                                           setValue(
-                                            `tests.${testIndex}.parameters.${paramIndex}.subparameters.${spIndex}.value` as Path<BloodValuesFormInputs>,
+                                            `tests.${testIndex}.parameters.${paramIndex}.subparameters.${spIndex}.value` as Path<
+                                              BloodValuesFormInputs
+                                            >,
                                             e.target.value
                                           )
                                         }
