@@ -254,7 +254,7 @@ export default function Dashboard() {
     if (!selectedPatient) return;
     try {
       const updatedAmount = selectedPatient.amountPaid + newAmountPaid;
-      const { testTotal, discountValue } = calculateAmounts(selectedPatient);
+      // const { testTotal, discountValue } = calculateAmounts(selectedPatient);
       // const newRemaining = testTotal - discountValue - updatedAmount;
       const patientRef = ref(database, `patients/${selectedPatient.id}`);
 
