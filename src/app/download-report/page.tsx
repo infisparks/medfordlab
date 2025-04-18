@@ -145,21 +145,36 @@ function DownloadReport() {
   const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
     const out: Record<string, BloodTestData> = {};
     if (!d.bloodtest) return out;
+
     for (const k in d.bloodtest) {
-      const t  = d.bloodtest[k];
-      const cp = {
+      const t = d.bloodtest[k];
+
+      // ← skip any outsourced tests entirely
+      if (t.type === "outsource") continue;
+
+      // ensure parameters is always an array
+      const keptParams = Array.isArray(t.parameters)
+        ? t.parameters
+            .filter((p) => p.visibility !== "hidden")
+            .map((p) => ({
+              ...p,
+              subparameters: Array.isArray(p.subparameters)
+                ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
+                : [],
+            }))
+        : [];
+
+      out[k] = {
         ...t,
-        parameters: t.parameters
-          .filter(p => p.visibility !== "hidden")
-          .map(p => ({
-            ...p,
-            subparameters: p.subparameters?.filter(sp => sp.visibility !== "hidden") ?? [],
-          })),
+        parameters: keptParams,
+        // preserve subheadings if you want
+        subheadings: t.subheadings,
       };
-      out[k] = cp;
     }
+
     return out;
   };
+
 
   // -----------------------------
   // PDF builder

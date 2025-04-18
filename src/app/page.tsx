@@ -12,7 +12,7 @@ import {
   DocumentPlusIcon,
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
-
+import letterhead from "../../public/letterhead.png"
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -27,10 +27,12 @@ interface BloodTest {
 interface Patient {
   id: string;
   name: string;
+  patientId:string;
   age: number;
   gender: string;
   contact?: string;
   createdAt: string;
+  doctorName :string;
   discountAmount: number;                              // ₹ flat discount
   amountPaid: number;
   bloodTests?: BloodTest[];
@@ -45,16 +47,20 @@ const slugifyTestName = (name: string) =>
   name
     .toLowerCase()
     .replace(/\s+/g, "_")
-    .replace(/[^\w()]/g, "_")
-    .replace(/_+/g, "_");
+    .replace(/[.#$[\]]/g, "");
 
-const isTestFullyEntered = (p: Patient, t: BloodTest): boolean => {
-  if (!p.bloodtest) return false;
-  const data = p.bloodtest[slugifyTestName(t.testName)];
-  if (!data?.parameters) return false;
-  return data.parameters.every((par: any) => par.value !== "" && par.value !== null && par.value !== undefined);
-};
-
+    const isTestFullyEntered = (p: Patient, t: BloodTest): boolean => {
+      // ① if it’s outsourced, consider it done
+      if (t.testType?.toLowerCase() === "outsource") return true;
+    
+      // ② otherwise, fall back to your normal logic:
+      if (!p.bloodtest) return false;
+      const data = p.bloodtest[slugifyTestName(t.testName)];
+      if (!data?.parameters) return false;
+      return data.parameters.every((par: any) =>
+        par.value !== "" && par.value != null
+      );
+    };
 const isAllTestsComplete = (p: Patient) =>
   !p.bloodTests?.length || p.bloodTests.every(bt => isTestFullyEntered(p, bt));
 
@@ -160,32 +166,136 @@ export default function Dashboard() {
   };
 
   /* download bill */
-  const handleDownloadBill = () => {
-    if (!selectedPatient) return;
-    const doc = new jsPDF();
-    let y = 10;
-    doc.setFontSize(18).text("Diagnostic Bill", 105, y, { align: "center" }); y += 10;
-    doc.setFontSize(12).text(`Patient Name: ${selectedPatient.name}`, 14, y); y += 6;
-    doc.text(`Contact: ${selectedPatient.contact || "N/A"}`, 14, y); y += 8;
+ /* download bill */
+ const handleDownloadBill = () => {
+  if (!selectedPatient) return;
 
-    /* tests table */
-    const rows = selectedPatient.bloodTests?.map(t => [t.testName, t.price.toFixed(2)]) || [];
-    autoTable(doc, { head: [["Test Name", "Price (₹)"]], body: rows, startY: y, theme: "grid", styles: { fontSize: 11 }, headStyles: { fillColor: [22,160,133] } });
+  // 1️⃣ Load the PNG and draw to a canvas to get a compressed JPEG dataURL
+  const img = new Image();
+  img.src = (letterhead as any).src ?? (letterhead as any);
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(img, 0, 0);
+
+    // 50% JPEG quality
+    const bgDataUrl = canvas.toDataURL("image/jpeg", 0.5);
+
+    // 2️⃣ Create the PDF
+    const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    const pageW = doc.internal.pageSize.getWidth();   // 210 mm
+    const pageH = doc.internal.pageSize.getHeight();  // 297 mm
+
+    // ➡ Set Helvetica as the default font
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(12);
+
+    // Draw the compressed background
+    doc.addImage(bgDataUrl, "JPEG", 0, 0, pageW, pageH);
+
+    // 3️⃣ Two‑column patient details
+    const margin = 14;
+    const colX = [margin, pageW / 2 + margin];
+    let y = 60; // adjust if your header is taller
+
+    // Details rows
+    doc.text(`Patient ID: ${selectedPatient.patientId
+    }`, colX[0], y);
+    doc.text(
+      `Age / Gender: ${selectedPatient.age} y / ${selectedPatient.gender}`,
+      colX[1],
+      y
+    );
+    y += 6;
+
+    doc.text(`Name: ${selectedPatient.name}`, colX[0], y);
+    doc.text(
+      `Registration: ${new Date(selectedPatient.createdAt).toLocaleDateString()}`,
+      colX[1],
+      y
+    );
+    y += 6;
+
+    doc.text(
+      `Ref. Doctor: ${selectedPatient.doctorName ?? "N/A"}`,
+      colX[0],
+      y
+    );
+    doc.text(`Contact: ${selectedPatient.contact ?? "N/A"}`, colX[1], y);
+    y += 10;
+
+    // 4️⃣ Tests table (Helvetica, bold amounts)
+    const rows =
+      selectedPatient.bloodTests?.map((t) => [
+        t.testName,
+        `${t.price.toFixed(2)}`,
+      ]) ?? [];
+    autoTable(doc, {
+      head: [["Test Name", "Price (RS)"]],
+      body: rows,
+      startY: y,
+      theme: "grid",
+      styles: {
+        font: "helvetica",
+        fontSize: 11,
+      },
+      headStyles: {
+        fillColor: [30, 79, 145],  // your #1e4f91
+        fontStyle: "bold",
+      },
+      columnStyles: {
+        // make the Price column bold
+        1: { fontStyle: "bold" },
+      },
+      margin: { left: margin, right: margin },
+    });
     y = (doc as any).lastAutoTable.finalY + 10;
 
-    /* summary */
+    // 5️⃣ Summary table (Helvetica, bold amounts)
     const { testTotal, remaining } = calculateAmounts(selectedPatient);
-    const summary = [
-      ["Test Total", `₹${testTotal.toFixed(2)}`],
-      ["Discount",   `₹${selectedPatient.discountAmount.toFixed(2)}`],
-      ["Amount Paid",`₹${selectedPatient.amountPaid.toFixed(2)}`],
-      ["Remaining",  `₹${remaining.toFixed(2)}`],
-    ];
-    autoTable(doc, { head: [["Description", "Amount"]], body: summary, startY: y, theme: "plain", styles: { fontSize: 11 } });
-    y = (doc as any).lastAutoTable.finalY + 10;
-    doc.setFontSize(10).text("Thank you for choosing our services!", 105, y, { align: "center" });
+    autoTable(doc, {
+      head: [["Description", "Amount"]],
+      body: [
+        ["Test Total", `${testTotal.toFixed(2)}`],
+        ["Discount", `${selectedPatient.discountAmount.toFixed(2)}`],
+        ["Amount Paid", `${selectedPatient.amountPaid.toFixed(2)}`],
+        ["Remaining", `${remaining.toFixed(2)}`],
+      ],
+      startY: y,
+      theme: "plain",
+      styles: {
+        font: "helvetica",
+        fontSize: 11,
+      },
+      columnStyles: {
+        // bold the right‑hand column
+        1: { fontStyle: "bold" },
+      },
+      margin: { left: margin, right: margin },
+    });
+    y = (doc as any).lastAutoTable.finalY + 12;
+
+    // 6️⃣ Footer in italic Helvetica
+    doc.setFont("helvetica", "italic")
+       .setFontSize(10)
+       .text(
+         "Thank you for choosing our services!",
+         pageW / 2,
+         y,
+         { align: "center" }
+       );
+
+    // 7️⃣ Save
     doc.save(`Bill_${selectedPatient.name}.pdf`);
   };
+
+  img.onerror = () => {
+    alert("Failed to load letterhead image.");
+  };
+};
+
 
   /* ---------------  RENDER  --------------- */
   return (
@@ -258,7 +368,9 @@ export default function Dashboard() {
                         <td className="px-6 py-4 text-sm">
                           {p.bloodTests?.length ? (
                             <ul className="list-disc pl-4">{p.bloodTests.map(t=>{
-                              const done = isTestFullyEntered(p,t);
+                              const done =
+                                t.testType?.toLowerCase() === "outsource" ||
+                                  isTestFullyEntered(p, t);
                               return <li key={t.testId} className={done?"text-green-600":"text-red-500"}>{t.testName}</li>;
                             })}</ul>
                           ) : <span className="text-gray-400">No tests</span>}

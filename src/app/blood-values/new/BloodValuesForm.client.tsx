@@ -1,6 +1,9 @@
+/* ------------------------------------------------------------------ */
+/*  BloodValuesForm.client.tsx                                        */
+/* ------------------------------------------------------------------ */
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   useForm,
   SubmitHandler,
@@ -18,37 +21,37 @@ import {
 } from "react-icons/fi";
 import { FaCalculator } from "react-icons/fa";
 
-// -------------------------------------------------------------------
-// Interfaces
-// -------------------------------------------------------------------
-
+/* ─────────────────── Types ─────────────────── */
 interface SubParameterValue {
   name: string;
   unit: string;
   value: string | number;
   range: string;
-  formula?: string; 
+  formula?: string;
   valueType: "number" | "text";
 }
-
 interface TestParameterValue {
   name: string;
   unit: string;
   value: string | number;
   range: string;
-  formula?: string; 
+  formula?: string;
   valueType: "number" | "text";
   subparameters?: SubParameterValue[];
+  suggestions?: { shortName: string; description: string }[];
 }
 
+interface SubHeading {
+  title: string;
+  parameterNames: string[];
+  is100?: boolean | string;
+}
 interface TestValueEntry {
   testId: string;
   testName: string;
+  testType: string;
   parameters: TestParameterValue[];
-  subheadings?: {
-    title: string;
-    parameterNames: string[];
-  }[];
+  subheadings?: SubHeading[];
   selectedParameters?: string[];
 }
 
@@ -56,56 +59,46 @@ interface BloodValuesFormInputs {
   patientId: string;
   tests: TestValueEntry[];
 }
+export type IndexedParam = TestParameterValue & { originalIndex: number };
 
-// Quick type for referencing the "originalIndex" if needed
-type IndexedParam = TestParameterValue & { originalIndex: number };
-
-// -------------------------------------------------------------------
-// Helpers
-// -------------------------------------------------------------------
-const parseRangeKey = (key: string): { lower: number; upper: number } => {
-  key = key.trim();
-  const suffix = key.slice(-1);
-  let multiplier = 1;
-  if (suffix === "d") multiplier = 1;
-  else if (suffix === "m") multiplier = 30;
-  else if (suffix === "y") multiplier = 365;
-
-  const rangePart = key.slice(0, -1);
-  const parts = rangePart.split("-");
-  if (parts.length !== 2) {
-    return { lower: 0, upper: Infinity };
-  }
-  const lower = Number(parts[0]) * multiplier;
-  const upper = Number(parts[1]) * multiplier;
-  return { lower, upper };
+/* ───────────── Helpers ───────────── */
+const parseRangeKey = (key: string) => {
+  const unit = key.trim().slice(-1);
+  const [l, u] = key.slice(0, -1).split("-").map(Number);
+  const mul = unit === "y" ? 365 : unit === "m" ? 30 : 1;
+  return { lower: l * mul, upper: u * mul };
 };
+const round2 = (n: number) => +n.toFixed(2);
+const isNumeric = (s: string) => !isNaN(+s) && isFinite(+s);
 
-function roundToTwo(num: number): number {
-  return parseFloat(num.toFixed(2));
-}
-function isNumeric(str: string) {
-  return !isNaN(parseFloat(str)) && isFinite(parseFloat(str));
+/* ---------- dropdown position helper ---------- */
+interface SuggestPos {
+  t: number;
+  p: number;
+  x: number;
+  y: number;
+  width: number;
 }
 
-// -------------------------------------------------------------------
-// BloodValuesForm
-// -------------------------------------------------------------------
+/* ------------------------------------------------------------------ */
 const BloodValuesForm: React.FC = () => {
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const patientId = searchParams.get("patientId");
+  const sp = useSearchParams();
+  const patientId = sp.get("patientId");
+
   const [loading, setLoading] = useState(true);
 
-  // This set holds all “text” strings the user typed into numeric fields
-  const [textHistory, setTextHistory] = useState<string[]>([]);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [showSuggest, setShowSuggest] = useState<{
-    testIndex: number;
-    paramIndex: number;
-    subIndex?: number;
-  } | null>(null);
+  /* autocomplete list fetched once */
+  const [dbText, setDbText] = useState<string[]>([]);
 
+  /* dropdown state */
+  const [suggest, setSuggest] = useState<string[]>([]);
+  const [showSug, setShowSug] = useState<SuggestPos | null>(null);
+
+  /* 100 % warnings */
+  const [warn100, setWarn100] = useState<Record<string, boolean>>({});
+
+  /* react‑hook‑form */
   const {
     handleSubmit,
     reset,
@@ -113,1096 +106,680 @@ const BloodValuesForm: React.FC = () => {
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<BloodValuesFormInputs>({
-    defaultValues: {
-      patientId: patientId || "",
-      tests: [],
-    },
+    defaultValues: { patientId: patientId || "", tests: [] },
   });
 
-  // ─────────────────────────────────────────────
-  // 1) Fetch patient data, booked tests, etc.
-  // ─────────────────────────────────────────────
+  /* ───────── Load autocomplete once ───────── */
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await get(ref(database, "autocompleteValues"));
+        if (snap.exists()) setDbText(Object.values<string>(snap.val()));
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
+
+  /* ───────── Fetch patient + tests ───────── */
   useEffect(() => {
     if (!patientId) return;
-    const fetchPatientData = async () => {
+    (async () => {
       try {
-        const patientRef = ref(database, `patients/${patientId}`);
-        const patientSnapshot = await get(patientRef);
-        if (!patientSnapshot.exists()) {
+        const pSnap = await get(ref(database, `patients/${patientId}`));
+        if (!pSnap.exists()) {
           setLoading(false);
           return;
         }
 
-        const patientData = patientSnapshot.val();
-        const patientTests = patientData.bloodTests || [];
-        const storedBloodTests = patientData.bloodtest || {};
-        const patientAgeInDays = patientData.total_day
-          ? Number(patientData.total_day)
-          : Number(patientData.age) * 365;
+        const p = pSnap.val();
+        const booked = p.bloodTests || [];
+        const stored = p.bloodtest || {};
+        const ageDays = p.total_day ? +p.total_day : +p.age * 365;
+        const genderKey = p.gender?.toLowerCase() === "male" ? "male" : "female";
 
-        // Build the tests array by fetching test definitions
-        const testsData: TestValueEntry[] = await Promise.all(
-          patientTests.map(async (testObj: any) => {
-            const definitionRef = ref(database, `bloodTests/${testObj.testId}`);
-            const definitionSnap = await get(definitionRef);
-
-            if (!definitionSnap.exists()) {
+        const tests: TestValueEntry[] = await Promise.all(
+          booked.map(async (bt: any) => {
+            const defSnap = await get(ref(database, `bloodTests/${bt.testId}`));
+            if (!defSnap.exists())
               return {
-                testId: testObj.testId,
-                testName: testObj.testName,
+                testId: bt.testId,
+                testName: bt.testName,
+                testType: bt.testType,
                 parameters: [],
-              };
-            }
+                subheadings: [],
+                selectedParameters: bt.selectedParameters,
+              } as TestValueEntry;
 
-            const testDefinition = definitionSnap.val();
-            const allParams = testDefinition.parameters || [];
-            let filteredParams;
-            if (testObj.selectedParameters?.length) {
-              filteredParams = allParams.filter((p: any) =>
-                testObj.selectedParameters!.includes(p.name)
-              );
-            } else {
-              filteredParams = allParams;
-            }
+            const def = defSnap.val();
+            const allParams = Array.isArray(def.parameters) ? def.parameters : [];
 
-            // Build each parameter
-            const parameters = filteredParams.map((param: any) => {
-              const gender =
-                patientData.gender?.toLowerCase() === "male" ? "male" : "female";
-              const rangesForGender = param.range?.[gender] || [];
-              let normalRange = "";
+            const wanted = bt.selectedParameters?.length
+              ? allParams.filter((p: any) => bt.selectedParameters.includes(p.name))
+              : allParams;
 
-              for (const rng of rangesForGender) {
-                const { lower, upper } = parseRangeKey(rng.rangeKey);
-                if (patientAgeInDays >= lower && patientAgeInDays <= upper) {
-                  normalRange = rng.rangeValue;
+            const params: TestParameterValue[] = wanted.map((p: any) => {
+              /* normal range */
+              const ranges = p.range?.[genderKey] || [];
+              let normal = "";
+              for (const r of ranges) {
+                const { lower, upper } = parseRangeKey(r.rangeKey);
+                if (ageDays >= lower && ageDays <= upper) {
+                  normal = r.rangeValue;
                   break;
                 }
               }
-              if (!normalRange && rangesForGender.length > 0) {
-                normalRange =
-                  rangesForGender[rangesForGender.length - 1].rangeValue;
-              }
+              if (!normal && ranges.length) normal = ranges[ranges.length - 1].rangeValue;
 
-              const testKey = testDefinition.testName
-                .toLowerCase()
-                .replace(/\s+/g, "_");
-              const storedParamObj =
-                storedBloodTests?.[testKey]?.parameters?.find(
-                  (p: any) => p.name === param.name
-                );
+              const testKey = def.testName.toLowerCase().replace(/\s+/g, "_");
+              const saved = stored?.[testKey]?.parameters?.find((q: any) => q.name === p.name);
 
-              let subparams: SubParameterValue[] | undefined;
-              if (param.subparameters && Array.isArray(param.subparameters)) {
-                subparams = param.subparameters.map((subParam: any) => {
-                  const subRanges = subParam.range?.[gender] || [];
-                  let subRangeStr = "";
-                  for (const sr of subRanges) {
-                    const { lower, upper } = parseRangeKey(sr.rangeKey);
-                    if (
-                      patientAgeInDays >= lower &&
-                      patientAgeInDays <= upper
-                    ) {
-                      subRangeStr = sr.rangeValue;
+              let subps;
+              if (Array.isArray(p.subparameters)) {
+                subps = p.subparameters.map((s: any) => {
+                  const sr = s.range?.[genderKey] || [];
+                  let sNorm = "";
+                  for (const x of sr) {
+                    const { lower, upper } = parseRangeKey(x.rangeKey);
+                    if (ageDays >= lower && ageDays <= upper) {
+                      sNorm = x.rangeValue;
                       break;
                     }
                   }
-                  if (!subRangeStr && subRanges.length > 0) {
-                    subRangeStr =
-                      subRanges[subRanges.length - 1].rangeValue;
-                  }
-                  const storedSubParam =
-                    storedParamObj?.subparameters?.find(
-                      (sp: any) => sp.name === subParam.name
-                    );
+                  if (!sNorm && sr.length) sNorm = sr[sr.length - 1].rangeValue;
+                  const savedSp = saved?.subparameters?.find((z: any) => z.name === s.name);
                   return {
-                    name: subParam.name,
-                    unit: subParam.unit,
-                    value: storedSubParam ? storedSubParam.value : "",
-                    range: subRangeStr,
-                    valueType: subParam.valueType || "number",
-                    formula: subParam.formula || "",
-                  };
+                    name: s.name,
+                    unit: s.unit,
+                    value: savedSp ? savedSp.value : "",
+                    range: sNorm,
+                    formula: s.formula || "",
+                    valueType: s.valueType || "number",
+                  } as SubParameterValue;
                 });
               }
-
               return {
-                name: param.name,
-                unit: param.unit,
-                value: storedParamObj ? storedParamObj.value : "",
-                range: normalRange,
-                formula: param.formula || "",
-                valueType: (param.valueType || "number") as "number" | "text",
-                ...(subparams ? { subparameters: subparams } : {}),
-              };
+                name: p.name,
+                unit: p.unit,
+                value: saved ? saved.value : "",
+                range: normal,
+                formula: p.formula || "",
+                valueType: p.valueType || "number",
+                ...(subps ? { subparameters: subps } : {}),
+                ...(p.suggestions ? { suggestions: p.suggestions } : {}),
+              } as TestParameterValue;
             });
 
             return {
-              testId: testObj.testId,
-              testName: testDefinition.testName,
-              parameters,
-              subheadings: testDefinition.subheadings || [],
-              selectedParameters: testObj.selectedParameters,
-            };
+              testId: bt.testId,
+              testName: def.testName,
+              testType: bt.testType,
+              parameters: params,
+              subheadings: def.subheadings || [],
+              selectedParameters: bt.selectedParameters,
+            } as TestValueEntry;
           })
         );
 
-        reset({
-          patientId,
-          tests: testsData,
-        });
-      } catch (error) {
-        console.error("Error fetching patient data:", error);
+        reset({ patientId, tests });
+      } catch (e) {
+        console.error(e);
       } finally {
         setLoading(false);
       }
-    };
-
-    fetchPatientData();
+    })();
   }, [patientId, reset]);
 
-  // ─────────────────────────────────────────────
-  // 2) Single param's calculator
-  // ─────────────────────────────────────────────
-  const handleCalculateFormula = (testIndex: number, paramIndex: number) => {
-    const tests = watch("tests");
-    const currentTest = tests[testIndex];
-    if (!currentTest) return;
-
-    const param = currentTest.parameters[paramIndex];
-    if (!param?.formula?.trim()) return;
-    if (param.valueType !== "number") return; // only numeric
-
-    // gather param values
-    const paramValues: Record<string, number> = {};
-    currentTest.parameters.forEach((p: TestParameterValue) => {
-      const val = parseFloat(String(p.value));
-      if (!isNaN(val)) {
-        paramValues[p.name] = val;
-      }
-    });
-    let expr = param.formula;
-    Object.entries(paramValues).forEach(([name, val]) => {
-      const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const rgx = new RegExp(safeName, "g");
-      expr = expr.replace(rgx, val.toString());
-    });
-
-    try {
-      const result = Function('"use strict";return (' + expr + ')')();
-      if (!isNaN(result)) {
-        const newVal = roundToTwo(Number(result));
-        setValue(
-          `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
-          newVal.toFixed(2)
-        );
-      }
-    } catch (err) {
-      console.error("Error evaluating formula for", param.name, err);
-    }
-  };
-
-  // ─────────────────────────────────────────────
-  // 2b) SHIFT => recalc all formula fields
-  // ─────────────────────────────────────────────
+  /* ───────── SHIFT → recalc all formulas ───────── */
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // If user pressed SHIFT, run all formulas
-      if (e.key === "Shift") {
-        runAllFormulas();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [/* dependencies not strictly needed */]);
-
-  const runAllFormulas = () => {
-    const testsArray = watch("tests");
-    // We'll do the same formula logic for every param that has a formula
-    // and is valueType = "number".
-    // 1) Build a dictionary of paramName => numericValue.
-    // 2) Evaluate the param formula. 3) setValue(…).
-    testsArray.forEach((test: TestValueEntry, testIndex: number) => {
-      const paramValues: Record<string, number> = {};
-      // gather all param numeric values
-      test.parameters.forEach((p) => {
-        const val = parseFloat(String(p.value));
-        if (!isNaN(val)) {
-          paramValues[p.name] = val;
-        }
-      });
-      // loop
-      test.parameters.forEach((param, paramIndex) => {
-        if (param.formula?.trim() && param.valueType === "number") {
-          let expr = param.formula;
-          Object.entries(paramValues).forEach(([name, val]) => {
-            const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            expr = expr.replace(new RegExp(safeName, "g"), val.toString());
-          });
-          try {
-            const result = Function('"use strict";return (' + expr + ')')();
-            if (!isNaN(result)) {
-              const newVal = roundToTwo(Number(result));
-              setValue(
-                `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
-                newVal.toFixed(2)
-              );
-            }
-          } catch (err) {
-            console.error("Error evaluating formula for", param.name, err);
+    const runAll = () => {
+      const tArr = watch("tests");
+      tArr.forEach((t, tIdx) => {
+        const nums: Record<string, number> = {};
+        t.parameters.forEach((p) => {
+          const v = +p.value;
+          if (!isNaN(v)) nums[p.name] = v;
+        });
+        t.parameters.forEach((p, pIdx) => {
+          if (p.formula && p.valueType === "number") {
+            let expr = p.formula;
+            Object.entries(nums).forEach(([k, v]) => {
+              expr = expr.replace(new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), v + "");
+            });
+            try {
+              const r = Function('"use strict";return (' + expr + ")")();
+              if (!isNaN(r)) {
+                setValue(`tests.${tIdx}.parameters.${pIdx}.value`, round2(+r).toFixed(2), {
+                  shouldValidate: false,
+                });
+              }
+            } catch {}
           }
-        }
+        });
       });
-    });
-  };
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Shift" && runAll();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [watch, setValue]);
 
-  // ─────────────────────────────────────────────
-  // 2c) handleNumericInputChange
-  // ─────────────────────────────────────────────
-  const handleNumericInputChange = (
-    e: React.ChangeEvent<HTMLInputElement>,
-    testIndex: number,
-    paramIndex: number,
-    subParamIndex?: number
-  ) => {
-    const inputVal = e.target.value;
-    if (inputVal === "" || isNumeric(inputVal)) {
-      setShowSuggest(null);
-      setSuggestions([]);
-
-      if (subParamIndex === undefined) {
-        setValue(
-          `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
-          inputVal
-        );
-      } else {
-        setValue(
-          `tests.${testIndex}.parameters.${paramIndex}.subparameters.${subParamIndex}.value` as Path<BloodValuesFormInputs>,
-          inputVal
-        );
-      }
-    } else {
-      // typed non-numeric => store
-      if (!textHistory.includes(inputVal)) {
-        setTextHistory((old) => [...old, inputVal]);
-      }
-      const matched = textHistory.filter((t) =>
-        t.toLowerCase().includes(inputVal.toLowerCase())
-      );
-      setSuggestions(matched);
-      setShowSuggest({ testIndex, paramIndex, subIndex: subParamIndex });
-
-      if (subParamIndex === undefined) {
-        setValue(
-          `tests.${testIndex}.parameters.${paramIndex}.value`,
-          inputVal
-        );
-      } else {
-        setValue(
-          `tests.${testIndex}.parameters.${paramIndex}.subparameters.${subParamIndex}.value`,
-          inputVal
-        );
-      }
-    }
-  };
-
-  // user picks a suggestion
-  const handlePickSuggestion = (
-    suggestionValue: string,
-    testIndex: number,
-    paramIndex: number,
-    subParamIndex?: number
-  ) => {
-    if (subParamIndex === undefined) {
-      setValue(
-        `tests.${testIndex}.parameters.${paramIndex}.value` as Path<BloodValuesFormInputs>,
-        suggestionValue
-      );
-    } else {
-      setValue(
-        `tests.${testIndex}.parameters.${paramIndex}.subparameters.${subParamIndex}.value` as Path<BloodValuesFormInputs>,
-        suggestionValue
-      );
-    }
-    setShowSuggest(null);
-    setSuggestions([]);
-  };
-
-  // ─────────────────────────────────────────────
-  // 3) auto-effect for formula calc + rounding
-  // ─────────────────────────────────────────────
+  /* ───────── Live rounding & warn flags ───────── */
   const testsWatch = watch("tests");
   useEffect(() => {
-    const newTests = JSON.parse(JSON.stringify(testsWatch)) as TestValueEntry[];
-    let changed = false;
-
-    newTests.forEach((test, tIdx) => {
-      const paramValues: Record<string, number> = {};
-      test.parameters.forEach((p) => {
-        const val = parseFloat(String(p.value));
-        if (!isNaN(val)) {
-          paramValues[p.name] = val;
+    const clone = JSON.parse(JSON.stringify(testsWatch)) as TestValueEntry[];
+    const warn: Record<string, boolean> = {};
+    let dirty = false;
+    clone.forEach((t, tIdx) => {
+      t.parameters.forEach((p, pIdx) => {
+        if (p.valueType === "number" && p.value !== "") {
+          const vs = (+p.value).toFixed(2);
+          if (String(p.value) !== vs) {
+            clone[tIdx].parameters[pIdx].value = vs;
+            dirty = true;
+          }
         }
       });
 
-      test.parameters.forEach((param, pIdx) => {
-        // formula
-        if (param.formula?.trim() && param.valueType === "number") {
-          let expr = param.formula;
-          Object.entries(paramValues).forEach(([name, val]) => {
-            const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const rgx = new RegExp(safeName, "g");
-            expr = expr.replace(rgx, val.toString());
-          });
-          try {
-            const result = Function('"use strict";return (' + expr + ')')();
-            if (!isNaN(result)) {
-              const newVal = roundToTwo(Number(result));
-              const newValStr = newVal.toFixed(2);
-              if (String(param.value) !== newValStr) {
-                newTests[tIdx].parameters[pIdx].value = newValStr;
-                changed = true;
-              }
-            }
-          } catch (err) {
-            console.error("Error evaluating formula for", param.name, err);
-          }
-        }
-        // rounding
-        if (param.valueType === "number" && param.value !== "") {
-          const numericVal = parseFloat(String(param.value));
-          if (!isNaN(numericVal)) {
-            const str2dec = numericVal.toFixed(2);
-            if (String(param.value) !== str2dec) {
-              newTests[tIdx].parameters[pIdx].value = str2dec;
-              changed = true;
-            }
-          }
-        }
-
-        // subparams
-        if (param.subparameters && Array.isArray(param.subparameters)) {
-          param.subparameters.forEach((sp, spIndex) => {
-            if (sp.valueType === "number" && sp.value !== "") {
-              const spVal = parseFloat(String(sp.value));
-              if (!isNaN(spVal)) {
-                const spStr2dec = spVal.toFixed(2);
-                if (String(sp.value) !== spStr2dec) {
-                  newTests[tIdx].parameters[pIdx].subparameters![spIndex].value = spStr2dec;
-                  changed = true;
-                }
-              }
-            }
-          });
-        }
+      t.subheadings?.forEach((sh, shIdx) => {
+        if (!(sh.is100 === true || sh.is100 === "true")) return;
+        const tag = `${tIdx}-${shIdx}`;
+        const idxs = sh.parameterNames
+          .map((n) => t.parameters.findIndex((p) => p.name === n))
+          .filter((i) => i >= 0);
+        let sum = 0;
+        idxs.forEach((i) => {
+          const v = +clone[tIdx].parameters[i].value;
+          if (!isNaN(v)) sum += v;
+        });
+        warn[tag] = sum > 100.0001;
       });
     });
-
-    if (changed) {
-      setValue("tests", newTests, { shouldValidate: false });
-    }
+    if (dirty) setValue("tests", clone, { shouldValidate: false });
+    setWarn100(warn);
   }, [testsWatch, setValue]);
 
-  // ─────────────────────────────────────────────
-  // 4) onSubmit => push to firebase
-  // ─────────────────────────────────────────────
-  const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (formData) => {
-    try {
-      for (const test of formData.tests) {
-        const testKey = test.testName
-          .toLowerCase()
-          .replace(/\s+/g, "_")
-          .replace(/[.#$[\]]/g, "");
+  /* ───────── Handlers ───────── */
+  const numericChange = (v: string, t: number, p: number, sp?: number) => {
+    if (v !== "" && !isNumeric(v)) return;
+    const path =
+      sp == null
+        ? `tests.${t}.parameters.${p}.value`
+        : `tests.${t}.parameters.${p}.subparameters.${sp}.value`;
+    setValue(path as Path<BloodValuesFormInputs>, v, { shouldValidate: false });
+  };
 
-        const filteredParams = test.parameters
-          .map((param) => {
-            const filteredSubparams =
-              param.subparameters?.filter((sp) => sp.value !== "") ?? [];
-            if (param.value !== "" || filteredSubparams.length > 0) {
-              return {
-                ...param,
-                subparameters: filteredSubparams,
-              };
+  /* suggestion helpers */
+  const buildMatches = (param: TestParameterValue, q: string): string[] => {
+      // Show test‑specific suggestions only when the array is **not empty**
+  if (Array.isArray(param.suggestions) && param.suggestions.length > 0) {
+    const pool = param.suggestions.map((s) => s.description);
+    return q ? pool.filter((d) => d.toLowerCase().includes(q)) : pool;
+  }
+
+    return q ? dbText.filter((s) => s.toLowerCase().includes(q)) : dbText;
+  };
+
+  const showDropdown = (t: number, p: number, rect: DOMRect, q: string) => {
+    const currentParam = watch("tests")[t].parameters[p];
+    const matches = buildMatches(currentParam, q);
+    setSuggest(matches);
+    if (matches.length) {
+      setShowSug({
+        t,
+        p,
+        x: rect.left + window.scrollX,
+        y: rect.bottom + window.scrollY,
+        width: rect.width,
+      });
+    } else {
+      setShowSug(null);
+    }
+  };
+
+  const textChange = (txt: string, t: number, p: number, rect: DOMRect) => {
+    setValue(`tests.${t}.parameters.${p}.value` as Path<BloodValuesFormInputs>, txt, {
+      shouldValidate: false,
+    });
+    showDropdown(t, p, rect, txt.trim().toLowerCase());
+  };
+
+  const pickSug = (val: string, t: number, p: number) => {
+    setValue(`tests.${t}.parameters.${p}.value` as Path<BloodValuesFormInputs>, val);
+    setSuggest([]);
+    setShowSug(null);
+  };
+
+  const calcFormulaOnce = (tIdx: number, pIdx: number) => {
+    const data = watch("tests")[tIdx];
+    const p = data.parameters[pIdx];
+    if (!p.formula || p.valueType !== "number") return;
+    const nums: Record<string, number> = {};
+    data.parameters.forEach((x) => {
+      const v = +x.value;
+      if (!isNaN(v)) nums[x.name] = v;
+    });
+    let expr = p.formula;
+    Object.entries(nums).forEach(([k, v]) => {
+      expr = expr.replace(new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), v + "");
+    });
+    try {
+      const r = Function('"use strict";return (' + expr + ")")();
+      if (!isNaN(r))
+        setValue(`tests.${tIdx}.parameters.${pIdx}.value`, round2(+r).toFixed(2));
+    } catch {}
+  };
+
+  /* manual "Calculate" 100% */
+  const fillRemaining = (tIdx: number, sh: SubHeading, lastIdx: number) => {
+    const test = watch("tests")[tIdx];
+    const idxs = sh.parameterNames
+      .map((n) => test.parameters.findIndex((p) => p.name === n))
+      .filter((i) => i >= 0);
+    let total = 0;
+    idxs.slice(0, -1).forEach((i) => {
+      const v = +test.parameters[i].value;
+      if (!isNaN(v)) total += v;
+    });
+    setValue(
+      `tests.${tIdx}.parameters.${lastIdx}.value`,
+      round2(100 - total).toFixed(2),
+      { shouldValidate: false }
+    );
+  };
+
+  /* ───────── Submit ───────── */
+  const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
+    try {
+      for (const t of data.tests) {
+        const key = t.testName.toLowerCase().replace(/\s+/g, "_").replace(/[.#$[\]]/g, "");
+        const params = t.parameters
+          .map((p) => {
+            const subs = p.subparameters?.filter((sp) => sp.value !== "") ?? [];
+            if (p.value !== "" || subs.length) {
+              const obj: any = { ...p, subparameters: subs };
+              if (p.valueType === "number" && p.value !== "") obj.value = +p.value;
+              subs.forEach((sp) => {
+                if (sp.valueType === "number" && sp.value !== "") sp.value = +sp.value;
+              });
+              return obj;
             }
             return null;
           })
           .filter(Boolean) as TestParameterValue[];
 
-        // convert numeric strings to float
-        filteredParams.forEach((p) => {
-          if (p.valueType === "number" && p.value !== "") {
-            p.value = parseFloat(String(p.value));
-          }
-          p.subparameters?.forEach((sp) => {
-            if (sp.valueType === "number" && sp.value !== "") {
-              sp.value = parseFloat(String(sp.value));
-            }
-          });
-        });
-
-        const dbRefTest = ref(
-          database,
-          `patients/${formData.patientId}/bloodtest/${testKey}`
-        );
-        await set(dbRefTest, {
-          parameters: filteredParams,
-          subheadings: test.subheadings || [],
+        await set(ref(database, `patients/${data.patientId}/bloodtest/${key}`), {
+          parameters: params,
+          subheadings: t.subheadings || [],
           createdAt: new Date().toISOString(),
         });
       }
-      alert("Blood test values saved successfully!");
-      router.push(`/download-report?patientId=${formData.patientId}`);
-    } catch (error) {
-      console.error("Error saving blood test values:", error);
-      alert("Failed to save blood test values. Please try again.");
+
+      alert("Saved!");
+      router.push(`/download-report?patientId=${data.patientId}`);
+    } catch (e) {
+      console.error(e);
+      alert("Save failed.");
     }
   };
 
-  // ─────────────────────────────────────────────
-  // 5) Render
-  // ─────────────────────────────────────────────
-  if (!patientId) {
+  /* ───────── Render helpers ───────── */
+  if (!patientId)
     return (
-      <div className="p-4 flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center max-w-md p-8 bg-white rounded-xl shadow-lg">
-          <FiUser className="w-12 h-12 text-blue-600 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-gray-800 mb-2">
-            Patient Not Found
-          </h2>
-          <p className="text-gray-600 mb-4">
-            No patient ID provided. Please return to the dashboard.
-          </p>
-          <button
-            onClick={() => router.push("/")}
-            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            Back to Dashboard
-          </button>
-        </div>
-      </div>
+      <CenterCard icon={FiUser} title="Patient Not Found">
+        <button onClick={() => router.push("/")} className="btn-blue">
+          Back
+        </button>
+      </CenterCard>
     );
-  }
-
-  if (loading) {
+  if (loading)
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <FiLoader className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-          <p className="text-gray-700">Loading blood test details...</p>
-        </div>
-      </div>
+      <CenterCard icon={FiLoader} spin>
+        Loading…
+      </CenterCard>
     );
-  }
 
-  const tests = watch("tests"); // watch entire tests array
+  const tests = watch("tests");
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-2">
-      <div className="max-w-3xl w-full bg-white p-4 rounded-xl shadow-lg relative">
+      <div className="w-full max-w-3xl bg-white p-4 rounded-xl shadow relative">
+        {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 bg-blue-100 rounded-full">
             <FiDroplet className="w-6 h-6 text-blue-600" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-gray-800">
-              Blood Test Analysis
-            </h1>
-            <p className="text-gray-600 text-sm">Patient ID: {patientId}</p>
+            <h1 className="font-bold text-lg">Blood Test Analysis</h1>
+            <p className="text-sm text-gray-600">Patient ID: {patientId}</p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)}>
-          {tests.map((test, testIndex) => {
-            const subheadings = test.subheadings || [];
-            const subheadingParamNames = subheadings.reduce(
-              (acc: string[], sh) => acc.concat(sh.parameterNames),
-              []
-            );
-            let globalParams: IndexedParam[] = [];
-            if (subheadings.length > 0) {
-              globalParams = test.parameters
-                .map((p, idx) => ({ ...p, originalIndex: idx }))
-                .filter((item) => !subheadingParamNames.includes(item.name));
+          {tests.map((test, tIdx) => {
+            if (test.testType?.toLowerCase() === "outsource") {
+              return (
+                <div
+                  key={test.testId}
+                  className="border-l-4 border-yellow-400 bg-yellow-50 mb-4 p-3 rounded"
+                >
+                  <div className="flex items-center gap-2">
+                    <FiDroplet className="w-4 h-4 text-yellow-600" />
+                    <h3 className="font-semibold">{test.testName}</h3>
+                  </div>
+                  <p className="mt-2 text-sm text-yellow-800">
+                    This is an outsourced test. No data entry is required.
+                  </p>
+                </div>
+              );
             }
+
+            const sh = test.subheadings || [];
+            const shNames = sh.flatMap((x) => x.parameterNames);
+            const globals = test.parameters
+              .map((p, i) => ({ ...p, originalIndex: i }))
+              .filter((p) => !shNames.includes(p.name));
+
             return (
               <div
                 key={test.testId}
-                className="border-l-4 border-blue-600 bg-gray-50 mb-4 p-3 rounded relative"
+                className="border-l-4 border-blue-600 bg-gray-50 mb-4 p-3 rounded"
               >
-                {/* Test Title */}
                 <div className="flex items-center gap-2 mb-2">
                   <FiDroplet className="w-4 h-4 text-blue-600" />
-                  <h3 className="text-base font-semibold text-gray-800">
-                    {test.testName}
-                  </h3>
+                  <h3 className="font-semibold">{test.testName}</h3>
                 </div>
 
-                {/* (A) Global parameters if subheadings */}
-                {subheadings.length > 0 && globalParams.length > 0 && (
-                  <div className="mb-2">
-                    <h4 className="text-sm font-bold mb-1">
-                      Global Parameters
-                    </h4>
-                    {globalParams.map((param) => (
-                      <div key={param.originalIndex} className="pl-2 mb-1">
-                        <div className="flex items-center text-sm border rounded px-2 py-1 relative">
-                          <div className="flex-1 flex items-center">
-                            <span className="font-medium text-gray-700">
-                              {param.name}
-                              {param.unit && (
-                                <span className="ml-1 text-xs text-gray-500">
-                                  ({param.unit})
-                                </span>
-                              )}
-                            </span>
-                            {param.formula && param.valueType === "number" && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleCalculateFormula(
-                                    testIndex,
-                                    param.originalIndex
-                                  )
-                                }
-                                className="ml-2 text-blue-600 hover:text-blue-800"
-                                title="Calculate Formula"
-                              >
-                                <FaCalculator className="w-3 h-3" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Input */}
-                          {param.valueType === "number" ? (
-                            <div className="mx-2 w-28 relative">
-                              <input
-                                type="text"
-                                className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                placeholder="Value"
-                                value={String(
-                                  tests[testIndex].parameters[param.originalIndex]
-                                    .value ?? ""
-                                )}
-                                onChange={(e) =>
-                                  handleNumericInputChange(
-                                    e,
-                                    testIndex,
-                                    param.originalIndex
-                                  )
-                                }
-                              />
-                              {errors.tests?.[testIndex]?.parameters?.[
-                                param.originalIndex
-                              ]?.value && (
-                                <FiAlertCircle className="absolute right-1 top-1.5 w-4 h-4 text-red-500" />
-                              )}
-                            </div>
-                          ) : (
-                            <div className="mx-2 w-28 relative">
-                              <input
-                                type="text"
-                                className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                placeholder="Value"
-                                value={String(
-                                  tests[testIndex].parameters[param.originalIndex]
-                                    .value ?? ""
-                                )}
-                                onChange={(e) =>
-                                  setValue(
-                                    `tests.${testIndex}.parameters.${param.originalIndex}.value` as Path<
-                                      BloodValuesFormInputs
-                                    >,
-                                    e.target.value
-                                  )
-                                }
-                              />
-                              {errors.tests?.[testIndex]?.parameters?.[
-                                param.originalIndex
-                              ]?.value && (
-                                <FiAlertCircle className="absolute right-1 top-1.5 w-4 h-4 text-red-500" />
-                              )}
-                            </div>
-                          )}
-
-                          <div className="flex-1 text-right text-gray-600">
-                            Normal Range:{" "}
-                            <span className="font-medium text-green-600">
-                              {param.range}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* subparams */}
-                        {param.subparameters?.length && (
-                          <div className="ml-2 mt-1">
-                            {param.subparameters.map((sp, spIndex) => (
-                              <div key={spIndex} className="mb-1 relative">
-                                <div className="flex items-center text-sm border rounded px-2 py-1">
-                                  <div className="flex-1">
-                                    <span className="font-medium text-gray-700">
-                                      {sp.name}
-                                      {sp.unit && (
-                                        <span className="ml-1 text-xs text-gray-500">
-                                          ({sp.unit})
-                                        </span>
-                                      )}
-                                    </span>
-                                  </div>
-                                  {sp.valueType === "number" ? (
-                                    <div className="mx-2 w-28 relative">
-                                      <input
-                                        type="text"
-                                        className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                        placeholder="Value"
-                                        value={String(
-                                          tests[testIndex].parameters[
-                                            param.originalIndex
-                                          ].subparameters?.[spIndex].value ?? ""
-                                        )}
-                                        onChange={(e) =>
-                                          handleNumericInputChange(
-                                            e,
-                                            testIndex,
-                                            param.originalIndex,
-                                            spIndex
-                                          )
-                                        }
-                                      />
-                                    </div>
-                                  ) : (
-                                    <div className="mx-2 w-28 relative">
-                                      <input
-                                        type="text"
-                                        className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                        placeholder="Value"
-                                        value={String(
-                                          tests[testIndex].parameters[
-                                            param.originalIndex
-                                          ].subparameters?.[spIndex].value ?? ""
-                                        )}
-                                        onChange={(e) =>
-                                          setValue(
-                                            `tests.${testIndex}.parameters.${param.originalIndex}.subparameters.${spIndex}.value` as Path<
-                                              BloodValuesFormInputs
-                                            >,
-                                            e.target.value
-                                          )
-                                        }
-                                      />
-                                    </div>
-                                  )}
-                                  <div className="flex-1 text-right text-gray-600">
-                                    Normal Range:{" "}
-                                    <span className="font-medium text-green-600">
-                                      {sp.range}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                {/* Globals */}
+                {sh.length > 0 && globals.length > 0 && (
+                  <>
+                    <h4 className="font-bold text-sm mb-1">Global Parameters</h4>
+                    {globals.map((p) => (
+                      <ParamRow
+                        key={p.originalIndex}
+                        tIdx={tIdx}
+                        pIdx={p.originalIndex}
+                        param={p}
+                        tests={tests}
+                        errors={errors}
+                        numericChange={numericChange}
+                        textChange={textChange}
+                        pickSug={pickSug}
+                        calcOne={calcFormulaOnce}
+                        setSuggest={setSuggest}
+                        setShowSug={setShowSug}
+                      />
                     ))}
-                  </div>
+                  </>
                 )}
 
-                {/* (B) If subheadings exist, show them, else show all in one list */}
-                {subheadings.length > 0 ? (
-                  <>
-                    {subheadings.map((subheading, subIndex) => {
-                      const paramsForSub: IndexedParam[] = test.parameters
-                        .map((p, pIdx) => ({ ...p, originalIndex: pIdx }))
-                        .filter((item) =>
-                          subheading.parameterNames.includes(item.name)
-                        );
+                {/* Sub‑headings */}
+                {sh.length ? (
+                  sh.map((s, shIdx) => {
+                    const tag = `${tIdx}-${shIdx}`;
+                    const list = test.parameters
+                      .map((p, i) => ({ ...p, originalIndex: i }))
+                      .filter((p) => s.parameterNames.includes(p.name));
+                    const need100 = s.is100 === true || s.is100 === "true";
+                    const last = list[list.length - 1];
 
-                      return (
-                        <div key={subIndex} className="mb-2">
-                          <h4 className="text-sm font-bold mb-1">
-                            {subheading.title}
-                          </h4>
-
-                          {paramsForSub.length > 0 ? (
-                            <>
-                              {paramsForSub.map((item) => (
-                                <div
-                                  key={item.originalIndex}
-                                  className="pl-2 mb-1"
-                                >
-                                  {/* main param row */}
-                                  <div className="flex items-center text-sm border rounded px-2 py-1 relative">
-                                    <div className="flex-1 flex items-center">
-                                      <span className="font-medium text-gray-700">
-                                        {item.name}
-                                        {item.unit && (
-                                          <span className="ml-1 text-xs text-gray-500">
-                                            ({item.unit})
-                                          </span>
-                                        )}
-                                      </span>
-                                      {item.formula &&
-                                        item.valueType === "number" && (
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              handleCalculateFormula(
-                                                testIndex,
-                                                item.originalIndex
-                                              )
-                                            }
-                                            className="ml-2 text-blue-600 hover:text-blue-800"
-                                            title="Calculate Formula"
-                                          >
-                                            <FaCalculator className="w-3 h-3" />
-                                          </button>
-                                        )}
-                                    </div>
-
-                                    {/* Input */}
-                                    {item.valueType === "number" ? (
-                                      <div className="mx-2 w-28 relative">
-                                        <input
-                                          type="text"
-                                          className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                          placeholder="Value"
-                                          value={String(
-                                            tests[testIndex].parameters[
-                                              item.originalIndex
-                                            ].value ?? ""
-                                          )}
-                                          onChange={(e) =>
-                                            handleNumericInputChange(
-                                              e,
-                                              testIndex,
-                                              item.originalIndex
-                                            )
-                                          }
-                                        />
-                                      </div>
-                                    ) : (
-                                      <div className="mx-2 w-28 relative">
-                                        <input
-                                          type="text"
-                                          className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                          placeholder="Value"
-                                          value={String(
-                                            tests[testIndex].parameters[
-                                              item.originalIndex
-                                            ].value ?? ""
-                                          )}
-                                          onChange={(e) =>
-                                            setValue(
-                                              `tests.${testIndex}.parameters.${item.originalIndex}.value` as Path<
-                                                BloodValuesFormInputs
-                                              >,
-                                              e.target.value
-                                            )
-                                          }
-                                        />
-                                      </div>
-                                    )}
-                                    <div className="flex-1 text-right text-gray-600">
-                                      Normal Range:{" "}
-                                      <span className="font-medium text-green-600">
-                                        {item.range}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  {/* subparams */}
-                                  {item.subparameters?.length && (
-                                    <div className="ml-2 mt-1">
-                                      {item.subparameters.map((sp, spIndex) => (
-                                        <div
-                                          key={spIndex}
-                                          className="mb-1 relative"
-                                        >
-                                          <div className="flex items-center text-sm border rounded px-2 py-1">
-                                            <div className="flex-1">
-                                              <span className="font-medium text-gray-700">
-                                                {sp.name}
-                                                {sp.unit && (
-                                                  <span className="ml-1 text-xs text-gray-500">
-                                                    ({sp.unit})
-                                                  </span>
-                                                )}
-                                              </span>
-                                            </div>
-                                            {sp.valueType === "number" ? (
-                                              <div className="mx-2 w-28 relative">
-                                                <input
-                                                  type="text"
-                                                  className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                                  placeholder="Value"
-                                                  value={String(
-                                                    tests[testIndex].parameters[
-                                                      item.originalIndex
-                                                    ].subparameters?.[spIndex]
-                                                      .value ?? ""
-                                                  )}
-                                                  onChange={(e) =>
-                                                    handleNumericInputChange(
-                                                      e,
-                                                      testIndex,
-                                                      item.originalIndex,
-                                                      spIndex
-                                                    )
-                                                  }
-                                                />
-                                              </div>
-                                            ) : (
-                                              <div className="mx-2 w-28 relative">
-                                                <input
-                                                  type="text"
-                                                  className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                                  placeholder="Value"
-                                                  value={String(
-                                                    tests[testIndex].parameters[
-                                                      item.originalIndex
-                                                    ].subparameters?.[spIndex]
-                                                      .value ?? ""
-                                                  )}
-                                                  onChange={(e) =>
-                                                    setValue(
-                                                      `tests.${testIndex}.parameters.${item.originalIndex}.subparameters.${spIndex}.value` as Path<
-                                                        BloodValuesFormInputs
-                                                      >,
-                                                      e.target.value
-                                                    )
-                                                  }
-                                                />
-                                              </div>
-                                            )}
-                                            <div className="flex-1 text-right text-gray-600">
-                                              Normal Range:{" "}
-                                              <span className="font-medium text-green-600">
-                                                {sp.range}
-                                              </span>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </>
-                          ) : (
-                            <div className="bg-yellow-50 p-2 rounded flex items-center gap-2 text-yellow-700 text-sm">
-                              <FiAlertCircle className="w-4 h-4" />
-                              <span>
-                                No parameters found under this subheading.
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </>
-                ) : (
-                  // No subheadings => single list
-                  <>
-                    {test.parameters.map((param, paramIndex) => (
-                      <div key={paramIndex} className="pl-2 mb-1">
-                        <div className="flex items-center text-sm border rounded px-2 py-1 relative">
-                          <div className="flex-1 flex items-center">
-                            <span className="font-medium text-gray-700">
-                              {param.name}
-                              {param.unit && (
-                                <span className="ml-1 text-xs text-gray-500">
-                                  ({param.unit})
-                                </span>
-                              )}
+                    return (
+                      <div key={shIdx} className="mt-3">
+                        <h4
+                          className={`font-bold text-sm mb-1 ${
+                            warn100[tag] ? "text-red-600" : ""
+                          }`}
+                        >
+                          {s.title}
+                          {need100 && (
+                            <span className="text-xs text-gray-500 ml-2">
+                              (must total 100%)
                             </span>
-                            {param.formula && param.valueType === "number" && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleCalculateFormula(testIndex, paramIndex)
-                                }
-                                className="ml-2 text-blue-600 hover:text-blue-800"
-                                title="Calculate Formula"
-                              >
-                                <FaCalculator className="w-3 h-3" />
-                              </button>
-                            )}
-                          </div>
-                          {param.valueType === "number" ? (
-                            <div className="mx-2 w-28 relative">
-                              <input
-                                type="text"
-                                className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                placeholder="Value"
-                                value={String(
-                                  tests[testIndex].parameters[paramIndex].value ??
-                                    ""
-                                )}
-                                onChange={(e) =>
-                                  handleNumericInputChange(
-                                    e,
-                                    testIndex,
-                                    paramIndex
-                                  )
-                                }
-                              />
-                            </div>
-                          ) : (
-                            <div className="mx-2 w-28 relative">
-                              <input
-                                type="text"
-                                className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                placeholder="Value"
-                                value={String(
-                                  tests[testIndex].parameters[paramIndex].value ??
-                                    ""
-                                )}
-                                onChange={(e) =>
-                                  setValue(
-                                    `tests.${testIndex}.parameters.${paramIndex}.value` as Path<
-                                      BloodValuesFormInputs
-                                    >,
-                                    e.target.value
-                                  )
-                                }
-                              />
-                            </div>
                           )}
-                          <div className="flex-1 text-right text-gray-600">
-                            Normal Range:{" "}
-                            <span className="font-medium text-green-600">
-                              {param.range}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Subparams */}
-                        {param.subparameters?.length && (
-                          <div className="ml-2 mt-1">
-                            {param.subparameters.map((sp, spIndex) => (
-                              <div key={spIndex} className="mb-1 relative">
-                                <div className="flex items-center text-sm border rounded px-2 py-1">
-                                  <div className="flex-1">
-                                    <span className="font-medium text-gray-700">
-                                      {sp.name}
-                                      {sp.unit && (
-                                        <span className="ml-1 text-xs text-gray-500">
-                                          ({sp.unit})
-                                        </span>
-                                      )}
-                                    </span>
-                                  </div>
-                                  {sp.valueType === "number" ? (
-                                    <div className="mx-2 w-28 relative">
-                                      <input
-                                        type="text"
-                                        className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                        placeholder="Value"
-                                        value={String(
-                                          tests[testIndex].parameters[paramIndex]
-                                            .subparameters?.[spIndex].value ?? ""
-                                        )}
-                                        onChange={(e) =>
-                                          handleNumericInputChange(
-                                            e,
-                                            testIndex,
-                                            paramIndex,
-                                            spIndex
-                                          )
-                                        }
-                                      />
-                                    </div>
-                                  ) : (
-                                    <div className="mx-2 w-28 relative">
-                                      <input
-                                        type="text"
-                                        className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200"
-                                        placeholder="Value"
-                                        value={String(
-                                          tests[testIndex].parameters[paramIndex]
-                                            .subparameters?.[spIndex].value ?? ""
-                                        )}
-                                        onChange={(e) =>
-                                          setValue(
-                                            `tests.${testIndex}.parameters.${paramIndex}.subparameters.${spIndex}.value` as Path<
-                                              BloodValuesFormInputs
-                                            >,
-                                            e.target.value
-                                          )
-                                        }
-                                      />
-                                    </div>
-                                  )}
-                                  <div className="flex-1 text-right text-gray-600">
-                                    Normal Range:{" "}
-                                    <span className="font-medium text-green-600">
-                                      {sp.range}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        </h4>
+                        {list.map((p) => {
+                          const isLast = need100 && p.originalIndex === last.originalIndex;
+                          return (
+                            <ParamRow
+                              key={p.originalIndex}
+                              tIdx={tIdx}
+                              pIdx={p.originalIndex}
+                              param={{ ...p, originalIndex: p.originalIndex }}
+                              tests={tests}
+                              errors={errors}
+                              pickSug={pickSug}
+                              numericChange={numericChange}
+                              textChange={textChange}
+                              calcOne={calcFormulaOnce}
+                              isLastOf100={isLast}
+                              fillRemaining={() => fillRemaining(tIdx, s, p.originalIndex)}
+                              setSuggest={setSuggest}
+                              setShowSug={setShowSug}
+                            />
+                          );
+                        })}
                       </div>
-                    ))}
-                  </>
+                    );
+                  })
+                ) : (
+                  test.parameters.map((p, pIdx) => (
+                    <ParamRow
+                      key={pIdx}
+                      tIdx={tIdx}
+                      pIdx={pIdx}
+                      param={{ ...p, originalIndex: pIdx }}
+                      tests={tests}
+                      errors={errors}
+                      numericChange={numericChange}
+                      textChange={textChange}
+                      calcOne={calcFormulaOnce}
+                      setSuggest={setSuggest}
+                      setShowSug={setShowSug}
+                      pickSug={pickSug}
+                    />
+                  ))
                 )}
               </div>
             );
           })}
 
-          {/* Submit Button */}
-          <div className="border-t mt-4 pt-3">
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full bg-blue-600 text-white py-2 rounded font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
-            >
+          <div className="border-t pt-3 mt-4">
+            <button disabled={isSubmitting} className="btn-blue w-full flex gap-2 justify-center">
               {isSubmitting ? (
                 <>
                   <FiLoader className="animate-spin w-5 h-5" />
-                  Saving...
+                  Saving…
                 </>
               ) : (
                 <>
                   <FiCheckCircle className="w-5 h-5" />
-                  Save Blood Test Report
+                  Save
                 </>
               )}
             </button>
           </div>
         </form>
 
-        {/* Suggestions dropdown */}
-        {showSuggest && suggestions.length > 0 && (
-          <div
-            className="absolute top-20 left-1/2 transform -translate-x-1/2 bg-white border rounded shadow-lg p-2 z-50 max-h-40 overflow-auto"
-            style={{ width: "300px" }}
-          >
-            {suggestions.map((sg, i) => (
-              <div
-                key={i}
-                className="p-1 hover:bg-gray-100 cursor-pointer"
-                onClick={() =>
-                  handlePickSuggestion(
-                    sg,
-                    showSuggest.testIndex,
-                    showSuggest.paramIndex,
-                    showSuggest.subIndex
-                  )
-                }
-              >
-                {sg}
-              </div>
-            ))}
-          </div>
-        )}
+        {/* dropdown */}
+        {showSug && suggest.length > 0 && (
+  <div
+    className="fixed z-50 bg-white border rounded shadow max-h-40 overflow-auto py-1"
+    style={{
+      top: "50%",
+      left: "50%",
+      transform: "translate(-50%, -50%)",
+      width: `${showSug.width}px`,
+      maxWidth: "90vw",       // never wider than 90% of viewport
+      maxHeight: "80vh",      // never taller than 80% of viewport
+    }}
+  >
+    {suggest.map((s, i) => (
+      <div
+        key={i}
+        className="px-2 py-1 hover:bg-gray-100 cursor-pointer text-sm"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          pickSug(s, showSug.t, showSug.p);
+        }}
+      >
+        {s}
+      </div>
+    ))}
+  </div>
+)}
+
       </div>
     </div>
   );
 };
 
+/* ---------- sub‑row component ---------- */
+interface RowProps {
+  tIdx: number;
+  pIdx: number;
+  param: IndexedParam;
+  tests: TestValueEntry[];
+  errors: any;
+  numericChange: (v: string, t: number, p: number, sp?: number) => void;
+  textChange: (txt: string, t: number, p: number, rect: DOMRect) => void;
+  calcOne: (t: number, p: number) => void;
+  isLastOf100?: boolean;
+  fillRemaining?: () => void;
+  setSuggest: (s: string[]) => void;
+  setShowSug: (p: SuggestPos | null) => void;
+  pickSug: (val: string, t: number, p: number) => void;
+}
+const ParamRow: React.FC<RowProps> = ({
+  tIdx,
+  pIdx,
+  param,
+  tests,
+  errors,
+  numericChange,
+  textChange,
+  calcOne,
+  isLastOf100,
+  fillRemaining,
+  setSuggest,
+  setShowSug,
+  pickSug,
+}) => {
+  const common = { className: "input", placeholder: param.valueType === "number" ? "Value" : "Text" };
+
+  const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+    const rect = e.target.getBoundingClientRect();
+    textChange(e.target.value, tIdx, pIdx, rect);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rect = e.target.getBoundingClientRect();
+    textChange(e.target.value, tIdx, pIdx, rect);
+  };
+
+  const handleBlur = () => {
+    /* hide dropdown AFTER click selection (50 ms delay) */
+    setTimeout(() => {
+      setSuggest([]);
+      setShowSug(null);
+    }, 50);
+  };
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const form = e.currentTarget.form;
+      if (!form) return;
+      // collect only the INPUTs in document order
+      const inputs = Array.from(form.elements)
+        .filter((el): el is HTMLInputElement => el.tagName === 'INPUT');
+      const idx = inputs.indexOf(e.currentTarget);
+      const next = inputs[idx + 1];
+      if (next) next.focus();
+    }
+  };
+  return (
+    <div className="pl-2 mb-1">
+      <div className="flex items-center text-sm border rounded px-2 py-1">
+        <div className="flex-1 flex items-center">
+          <span className="font-medium text-gray-700">
+            {param.name}
+            {param.unit && (
+              <span className="ml-1 text-xs text-gray-500">({param.unit})</span>
+            )}
+          </span>
+          {param.formula && param.valueType === "number" && (
+            <button
+              type="button"
+              onClick={() => calcOne(tIdx, pIdx)}
+              className="ml-2 text-blue-600 hover:text-blue-800"
+            >
+              <FaCalculator className="w-3 h-3" />
+            </button>
+          )}
+          {isLastOf100 && (
+            <button
+              type="button"
+              onClick={fillRemaining}
+              className="ml-2 text-green-600 hover:text-green-800 text-xs border border-green-600 px-1 rounded"
+            >
+              Calculate
+            </button>
+          )}
+        </div>
+
+        {param.valueType === "number" ? (
+          <div className="mx-2 w-28 relative">
+            <input
+              {...common}
+              onKeyDown={handleKeyDown}    
+              type="text"
+              value={String(tests[tIdx].parameters[pIdx].value ?? "")}
+              onChange={(e) => numericChange(e.target.value, tIdx, pIdx)}
+            />
+            {errors.tests?.[tIdx]?.parameters?.[pIdx]?.value && (
+              <FiAlertCircle className="absolute right-1 top-1.5 w-4 h-4 text-red-500" />
+            )}
+          </div>
+        ) : (
+          <div className="mx-2 w-32">
+            <input
+              {...common}
+              type="text"
+              value={String(tests[tIdx].parameters[pIdx].value ?? "")}
+              onFocus={handleFocus}
+              onChange={handleChange}
+              onBlur={handleBlur}
+            />
+          </div>
+        )}
+
+        <div className="flex-1 text-right text-gray-600">
+          Normal Range: <span className="font-medium text-green-600">{param.range}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ---------- CenterCard helper ---------- */
+const CenterCard: React.FC<{
+  icon: any;
+  title?: string;
+  spin?: boolean;
+  children: React.ReactNode;
+}> = ({ icon: Icon, title, spin, children }) => (
+  <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+    <div className="bg-white p-8 rounded-xl shadow text-center max-w-md">
+      <Icon className={`w-12 h-12 text-blue-600 mx-auto mb-4 ${spin ? "animate-spin" : ""}`} />
+      {title && <h2 className="font-bold text-xl mb-2">{title}</h2>}
+      {children}
+    </div>
+  </div>
+);
+
+/* ---------- tiny Tailwind helpers ---------- */
+const input = "w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200";
+const btn = "px-6 py-2 rounded-lg font-medium transition-colors focus:outline-none";
+/* in globals.css:
+.input   { @apply w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200; }
+.btn-blue{ @apply bg-blue-600 text-white hover:bg-blue-700; }
+*/
 export default BloodValuesForm;

@@ -37,12 +37,17 @@ export interface Parameter {
   name: string;
   unit: string;
   valueType: "text" | "number";      // accepted value type
-  formula?: string;                  // <‑‑ NEW
+  formula?: string;  
+                  // <‑‑ NEW
   iscomment?: boolean;               // <‑‑ NEW  (true if this row is just a comment)
   range: {
     male: AgeRangeItem[];
     female: AgeRangeItem[];
   };
+  suggestions?: {                    // <-- NEW!
+    description: string;
+    shortName: string;
+  }[];
 }
 
 export interface Subheading {
@@ -101,6 +106,12 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
     control,
     name: `parameters.${index}.range.female`,
   });
+    // ——— NEW: manage hints/suggestions for each parameter ———
+    const suggestionsArray = useFieldArray({
+      control,
+      name: `parameters.${index}.suggestions`,
+    });
+  
 
   const paramNameErr = getFieldErrorMessage(errors, [
     "parameters",
@@ -189,6 +200,52 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
           This row is a comment (store <code>iscomment: true</code>)
         </label>
       </div>
+
+
+
+{/* ——— Hints / Suggestions ——— */}
+<div className="mt-4">
+  <h4 className="text-xs font-medium">Hints / Suggestions</h4>
+
+  {suggestionsArray.fields.map((field, sIndex) => (
+    <div key={field.id} className="flex items-center space-x-2 mt-1">
+      <input
+        type="text"
+        placeholder="Description"
+        {...register(
+          `parameters.${index}.suggestions.${sIndex}.description`,
+          { required: "Required" }
+        )}
+        className="w-1/2 border rounded px-2 py-1"
+      />
+      <input
+        type="text"
+        placeholder="Short Name"
+        {...register(
+          `parameters.${index}.suggestions.${sIndex}.shortName`,
+          { required: "Required" }
+        )}
+        className="w-1/2 border rounded px-2 py-1"
+      />
+      <button
+        type="button"
+        onClick={() => suggestionsArray.remove(sIndex)}
+        className="text-red-500 hover:text-red-700"
+      >
+        <FaTrash />
+      </button>
+    </div>
+  ))}
+
+  <button
+    type="button"
+    onClick={() => suggestionsArray.append({ description: "", shortName: "" })}
+    className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+  >
+    <FaPlus className="mr-1" /> Add Hint
+  </button>
+</div>
+
 
       {/* Male Ranges */}
       <div className="mt-4">
@@ -473,6 +530,7 @@ const TestModal: React.FC<TestModalProps> = ({
                 valueType: "text",
                 formula: "",
                 iscomment: false,
+                suggestions: [], 
                 range: {
                   male: [{ rangeKey: "", rangeValue: "" }],
                   female: [{ rangeKey: "", rangeValue: "" }],
