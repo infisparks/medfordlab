@@ -661,7 +661,7 @@ const ParamRow: React.FC<RowProps> = ({
   fillRemaining,
   setSuggest,
   setShowSug,
-  pickSug,
+ 
 }) => {
   const common = { className: "input", placeholder: param.valueType === "number" ? "Value" : "Text" };
 
@@ -776,8 +776,8 @@ const CenterCard: React.FC<{
 );
 
 /* ---------- tiny Tailwind helpers ---------- */
-const input = "w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200";
-const btn = "px-6 py-2 rounded-lg font-medium transition-colors focus:outline-none";
+// const input = "w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200";
+// const btn = "px-6 py-2 rounded-lg font-medium transition-colors focus:outline-none";
 /* in globals.css:
 .input   { @apply w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200; }
 .btn-blue{ @apply bg-blue-600 text-white hover:bg-blue-700; }

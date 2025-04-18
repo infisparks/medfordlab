@@ -1,7 +1,7 @@
 // app/layout.tsx (Server Component)
 import "@/app/globals.css";
 import Sidebar from "@/components/Sidebar";
-import AuthProvider from "@/components/AuthProvider"; // path may differ
+import AuthProvider from "@/components/AuthProvider";
 
 export const metadata = {
   title: "My Next.js App",
@@ -15,10 +15,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head />    {/* ← required for Metadata API to populate <head> */}
       <body>
         <Sidebar open={true} />
         <main className="ml-64 p-4">
-          {/* AuthProvider is a Client Component, so it can wrap the children */}
           <AuthProvider>{children}</AuthProvider>
         </main>
       </body>

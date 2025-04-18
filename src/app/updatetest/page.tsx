@@ -629,7 +629,7 @@ const TestModal: React.FC<TestModalProps> = ({
       reset(JSON.parse(jsonContent));
       setIsJsonEditor(false);
     } catch (e) {
-      alert("Invalid JSON – can’t switch.");
+      alert("Invalid JSON – can’t switch." + e);
     }
   };
 

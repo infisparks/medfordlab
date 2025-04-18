@@ -168,7 +168,7 @@ const PatientEntryPage: React.FC = () => {
     })();
   }, []);
 
-  /* 7) Fetch EXISTING patients from OUR database for suggestions */
+  /* 7) Fetch EXISTING patients for suggestions */
   useEffect(() => {
     (async () => {
       try {
@@ -255,8 +255,10 @@ const PatientEntryPage: React.FC = () => {
       }
 
       const userEmail = currentUser?.email || "Unknown User";
-      let patientId =
-        data.patientId?.trim() !== "" ? data.patientId!.trim() : generateUHID();
+      const patientId =                       // FIX prefer-const
+        data.patientId?.trim() !== ""
+          ? data.patientId!.trim()
+          : generateUHID();
       data.patientId = patientId;
 
       /* total days for age */
