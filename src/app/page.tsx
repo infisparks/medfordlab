@@ -13,18 +13,15 @@ import {
   ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 
-// Import jsPDF and AutoTable
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
-// -----------------------------
-// Types
-// -----------------------------
+/* --------------------  Types  -------------------- */
 interface BloodTest {
   testId: string;
   testName: string;
   price: number;
-  testType?: string; // optional
+  testType?: string;
 }
 
 interface Patient {
@@ -34,7 +31,7 @@ interface Patient {
   gender: string;
   contact?: string;
   createdAt: string;
-  discountPercentage: number;
+  discountAmount: number;                              // ₹ flat discount
   amountPaid: number;
   bloodTests?: BloodTest[];
   bloodtest?: Record<string, any>;
@@ -43,319 +40,169 @@ interface Patient {
   paymentHistory?: { amount: number; paymentMode: string; time: string }[];
 }
 
-// -----------------------------
-// Helper: Convert test name -> slug used in 'bloodtest'
-// -----------------------------
-function slugifyTestName(testName: string) {
-  // e.g. "Complete Blood Count (CBC)" -> "complete_blood_count_(cbc)"
-  return testName
+/* utilities */
+const slugifyTestName = (name: string) =>
+  name
     .toLowerCase()
-    .replace(/\s+/g, "_") // convert spaces to underscores
-    .replace(/[^\w()]/g, "_") // replace punctuation with underscore
-    .replace(/_+/g, "_"); // condense consecutive underscores
-}
+    .replace(/\s+/g, "_")
+    .replace(/[^\w()]/g, "_")
+    .replace(/_+/g, "_");
 
-// -----------------------------
-// Helper: Check if a single test is fully filled
-// -----------------------------
-function isTestFullyEntered(patient: Patient, test: BloodTest): boolean {
-  if (!patient.bloodtest) return false;
-  const slug = slugifyTestName(test.testName);
-  const testData = patient.bloodtest[slug];
-  if (!testData || !testData.parameters) {
-    return false; // test data missing
-  }
-  // If any parameter is missing a value, consider the test incomplete
-  for (const param of testData.parameters) {
-    if (param.value === null || param.value === undefined || param.value === "") {
-      return false;
-    }
-  }
-  return true;
-}
+const isTestFullyEntered = (p: Patient, t: BloodTest): boolean => {
+  if (!p.bloodtest) return false;
+  const data = p.bloodtest[slugifyTestName(t.testName)];
+  if (!data?.parameters) return false;
+  return data.parameters.every((par: any) => par.value !== "" && par.value !== null && par.value !== undefined);
+};
 
-// -----------------------------
-// Helper: Check if all tests are fully filled
-// -----------------------------
-function isAllTestsComplete(patient: Patient): boolean {
-  if (!patient.bloodTests || patient.bloodTests.length === 0) {
-    // If no tests are booked, consider it "complete."
-    return true;
-  }
-  return patient.bloodTests.every((test) => isTestFullyEntered(patient, test));
-}
+const isAllTestsComplete = (p: Patient) =>
+  !p.bloodTests?.length || p.bloodTests.every(bt => isTestFullyEntered(p, bt));
 
-// -----------------------------
-// Helper: Calculate amounts
-// -----------------------------
-function calculateAmounts(patient: Patient) {
-  const testTotal =
-    patient.bloodTests?.reduce((acc, bt) => acc + bt.price, 0) || 0;
-  const discountValue = testTotal * (patient.discountPercentage / 100);
-  const remaining = testTotal - discountValue - patient.amountPaid;
-  return { testTotal, discountValue, remaining };
-}
+const calculateAmounts = (p: Patient) => {
+  const testTotal = p.bloodTests?.reduce((s, t) => s + t.price, 0) || 0;
+  const remaining = testTotal - Number(p.discountAmount || 0) - Number(p.amountPaid || 0);
+  return { testTotal, remaining };
+};
 
+/* --------------------  Component  -------------------- */
 export default function Dashboard() {
+  /* state */
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [metrics, setMetrics] = useState({
-    totalTests: 0,
-    pendingReports: 0,
-    completedTests: 0,
-  });
+  const [metrics, setMetrics]   = useState({ totalTests: 0, pendingReports: 0, completedTests: 0 });
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [newAmountPaid, setNewAmountPaid] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<string>("online");
-  const [searchTerm, setSearchTerm] = useState<string>("");
-  const [selectedDate, setSelectedDate] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [newAmountPaid, setNewAmountPaid]     = useState<number>(0);
+  const [paymentMode, setPaymentMode]         = useState<string>("online");
+  const [searchTerm, setSearchTerm]           = useState<string>("");
+  const [selectedDate, setSelectedDate]       = useState<string>("");
+  const [statusFilter, setStatusFilter]       = useState<string>("all");
   const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
 
-  // -----------------------------
-  // Determine rank for sorting:
-  //   1 = Not Collected,
-  //   2 = Collected but incomplete,
-  //   3 = Completed
-  // -----------------------------
-  function getRank(patient: Patient): number {
-    if (!patient.sampleCollectedAt) {
-      return 1;
-    }
-    return isAllTestsComplete(patient) ? 3 : 2;
-  }
+  /* rank for sort */
+  const getRank = (p: Patient) => !p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2;
 
-  // -----------------------------
-  // Fetch patients from Firebase
-  // -----------------------------
+  /* fetch patients */
   useEffect(() => {
-    const patientsRef = ref(database, "patients");
-    const unsubscribe = onValue(patientsRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        const patientList: Patient[] = Object.keys(data).map((key) => ({
-          id: key,
-          ...data[key],
-          age: Number(data[key].age),
-        }));
+    const unsub = onValue(ref(database, "patients"), snap => {
+      if (!snap.exists()) return;
+      const arr: Patient[] = Object.entries<any>(snap.val()).map(([id, d]) => ({
+        id,
+        ...d,
+        discountAmount: Number(d.discountAmount || 0),
+        age: Number(d.age),
+      }));
+      arr.sort((a, b) => {
+        const r = getRank(a) - getRank(b);
+        return r !== 0 ? r : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+      setPatients(arr);
 
-        const sorted = patientList.sort((a, b) => {
-          const rankA = getRank(a);
-          const rankB = getRank(b);
-          if (rankA !== rankB) {
-            return rankA - rankB;
-          }
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-        });
-
-        setPatients(sorted);
-
-        const total = patientList.length;
-        let completedCount = 0;
-        for (const p of patientList) {
-          if (isAllTestsComplete(p) && p.sampleCollectedAt) {
-            completedCount++;
-          }
-        }
-        setMetrics({
-          totalTests: total,
-          pendingReports: total - completedCount,
-          completedTests: completedCount,
-        });
-      }
+      /* metrics */
+      const total = arr.length;
+      const completed = arr.filter(p => p.sampleCollectedAt && isAllTestsComplete(p)).length;
+      setMetrics({ totalTests: total, completedTests: completed, pendingReports: total - completed });
     });
-    return () => unsubscribe();
+    return unsub;
   }, []);
 
-  // -----------------------------
-  // Filter logic
-  // -----------------------------
+  /* filters */
   const filteredPatients = useMemo(() => {
-    return patients.filter((p) => {
+    return patients.filter(p => {
       const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesDate = selectedDate ? p.createdAt.startsWith(selectedDate) : true;
-
+      const matchesDate   = selectedDate ? p.createdAt.startsWith(selectedDate) : true;
       const sampleCollected = !!p.sampleCollectedAt;
-      const allComplete = isAllTestsComplete(p);
+      const complete = isAllTestsComplete(p);
       let matchesStatus = true;
       switch (statusFilter) {
-        case "notCollected":
-          matchesStatus = !sampleCollected;
-          break;
-        case "sampleCollected":
-          matchesStatus = sampleCollected && !allComplete;
-          break;
-        case "completed":
-          matchesStatus = sampleCollected && allComplete;
-          break;
-        default:
-          matchesStatus = true;
+        case "notCollected":   matchesStatus = !sampleCollected; break;
+        case "sampleCollected":matchesStatus = sampleCollected && !complete; break;
+        case "completed":      matchesStatus = sampleCollected && complete; break;
       }
       return matchesSearch && matchesDate && matchesStatus;
     });
   }, [patients, searchTerm, selectedDate, statusFilter]);
 
-  // -----------------------------
-  // Collect Sample
-  // -----------------------------
-  async function handleCollectSample(patient: Patient) {
+  /* collect sample */
+  const handleCollectSample = async (p: Patient) => {
     try {
-      const patientRef = ref(database, `patients/${patient.id}`);
-      await update(patientRef, { sampleCollectedAt: new Date().toISOString() });
-      alert(`Sample collected for ${patient.name}!`);
-    } catch (error) {
-      console.error("Error collecting sample:", error);
-      alert("Error collecting sample. Please try again.");
-    }
-  }
+      await update(ref(database, `patients/${p.id}`), { sampleCollectedAt: new Date().toISOString() });
+      alert(`Sample collected for ${p.name}!`);
+    } catch (e) { console.error(e); alert("Error collecting sample."); }
+  };
 
-  // -----------------------------
-  // Delete Patient
-  // -----------------------------
-  async function handleDeletePatient(patient: Patient) {
-    if (!window.confirm(`Are you sure you want to delete ${patient.name}?`)) {
-      return;
-    }
+  /* delete patient */
+  const handleDeletePatient = async (p: Patient) => {
+    if (!confirm(`Delete ${p.name}?`)) return;
     try {
-      const patientRef = ref(database, `patients/${patient.id}`);
-      await remove(patientRef);
-      alert(`${patient.name} has been deleted.`);
-      if (expandedPatientId === patient.id) {
-        setExpandedPatientId(null);
-      }
-    } catch (error) {
-      console.error("Error deleting patient:", error);
-      alert("Error deleting patient. Please try again.");
-    }
-  }
+      await remove(ref(database, `patients/${p.id}`));
+      if (expandedPatientId === p.id) setExpandedPatientId(null);
+      alert("Deleted!");
+    } catch (e) { console.error(e); alert("Error deleting."); }
+  };
 
-  // -----------------------------
-  // Update Payment
-  // -----------------------------
-  async function handleUpdateAmount(e: React.FormEvent) {
+  /* update payment */
+  const handleUpdateAmount = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPatient) return;
     try {
-      const updatedAmount = selectedPatient.amountPaid + newAmountPaid;
-      const patientRef = ref(database, `patients/${selectedPatient.id}`);
-      await update(patientRef, {
-        amountPaid: updatedAmount,
+      const updated = selectedPatient.amountPaid + newAmountPaid;
+      await update(ref(database, `patients/${selectedPatient.id}`), {
+        amountPaid: updated,
         paymentHistory: [
           ...(selectedPatient.paymentHistory || []),
-          {
-            amount: newAmountPaid,
-            paymentMode: paymentMode,
-            time: new Date().toISOString(),
-          },
+          { amount: newAmountPaid, paymentMode, time: new Date().toISOString() },
         ],
       });
-      alert("Amount updated successfully!");
+      alert("Payment updated!");
       setSelectedPatient(null);
       setNewAmountPaid(0);
       setPaymentMode("online");
-    } catch (error) {
-      console.error("Error updating amount:", error);
-      alert("Error updating amount. Please try again.");
-    }
-  }
+    } catch (e) { console.error(e); alert("Error updating payment."); }
+  };
 
-  // -----------------------------
-  // Download Bill: Generate a professional bill PDF with tables
-  // -----------------------------
-  function handleDownloadBill() {
+  /* download bill */
+  const handleDownloadBill = () => {
     if (!selectedPatient) return;
     const doc = new jsPDF();
     let y = 10;
-    
-    // Header
-    doc.setFontSize(18);
-    doc.text("Diagnostic Bill", 105, y, { align: "center" });
-    y += 10;
-    
-    // Patient Information
-    doc.setFontSize(12);
-    doc.text(`Patient Name: ${selectedPatient.name}`, 14, y);
-    y += 6;
-    doc.text(`Contact: ${selectedPatient.contact || "N/A"}`, 14, y);
-    y += 8;
-    
-    // Tests Table using autoTable
-    const tableColumns = [["Test Name", "Price (₹)"]];
-    const tableRows: Array<Array<string>> = [];
-    if (selectedPatient.bloodTests && selectedPatient.bloodTests.length > 0) {
-      selectedPatient.bloodTests.forEach((test) => {
-        tableRows.push([test.testName, test.price.toFixed(2)]);
-      });
-    }
-    
-    autoTable(doc, {
-      head: tableColumns,
-      body: tableRows,
-      startY: y,
-      theme: "grid",
-      headStyles: { fillColor: [22, 160, 133] },
-      styles: { fontSize: 11 },
-    });
-    y = (doc as any).lastAutoTable.finalY + 10;
-    
-    // Amount Summary Table
-    const { testTotal, discountValue, remaining } = calculateAmounts(selectedPatient);
-    const summaryRows: Array<Array<string>> = [
-      ["Test Total", `₹${testTotal.toFixed(2)}`],
-    ];
-    if (selectedPatient.discountPercentage > 0) {
-      summaryRows.push(["Discount", `₹${discountValue.toFixed(2)}`]);
-    }
-    summaryRows.push(["Amount Paid", `₹${selectedPatient.amountPaid.toFixed(2)}`]);
-    summaryRows.push(["Remaining", `₹${remaining.toFixed(2)}`]);
-    
-    autoTable(doc, {
-      head: [["Description", "Amount"]],
-      body: summaryRows,
-      startY: y,
-      theme: "plain",
-      styles: { fontSize: 11 },
-    });
-    y = (doc as any).lastAutoTable.finalY + 10;
-    
-    // Footer
-    doc.setFontSize(10);
-    doc.text("Thank you for choosing our services!", 105, y, { align: "center" });
-    
-    // Save PDF
-    doc.save(`Bill_${selectedPatient.name}.pdf`);
-  }
+    doc.setFontSize(18).text("Diagnostic Bill", 105, y, { align: "center" }); y += 10;
+    doc.setFontSize(12).text(`Patient Name: ${selectedPatient.name}`, 14, y); y += 6;
+    doc.text(`Contact: ${selectedPatient.contact || "N/A"}`, 14, y); y += 8;
 
+    /* tests table */
+    const rows = selectedPatient.bloodTests?.map(t => [t.testName, t.price.toFixed(2)]) || [];
+    autoTable(doc, { head: [["Test Name", "Price (₹)"]], body: rows, startY: y, theme: "grid", styles: { fontSize: 11 }, headStyles: { fillColor: [22,160,133] } });
+    y = (doc as any).lastAutoTable.finalY + 10;
+
+    /* summary */
+    const { testTotal, remaining } = calculateAmounts(selectedPatient);
+    const summary = [
+      ["Test Total", `₹${testTotal.toFixed(2)}`],
+      ["Discount",   `₹${selectedPatient.discountAmount.toFixed(2)}`],
+      ["Amount Paid",`₹${selectedPatient.amountPaid.toFixed(2)}`],
+      ["Remaining",  `₹${remaining.toFixed(2)}`],
+    ];
+    autoTable(doc, { head: [["Description", "Amount"]], body: summary, startY: y, theme: "plain", styles: { fontSize: 11 } });
+    y = (doc as any).lastAutoTable.finalY + 10;
+    doc.setFontSize(10).text("Thank you for choosing our services!", 105, y, { align: "center" });
+    doc.save(`Bill_${selectedPatient.name}.pdf`);
+  };
+
+  /* ---------------  RENDER  --------------- */
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
-        <div className="flex items-center space-x-4">
-          <p className="text-3xl font-medium text-blue-600">InfiCare</p>
-        </div>
+        <p className="text-3xl font-medium text-blue-600">InfiCare</p>
       </header>
 
-      {/* Main Content */}
       <main className="p-4 md:p-6">
-        {/* Filters */}
+        {/* filters */}
         <div className="mb-4 flex flex-col md:flex-row gap-4">
-          <input
-            type="text"
-            placeholder="Search patients..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="p-2 border rounded-md"
-          />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="p-2 border rounded-md"
-          />
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="p-2 border rounded-md"
-          >
+          <input type="text" placeholder="Search patients..." value={searchTerm}
+                 onChange={e=>setSearchTerm(e.target.value)} className="p-2 border rounded-md" />
+          <input type="date" value={selectedDate} onChange={e=>setSelectedDate(e.target.value)}
+                 className="p-2 border rounded-md" />
+          <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}
+                  className="p-2 border rounded-md">
             <option value="all">All</option>
             <option value="notCollected">Not Collected</option>
             <option value="sampleCollected">Pending</option>
@@ -363,325 +210,183 @@ export default function Dashboard() {
           </select>
         </div>
 
-        {/* Metrics */}
+        {/* metrics */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <div className="flex items-center space-x-4">
-              <div className="p-3 bg-blue-50 rounded-lg">
-                <ChartBarIcon className="h-6 w-6 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500 mb-1">Total Tests</p>
-                <p className="text-2xl font-semibold">{metrics.totalTests}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <div className="flex items-center space-x-4">
-              <div className="p-3 bg-yellow-50 rounded-lg">
-                <ClockIcon className="h-6 w-6 text-yellow-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500 mb-1">Pending Reports</p>
-                <p className="text-2xl font-semibold">{metrics.pendingReports}</p>
+          {[{icon:ChartBarIcon,label:"Total Tests",val:metrics.totalTests,bg:"blue"},
+            {icon:ClockIcon,label:"Pending Reports",val:metrics.pendingReports,bg:"yellow"},
+            {icon:UserGroupIcon,label:"Completed Tests",val:metrics.completedTests,bg:"green"}].map((m,i)=>(
+            <div key={i} className="bg-white p-6 rounded-xl shadow-sm border">
+              <div className="flex items-center space-x-4">
+                <div className={`p-3 bg-${m.bg}-50 rounded-lg`}>
+                  {React.createElement(m.icon,{className:`h-6 w-6 text-${m.bg}-600`})}
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500 mb-1">{m.label}</p>
+                  <p className="text-2xl font-semibold">{m.val}</p>
+                </div>
               </div>
             </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <div className="flex items-center space-x-4">
-              <div className="p-3 bg-green-50 rounded-lg">
-                <UserGroupIcon className="h-6 w-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500 mb-1">Completed Tests</p>
-                <p className="text-2xl font-semibold">{metrics.completedTests}</p>
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
 
-        {/* Recent Patients */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-          <div className="p-6 border-b border-gray-100">
-            <h2 className="text-lg font-semibold flex items-center">
-              <UserIcon className="h-5 w-5 mr-2 text-gray-600" />
-              Recent Patients
-            </h2>
-          </div>
+        {/* patient table */}
+        <div className="bg-white rounded-xl shadow-sm border">
+          <div className="p-6 border-b"><h2 className="text-lg font-semibold flex items-center">
+            <UserIcon className="h-5 w-5 mr-2 text-gray-600"/>Recent Patients</h2></div>
+
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                    Patient
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                    Tests
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                    Entry Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                    Remaining
-                  </th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                    Actions
-                  </th>
-                </tr>
+                {["Patient","Tests","Entry Date","Status","Remaining","Actions"].map(h=>(
+                  <th key={h} className="px-6 py-3 text-left text-sm font-medium text-gray-500">{h}</th>
+                ))}
               </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredPatients.map((patient) => {
-                  const sampleCollected = !!patient.sampleCollectedAt;
-                  const allComplete = isAllTestsComplete(patient);
-                  let statusLabel = "Not Collected";
-                  if (sampleCollected && !allComplete) {
-                    statusLabel = "Pending";
-                  } else if (sampleCollected && allComplete) {
-                    statusLabel = "Completed";
-                  }
-                  const { remaining } = calculateAmounts(patient);
+              <tbody className="divide-y">
+                {filteredPatients.map(p=>{
+                  const sampleCollected = !!p.sampleCollectedAt;
+                  const complete = isAllTestsComplete(p);
+                  const status = !sampleCollected?"Not Collected":complete?"Completed":"Pending";
+                  const { remaining } = calculateAmounts(p);
+
                   return (
-                    <React.Fragment key={patient.id}>
+                    <React.Fragment key={p.id}>
                       <tr className="hover:bg-gray-50">
                         <td className="px-6 py-4">
-                          <div>
-                            <p className="font-medium">{patient.name}</p>
-                            <p className="text-sm text-gray-500">
-                              {patient.age}y • {patient.gender}
-                            </p>
-                          </div>
+                          <p className="font-medium">{p.name}</p>
+                          <p className="text-sm text-gray-500">{p.age}y • {p.gender}</p>
                         </td>
                         <td className="px-6 py-4 text-sm">
-                          {patient.bloodTests && patient.bloodTests.length > 0 ? (
-                            <ul className="list-disc pl-4">
-                              {patient.bloodTests.map((test) => {
-                                const completed = isTestFullyEntered(patient, test);
-                                return (
-                                  <li
-                                    key={test.testId}
-                                    className={completed ? "text-green-600" : "text-red-500"}
-                                  >
-                                    {test.testName}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          ) : (
-                            <span className="text-gray-400">No tests</span>
-                          )}
+                          {p.bloodTests?.length ? (
+                            <ul className="list-disc pl-4">{p.bloodTests.map(t=>{
+                              const done = isTestFullyEntered(p,t);
+                              return <li key={t.testId} className={done?"text-green-600":"text-red-500"}>{t.testName}</li>;
+                            })}</ul>
+                          ) : <span className="text-gray-400">No tests</span>}
+                        </td>
+                        <td className="px-6 py-4 text-sm">{new Date(p.createdAt).toLocaleDateString()}</td>
+                        <td className="px-6 py-4">
+                          {status==="Not Collected" && <span className="px-3 py-1 text-xs rounded-full bg-red-100 text-red-800">Not Collected</span>}
+                          {status==="Pending"       && <span className="px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800">Pending</span>}
+                          {status==="Completed"     && <span className="px-3 py-1 text-xs rounded-full bg-green-100 text-green-800">Completed</span>}
                         </td>
                         <td className="px-6 py-4 text-sm">
-                          {new Date(patient.createdAt).toLocaleDateString()}
+                          {remaining>0? <span className="text-red-600 font-bold">₹{remaining.toFixed(2)}</span> : "0"}
                         </td>
                         <td className="px-6 py-4">
-                          {statusLabel === "Not Collected" && (
-                            <span className="px-3 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">
-                              Not Collected
-                            </span>
-                          )}
-                          {statusLabel === "Pending" && (
-                            <span className="px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
-                              Pending
-                            </span>
-                          )}
-                          {statusLabel === "Completed" && (
-                            <span className="px-3 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800">
-                              Completed
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-sm">
-                          {remaining > 0 ? (
-                            <span className="text-red-600 font-bold">
-                              ₹{remaining.toFixed(2)}
-                            </span>
-                          ) : (
-                            "0"
-                          )}
-                        </td>
-                        <td className="px-6 py-4">
-                          <button
-                            onClick={() =>
-                              setExpandedPatientId(
-                                expandedPatientId === patient.id ? null : patient.id
-                              )
-                            }
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
-                          >
-                            Actions
-                          </button>
+                          <button onClick={()=>setExpandedPatientId(expandedPatientId===p.id?null:p.id)}
+                                  className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700">Actions</button>
                         </td>
                       </tr>
-                      {expandedPatientId === patient.id && (
-                        <tr>
-                          <td colSpan={6} className="bg-gray-50">
-                            <div className="p-4 flex flex-wrap gap-2">
-                              {!sampleCollected && (
-                                <button
-                                  onClick={() => handleCollectSample(patient)}
-                                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 transition-colors"
-                                >
-                                  Collect Sample
-                                </button>
-                              )}
-                              {sampleCollected && !allComplete && (
-                                <Link
-                                  href={`/blood-values/new?patientId=${patient.id}`}
-                                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-                                >
-                                  <DocumentPlusIcon className="h-4 w-4 mr-2" />
-                                  Add/Edit Values
-                                </Link>
-                              )}
-                              {sampleCollected && allComplete && (
-                                <>
-                                  <Link
-                                    href={`/download-report?patientId=${patient.id}`}
-                                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 transition-colors"
-                                  >
-                                    <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                                    Download Report
-                                  </Link>
-                                  <Link
-                                    href={`/blood-values/new?patientId=${patient.id}`}
-                                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 transition-colors"
-                                  >
-                                    Edit Test
-                                  </Link>
-                                </>
-                              )}
-                              <button
-                                onClick={() => {
-                                  setSelectedPatient(patient);
-                                  setNewAmountPaid(0);
-                                }}
-                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
-                              >
-                                Update Payment
+
+                      {expandedPatientId===p.id && (
+                        <tr><td colSpan={6} className="bg-gray-50">
+                          <div className="p-4 flex flex-wrap gap-2">
+                            {!sampleCollected && (
+                              <button onClick={()=>handleCollectSample(p)}
+                                      className="px-4 py-2 bg-red-600 text-white rounded-md text-sm hover:bg-red-700">
+                                Collect Sample
                               </button>
-                              {selectedPatient?.id === patient.id && (
-                                <button
-                                  onClick={handleDownloadBill}
-                                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-teal-600 hover:bg-teal-700 transition-colors"
-                                >
-                                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                                  Download Bill
-                                </button>
-                              )}
-                              <Link
-                                href={`/patient-detail?patientId=${patient.id}`}
-                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 transition-colors"
-                              >
-                                Edit Details
+                            )}
+
+                            {sampleCollected && (
+                              <Link href={`/download-report?patientId=${p.id}`}
+                                    className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700">
+                                <ArrowDownTrayIcon className="h-4 w-4 mr-2"/>Download Report
                               </Link>
-                              <button
-                                onClick={() => handleDeletePatient(patient)}
-                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gray-600 hover:bg-gray-700 transition-colors"
-                              >
-                                Delete
+                            )}
+
+                            {sampleCollected && !complete && (
+                              <Link href={`/blood-values/new?patientId=${p.id}`}
+                                    className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700">
+                                <DocumentPlusIcon className="h-4 w-4 mr-2"/>Add/Edit Values
+                              </Link>
+                            )}
+
+                            {sampleCollected && complete && (
+                              <Link href={`/blood-values/new?patientId=${p.id}`}
+                                    className="inline-flex items-center px-4 py-2 bg-blue-500 text-white rounded-md text-sm hover:bg-blue-600">
+                                Edit Test
+                              </Link>
+                            )}
+
+                            <button onClick={()=>{setSelectedPatient(p);setNewAmountPaid(0);}}
+                                    className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700">
+                              Update Payment
+                            </button>
+
+                            {selectedPatient?.id===p.id && (
+                              <button onClick={handleDownloadBill}
+                                      className="inline-flex items-center px-4 py-2 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700">
+                                <ArrowDownTrayIcon className="h-4 w-4 mr-2"/>Download Bill
                               </button>
-                            </div>
-                          </td>
-                        </tr>
+                            )}
+
+                            <Link href={`/patient-detail?patientId=${p.id}`}
+                                  className="px-4 py-2 bg-orange-600 text-white rounded-md text-sm hover:bg-orange-700">
+                              Edit Details
+                            </Link>
+
+                            <button onClick={()=>handleDeletePatient(p)}
+                                    className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm hover:bg-gray-700">
+                              Delete
+                            </button>
+                          </div>
+                        </td></tr>
                       )}
                     </React.Fragment>
                   );
                 })}
               </tbody>
             </table>
-            {filteredPatients.length === 0 && (
-              <div className="p-6 text-center text-gray-500">
-                No recent patients found
-              </div>
+            {filteredPatients.length===0 && (
+              <div className="p-6 text-center text-gray-500">No recent patients found</div>
             )}
           </div>
         </div>
       </main>
 
-      {/* Modal for Payment Update */}
+      {/* Payment modal */}
       {selectedPatient && (
-        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
-            <button
-              onClick={() => setSelectedPatient(null)}
-              className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
-            >
-              ✕
-            </button>
-            <h3 className="text-xl font-semibold mb-4">
-              Update Payment for {selectedPatient.name}
-            </h3>
-            {(() => {
-              const { testTotal, discountValue, remaining } = calculateAmounts(selectedPatient);
+            <button onClick={()=>setSelectedPatient(null)}
+                    className="absolute top-3 right-3 text-gray-500 hover:text-gray-700">✕</button>
+            <h3 className="text-xl font-semibold mb-4">Update Payment for {selectedPatient.name}</h3>
+
+            {(()=>{
+              const { testTotal, remaining } = calculateAmounts(selectedPatient);
               return (
-                <div className="mb-4 space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Test Total:</span>
-                    <span className="text-sm font-medium">₹{testTotal.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Discount:</span>
-                    <span className="text-sm font-medium">
-                      {selectedPatient.discountPercentage > 0
-                        ? `₹${discountValue.toFixed(2)}`
-                        : "N/A"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Current Paid:</span>
-                    <span className="text-sm font-medium">₹{selectedPatient.amountPaid.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Remaining:</span>
-                    <span className="text-sm font-medium">₹{remaining.toFixed(2)}</span>
-                  </div>
+                <div className="mb-4 space-y-2 text-sm">
+                  <div className="flex justify-between"><span>Test Total:</span><span>₹{testTotal.toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span>Discount:</span><span>₹{selectedPatient.discountAmount.toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span>Current Paid:</span><span>₹{selectedPatient.amountPaid.toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span>Remaining:</span><span>₹{remaining.toFixed(2)}</span></div>
                 </div>
               );
             })()}
-            {/* Download Bill Button */}
+
             <div className="mb-4">
-              <button
-                onClick={handleDownloadBill}
-                className="w-full bg-teal-600 text-white py-3 rounded-lg font-medium hover:bg-teal-700 transition-colors"
-              >
-                Download Bill
-              </button>
+              <button onClick={handleDownloadBill}
+                      className="w-full bg-teal-600 text-white py-3 rounded-lg font-medium hover:bg-teal-700">Download Bill</button>
             </div>
+
             <form onSubmit={handleUpdateAmount}>
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700">
-                  Additional Payment (INR)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={newAmountPaid}
-                  onChange={(e) => setNewAmountPaid(Number(e.target.value))}
-                  className="mt-1 block w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  placeholder="Enter additional payment"
-                  required
-                />
+                <label className="block text-sm font-medium text-gray-700">Additional Payment (Rs)</label>
+                <input type="number" step="0.01" value={newAmountPaid}
+                       onChange={e=>setNewAmountPaid(Number(e.target.value))}
+                       className="mt-1 w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500" required/>
               </div>
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700">
-                  Payment Mode
-                </label>
-                <select
-                  value={paymentMode}
-                  onChange={(e) => setPaymentMode(e.target.value)}
-                  className="mt-1 block w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
-                >
+                <label className="block text-sm font-medium text-gray-700">Payment Mode</label>
+                <select value={paymentMode} onChange={e=>setPaymentMode(e.target.value)}
+                        className="mt-1 w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500">
                   <option value="cash">Cash</option>
                   <option value="online">Online</option>
                 </select>
               </div>
-              <button
-                type="submit"
-                className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
-              >
+              <button type="submit"
+                      className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700">
                 Update Payment
               </button>
             </form>

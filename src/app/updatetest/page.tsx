@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
-import { database } from "../../firebase"; // adjust path if needed
+import { database } from "../../firebase";                        // adjust path if needed
 import { ref, get, update, remove, push, set } from "firebase/database";
 import {
   useForm,
@@ -25,9 +25,9 @@ import {
   FaCode,
 } from "react-icons/fa";
 
-// -----------------------------
+// ------------------------------------------------------------------
 // INTERFACES
-// -----------------------------
+// ------------------------------------------------------------------
 export interface AgeRangeItem {
   rangeKey: string;
   rangeValue: string;
@@ -36,7 +36,9 @@ export interface AgeRangeItem {
 export interface Parameter {
   name: string;
   unit: string;
-  valueType: "text" | "number"; // New property to indicate accepted value type
+  valueType: "text" | "number";      // accepted value type
+  formula?: string;                  // <‑‑ NEW
+  iscomment?: boolean;               // <‑‑ NEW  (true if this row is just a comment)
   range: {
     male: AgeRangeItem[];
     female: AgeRangeItem[];
@@ -73,9 +75,9 @@ function getFieldErrorMessage(errors: any, path: string[]): string | undefined {
   return typeof current?.message === "string" ? current.message : undefined;
 }
 
-// -----------------------------
+// ------------------------------------------------------------------
 // PARAMETER EDITOR
-// -----------------------------
+// ------------------------------------------------------------------
 interface ParameterEditorProps {
   index: number;
   control: any;
@@ -83,6 +85,7 @@ interface ParameterEditorProps {
   errors: FieldErrorsImpl<any>;
   remove: (index: number) => void;
 }
+
 const ParameterEditor: React.FC<ParameterEditorProps> = ({
   index,
   control,
@@ -148,7 +151,7 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
         {paramUnitErr && <p className="text-red-500 text-xs">{paramUnitErr}</p>}
       </div>
 
-      {/* Value Type Selection */}
+      {/* Value Type */}
       <div className="mt-2">
         <label className="block text-xs">Value Type</label>
         <select
@@ -164,8 +167,31 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
         )}
       </div>
 
-      {/* Male Ranges */}
+      {/* Formula (optional) */}
       <div className="mt-2">
+        <label className="block text-xs">Formula (optional)</label>
+        <input
+          type="text"
+          {...register(`parameters.${index}.formula`)}
+          placeholder="e.g. TOTAL BILLIRUBIN - DIRECT BILLIRUBIN"
+          className="w-full border rounded px-2 py-1"
+        />
+      </div>
+
+      {/* Comment checkbox */}
+      <div className="mt-2 flex items-center space-x-2">
+        <input
+          type="checkbox"
+          {...register(`parameters.${index}.iscomment`)}
+          id={`comment-${index}`}
+        />
+        <label htmlFor={`comment-${index}`} className="text-xs">
+          This row is a comment (store <code>iscomment: true</code>)
+        </label>
+      </div>
+
+      {/* Male Ranges */}
+      <div className="mt-4">
         <h4 className="text-xs font-medium">Male Ranges</h4>
         {maleRangesArray.fields.map((field, mIndex) => {
           const keyErr = getFieldErrorMessage(errors, [
@@ -210,7 +236,9 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
         })}
         <button
           type="button"
-          onClick={() => maleRangesArray.append({ rangeKey: "", rangeValue: "" })}
+          onClick={() =>
+            maleRangesArray.append({ rangeKey: "", rangeValue: "" })
+          }
           className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
         >
           <FaPlus className="mr-1" /> Add Male Range
@@ -218,7 +246,7 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
       </div>
 
       {/* Female Ranges */}
-      <div className="mt-2">
+      <div className="mt-4">
         <h4 className="text-xs font-medium">Female Ranges</h4>
         {femaleRangesArray.fields.map((field, fIndex) => {
           const keyErr = getFieldErrorMessage(errors, [
@@ -241,12 +269,16 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
             <div key={field.id} className="flex items-center space-x-2 mt-1">
               <input
                 type="text"
-                {...register(`parameters.${index}.range.female.${fIndex}.rangeKey`)}
+                {...register(
+                  `parameters.${index}.range.female.${fIndex}.rangeKey`
+                )}
                 className="w-1/2 border rounded px-2 py-1"
               />
               <input
                 type="text"
-                {...register(`parameters.${index}.range.female.${fIndex}.rangeValue`)}
+                {...register(
+                  `parameters.${index}.range.female.${fIndex}.rangeValue`
+                )}
                 className="w-1/2 border rounded px-2 py-1"
               />
               <button
@@ -275,9 +307,9 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
   );
 };
 
-// -----------------------------
-// SUBHEADING EDITOR
-// -----------------------------
+// ------------------------------------------------------------------
+// SUBHEADING EDITOR (unchanged except for typing imports)
+// ------------------------------------------------------------------
 interface SubheadingEditorProps {
   index: number;
   control: any;
@@ -308,7 +340,7 @@ const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
     "title",
   ]);
 
-  // Called on parameter select to avoid duplicate usage across subheadings
+  // avoid duplicate parameter usage across subheadings
   const handleParameterChange = (pIndex: number, newValue: string) => {
     if (!newValue) return;
     const allSubheadings = getValues("subheadings") || [];
@@ -341,11 +373,9 @@ const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
         <label className="block text-xs">Subheading Title</label>
         <input
           type="text"
-          {...register(`subheadings.${index}.title`, {
-            required: "Required",
-          })}
+          {...register(`subheadings.${index}.title`, { required: "Required" })}
           className="w-full border rounded px-2 py-1"
-          placeholder="e.g., RBC"
+          placeholder="e.g. RBC"
         />
         {subheadingTitleErr && (
           <p className="text-red-500 text-xs">{subheadingTitleErr}</p>
@@ -365,19 +395,24 @@ const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
           return (
             <div key={field.id} className="flex items-center space-x-2 mt-1">
               <select
-                {...register(`subheadings.${index}.parameterNames.${pIndex}`, {
-                  required: "Required",
-                  onChange: (e: React.ChangeEvent<HTMLSelectElement>) =>
-                    handleParameterChange(pIndex, e.target.value),
-                })}
+                {...register(
+                  `subheadings.${index}.parameterNames.${pIndex}`,
+                  {
+                    required: "Required",
+                    onChange: (e: React.ChangeEvent<HTMLSelectElement>) =>
+                      handleParameterChange(pIndex, e.target.value),
+                  }
+                )}
                 className="w-full border rounded px-2 py-1"
               >
                 <option value="">Select Parameter</option>
-                {globalParameters.map((param: { name: string }, idx: number) => (
-                  <option key={idx} value={param.name}>
-                    {param.name}
-                  </option>
-                ))}
+                {globalParameters.map(
+                  (param: { name: string }, idx: number) => (
+                    <option key={idx} value={param.name}>
+                      {param.name}
+                    </option>
+                  )
+                )}
               </select>
               <button
                 type="button"
@@ -404,9 +439,9 @@ const SubheadingEditor: React.FC<SubheadingEditorProps> = ({
   );
 };
 
-// -----------------------------
-// TEST MODAL (Create & Edit) with JSON Editor Mode
-// -----------------------------
+// ------------------------------------------------------------------
+// TEST MODAL (Create & Edit)  –  only defaultValues + JSON handling touched
+// ------------------------------------------------------------------
 interface TestModalProps {
   testData?: TestData;
   onClose: () => void;
@@ -418,34 +453,37 @@ const TestModal: React.FC<TestModalProps> = ({
   onClose,
   onTestUpdated,
 }) => {
-  // Memoize default values so that they do not trigger re-renders
-  const defaultValues = useMemo<BloodTestFormInputs>(() => {
-    return testData
-      ? {
-          testName: testData.testName,
-          price: testData.price,
-          parameters: testData.parameters,
-          subheadings: testData.subheadings,
-          isOutsource: testData.isOutsource || false,
-        }
-      : {
-          testName: "",
-          price: 0,
-          parameters: [
-            {
-              name: "",
-              unit: "",
-              valueType: "text", // default valueType
-              range: {
-                male: [{ rangeKey: "", rangeValue: "" }],
-                female: [{ rangeKey: "", rangeValue: "" }],
+  const defaultValues = useMemo<BloodTestFormInputs>(
+    () =>
+      testData
+        ? {
+            testName: testData.testName,
+            price: testData.price,
+            parameters: testData.parameters,
+            subheadings: testData.subheadings,
+            isOutsource: testData.isOutsource || false,
+          }
+        : {
+            testName: "",
+            price: 0,
+            parameters: [
+              {
+                name: "",
+                unit: "",
+                valueType: "text",
+                formula: "",
+                iscomment: false,
+                range: {
+                  male: [{ rangeKey: "", rangeValue: "" }],
+                  female: [{ rangeKey: "", rangeValue: "" }],
+                },
               },
-            },
-          ],
-          subheadings: [],
-          isOutsource: false,
-        };
-  }, [testData]);
+            ],
+            subheadings: [],
+            isOutsource: false,
+          },
+    [testData]
+  );
 
   const {
     register,
@@ -463,11 +501,10 @@ const TestModal: React.FC<TestModalProps> = ({
   const testNameErr = getFieldErrorMessage(errors, ["testName"]);
   const testPriceErr = getFieldErrorMessage(errors, ["price"]);
 
-  // State to toggle between form mode and JSON editor mode
+  // JSON editor toggle
   const [isJsonEditor, setIsJsonEditor] = useState(false);
   const [jsonContent, setJsonContent] = useState("");
 
-  // Initialize JSON content only when defaultValues change
   useEffect(() => {
     setJsonContent(JSON.stringify(defaultValues, null, 2));
   }, [defaultValues]);
@@ -475,88 +512,73 @@ const TestModal: React.FC<TestModalProps> = ({
   const onSubmit: SubmitHandler<BloodTestFormInputs> = async (data) => {
     try {
       if (testData) {
-        // Update
-        const testRef = ref(database, `bloodTests/${testData.key}`);
-        await update(testRef, {
+        await update(ref(database, `bloodTests/${testData.key}`), {
           ...data,
           updatedAt: new Date().toISOString(),
         });
         alert("Test updated successfully!");
       } else {
-        // Create
-        const testsRef = ref(database, "bloodTests");
-        const newTestRef = push(testsRef);
-        await set(newTestRef, {
-          ...data,
-          createdAt: new Date().toISOString(),
-        });
+        const newTestRef = push(ref(database, "bloodTests"));
+        await set(newTestRef, { ...data, createdAt: new Date().toISOString() });
         alert("Test created successfully!");
       }
       onTestUpdated();
       onClose();
-    } catch (error) {
-      console.error("Error saving test:", error);
-      alert("Error saving test. Please try again.");
+    } catch (err) {
+      console.error(err);
+      alert("Error saving test.");
     }
   };
 
   const handleDelete = async () => {
     if (!testData) return;
-    if (!window.confirm("Are you sure you want to delete this test?")) return;
+    if (!window.confirm("Delete this test?")) return;
     try {
-      const testRef = ref(database, `bloodTests/${testData.key}`);
-      await remove(testRef);
-      alert("Test deleted successfully!");
+      await remove(ref(database, `bloodTests/${testData.key}`));
+      alert("Deleted!");
       onTestUpdated();
       onClose();
-    } catch (error) {
-      console.error("Error deleting test:", error);
-      alert("Error deleting test. Please try again.");
+    } catch (err) {
+      console.error(err);
+      alert("Error deleting test.");
     }
   };
 
-  // Handler for saving changes when in JSON mode
+  // JSON‑mode save
   const handleSaveJson = async () => {
     try {
-      const parsedData = JSON.parse(jsonContent);
+      const parsed = JSON.parse(jsonContent);
       if (testData) {
-        const testRef = ref(database, `bloodTests/${testData.key}`);
-        await update(testRef, {
-          ...parsedData,
+        await update(ref(database, `bloodTests/${testData.key}`), {
+          ...parsed,
           updatedAt: new Date().toISOString(),
         });
-        alert("Test updated successfully!");
       } else {
-        const testsRef = ref(database, "bloodTests");
-        const newTestRef = push(testsRef);
-        await set(newTestRef, {
-          ...parsedData,
-          createdAt: new Date().toISOString(),
-        });
-        alert("Test created successfully!");
+        const newRef = push(ref(database, "bloodTests"));
+        await set(newRef, { ...parsed, createdAt: new Date().toISOString() });
       }
+      alert("Saved!");
       onTestUpdated();
       onClose();
-    } catch (error) {
-      console.error("Error saving JSON:", error);
-      alert("Invalid JSON. Please check your input.");
+    } catch (e) {
+      console.error(e);
+      alert("Invalid JSON.");
     }
   };
 
-  // Toggle from JSON editor back to form view.
   const handleSwitchToForm = () => {
     try {
-      const parsedData = JSON.parse(jsonContent);
-      reset(parsedData);
+      reset(JSON.parse(jsonContent));
       setIsJsonEditor(false);
-    } catch (error) {
-      alert(error );
+    } catch (e) {
+      alert("Invalid JSON – can’t switch.");
     }
   };
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
       <div className="bg-white p-6 rounded-lg w-full max-w-3xl max-h-[85vh] overflow-y-auto">
+        {/* Header */}
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold flex items-center">
             {testData ? (
@@ -574,7 +596,7 @@ const TestModal: React.FC<TestModalProps> = ({
           </button>
         </div>
 
-        {/* Toggle Editor Mode */}
+        {/* Editor‑mode toggle */}
         <div className="flex justify-end mb-4">
           {isJsonEditor ? (
             <button
@@ -586,7 +608,6 @@ const TestModal: React.FC<TestModalProps> = ({
           ) : (
             <button
               onClick={() => {
-                // Update JSON content from current form values and switch mode
                 setJsonContent(JSON.stringify(getValues(), null, 2));
                 setIsJsonEditor(true);
               }}
@@ -599,7 +620,7 @@ const TestModal: React.FC<TestModalProps> = ({
             <button
               onClick={() => {
                 navigator.clipboard.writeText(jsonContent);
-                alert("JSON copied to clipboard!");
+                alert("JSON copied!");
               }}
               className="inline-flex items-center px-3 py-1 border border-green-600 text-green-600 rounded hover:bg-green-50"
             >
@@ -609,14 +630,14 @@ const TestModal: React.FC<TestModalProps> = ({
         </div>
 
         {isJsonEditor ? (
-          // JSON Editor Mode
-          <div>
+          /* JSON editor */
+          <>
             <textarea
               value={jsonContent}
               onChange={(e) => setJsonContent(e.target.value)}
               className="w-full h-80 border rounded px-3 py-2 font-mono"
             />
-            <div className="flex justify-end mt-4 space-x-2">
+            <div className="flex justify-end mt-4">
               <button
                 onClick={handleSaveJson}
                 className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -624,9 +645,9 @@ const TestModal: React.FC<TestModalProps> = ({
                 <FaSave className="mr-1" /> Save JSON
               </button>
             </div>
-          </div>
+          </>
         ) : (
-          // Form Mode
+          /* FORM mode */
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             {/* Test Name */}
             <div>
@@ -638,12 +659,10 @@ const TestModal: React.FC<TestModalProps> = ({
               />
               {testNameErr && <p className="text-red-500 text-xs">{testNameErr}</p>}
             </div>
-
             {/* Price */}
             <div>
               <label className="block text-sm font-medium">
-                Price (Rs.)
-                <FaRupeeSign className="inline-block ml-1 text-green-600" />
+                Price (Rs.) <FaRupeeSign className="inline-block text-green-600" />
               </label>
               <input
                 type="number"
@@ -656,22 +675,25 @@ const TestModal: React.FC<TestModalProps> = ({
               />
               {testPriceErr && <p className="text-red-500 text-xs">{testPriceErr}</p>}
             </div>
-
-            {/* Outsource Checkbox */}
+            {/* Outsource */}
             <div>
               <label className="block text-sm font-medium">
                 Outsource Test?
+                <input
+                  type="checkbox"
+                  {...register("isOutsource")}
+                  className="ml-2"
+                />
               </label>
-              <input type="checkbox" {...register("isOutsource")} className="ml-2" />
             </div>
 
             {/* Parameters */}
             <div>
               <label className="block text-sm font-medium">Global Parameters</label>
-              {paramFields.fields.map((field, pIndex) => (
+              {paramFields.fields.map((field, idx) => (
                 <ParameterEditor
                   key={field.id}
-                  index={pIndex}
+                  index={idx}
                   control={control}
                   register={register}
                   errors={errors as FieldErrorsImpl<any>}
@@ -685,6 +707,8 @@ const TestModal: React.FC<TestModalProps> = ({
                     name: "",
                     unit: "",
                     valueType: "text",
+                    formula: "",
+                    iscomment: false,
                     range: {
                       male: [{ rangeKey: "", rangeValue: "" }],
                       female: [{ rangeKey: "", rangeValue: "" }],
@@ -701,10 +725,10 @@ const TestModal: React.FC<TestModalProps> = ({
             <div>
               <label className="block text-sm font-medium">Subheadings</label>
               <div className="space-y-4">
-                {subheadingFields.fields.map((field, sIndex) => (
+                {subheadingFields.fields.map((field, idx) => (
                   <SubheadingEditor
                     key={field.id}
-                    index={sIndex}
+                    index={idx}
                     control={control}
                     register={register}
                     errors={errors as FieldErrorsImpl<any>}
@@ -725,7 +749,7 @@ const TestModal: React.FC<TestModalProps> = ({
               </button>
             </div>
 
-            {/* Buttons */}
+            {/* Save / delete */}
             <div className="flex justify-between items-center mt-4">
               {testData && (
                 <button
@@ -751,9 +775,9 @@ const TestModal: React.FC<TestModalProps> = ({
   );
 };
 
-// -----------------------------
-// MAIN PAGE: MANAGE TESTS
-// -----------------------------
+// ------------------------------------------------------------------
+// MAIN PAGE COMPONENT  (unchanged)
+// ------------------------------------------------------------------
 const ManageBloodTests: React.FC = () => {
   const [tests, setTests] = useState<TestData[]>([]);
   const [selectedTest, setSelectedTest] = useState<TestData | null>(null);
@@ -770,8 +794,8 @@ const ManageBloodTests: React.FC = () => {
         }));
         setTests(arr);
       }
-    } catch (error) {
-      console.error("Error fetching tests:", error);
+    } catch (e) {
+      console.error("Error fetching tests:", e);
     }
   };
 
@@ -779,17 +803,17 @@ const ManageBloodTests: React.FC = () => {
     fetchTests();
   }, []);
 
-  const handleEdit = (test: TestData) => {
-    setSelectedTest(test);
+  const openEdit = (t: TestData) => {
+    setSelectedTest(t);
     setShowModal(true);
   };
 
-  const handleAddNew = () => {
+  const openCreate = () => {
     setSelectedTest(null);
     setShowModal(true);
   };
 
-  const handleModalClose = () => {
+  const closeModal = () => {
     setShowModal(false);
     setSelectedTest(null);
     fetchTests();
@@ -798,19 +822,21 @@ const ManageBloodTests: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-7xl mx-auto bg-white p-6 rounded-lg shadow-lg">
+        {/* header */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold flex items-center">
             <FaFlask className="mr-2 text-blue-600" />
             Manage Blood Tests
           </h1>
           <button
-            onClick={handleAddNew}
+            onClick={openCreate}
             className="inline-flex items-center px-3 py-1 border border-green-600 text-green-600 rounded hover:bg-green-50"
           >
             <FaPlus className="mr-1" /> Add Test
           </button>
         </div>
 
+        {/* table */}
         <table className="min-w-full border-collapse">
           <thead>
             <tr className="bg-blue-100">
@@ -845,7 +871,7 @@ const ManageBloodTests: React.FC = () => {
                 </td>
                 <td className="border px-4 py-2">
                   <button
-                    onClick={() => handleEdit(t)}
+                    onClick={() => openEdit(t)}
                     className="text-blue-600 hover:text-blue-800"
                   >
                     <FaEdit />
@@ -867,11 +893,12 @@ const ManageBloodTests: React.FC = () => {
         </table>
       </div>
 
+      {/* modal */}
       {showModal && (
         <TestModal
           testData={selectedTest || undefined}
-          onClose={handleModalClose}
-          onTestUpdated={handleModalClose}
+          onClose={closeModal}
+          onTestUpdated={closeModal}
         />
       )}
     </div>
