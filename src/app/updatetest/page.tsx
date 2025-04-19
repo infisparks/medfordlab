@@ -204,28 +204,29 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
 
 
 {/* ——— Hints / Suggestions ——— */}
+{/* ——— Suggestions ——— */}
 <div className="mt-4">
-  <h4 className="text-xs font-medium">Hints / Suggestions</h4>
+  <h4 className="text-xs font-medium">Suggestions</h4>
 
   {suggestionsArray.fields.map((field, sIndex) => (
     <div key={field.id} className="flex items-center space-x-2 mt-1">
       <input
         type="text"
-        placeholder="Description"
+        placeholder="Full suggestion text"
         {...register(
           `parameters.${index}.suggestions.${sIndex}.description`,
           { required: "Required" }
         )}
-        className="w-1/2 border rounded px-2 py-1"
+        className="w-2/3 border rounded px-2 py-1"
       />
       <input
         type="text"
-        placeholder="Short Name"
+        placeholder="Short code"
         {...register(
           `parameters.${index}.suggestions.${sIndex}.shortName`,
           { required: "Required" }
         )}
-        className="w-1/2 border rounded px-2 py-1"
+        className="w-1/3 border rounded px-2 py-1"
       />
       <button
         type="button"
@@ -240,11 +241,12 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
   <button
     type="button"
     onClick={() => suggestionsArray.append({ description: "", shortName: "" })}
-    className="mt-2 inline-flex items-center px-2 py-1 border border-blue-600 text-blue-600 rounded hover:bg-blue-50"
+    className="mt-2 inline-flex items-center px-3 py-1 border border-green-600 text-green-600 rounded hover:bg-green-50"
   >
-    <FaPlus className="mr-1" /> Add Hint
+    <FaPlusCircle className="mr-1" /> Add Suggestion
   </button>
 </div>
+
 
 
       {/* Male Ranges */}

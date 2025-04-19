@@ -36,7 +36,9 @@ interface TestParameterValue {
   value: string | number;
   range: string;
   formula?: string;
+  
   valueType: "number" | "text";
+  visibility?: string;
   subparameters?: SubParameterValue[];
   suggestions?: { shortName: string; description: string }[];
 }
@@ -205,6 +207,7 @@ const BloodValuesForm: React.FC = () => {
                 range: normal,
                 formula: p.formula || "",
                 valueType: p.valueType || "number",
+                visibility: p.visibility ?? "visible",
                 ...(subps ? { subparameters: subps } : {}),
                 ...(p.suggestions ? { suggestions: p.suggestions } : {}),
               } as TestParameterValue;

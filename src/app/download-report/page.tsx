@@ -76,6 +76,39 @@ const loadImageAsCompressedJPEG = async (url: string, quality = 0.5) => {
 };
 
 // -----------------------------
+
+
+/**
+ * Remove any Parameter or subparameter whose visibility === "hidden"
+ */
+// function hideInvisible(
+//   bloodtest: Record<string, BloodTestData>
+// ): Record<string, BloodTestData> {
+//   const out: Record<string, BloodTestData> = {}
+//   for (const testKey in bloodtest) {
+//     const t = bloodtest[testKey]
+//     // skip outsourced tests entirely
+//     if (t.type === "outsource") continue
+
+//     // filter top‑level params
+//     const visibleParams = (t.parameters || [])
+//       .filter(p => p.visibility !== "hidden")
+//       .map(p => ({
+//         ...p,
+//         // also filter any subparameters
+//         subparameters: (p.subparameters || []).filter(sp => sp.visibility !== "hidden")
+//       }))
+
+//     out[testKey] = {
+//       ...t,
+//       parameters: visibleParams,
+//       subheadings: t.subheadings
+//     }
+//   }
+//   return out
+// }
+
+
 // Helper: convert age‑range keys
 // -----------------------------
 const parseRangeKey = (key: string) => {
@@ -91,16 +124,20 @@ const parseRangeKey = (key: string) => {
 
 // parse "1-20", "up to 20"
 const parseNumericRangeString = (str: string) => {
+  // ▸ “up to 12.5”  →  { lower: 0, upper: 12.5 }
   const up = /^\s*up\s*(?:to\s*)?([\d.]+)\s*$/i.exec(str);
   if (up) {
     const upper = parseFloat(up[1]);
-    return isNaN(upper) ? null : { lower: 1, upper };
+    return isNaN(upper) ? null : { lower: 0, upper };   // ← changed 1 → 0
   }
+
+  // ▸ “4‑7” or “4 to 7”  →  { lower: 4, upper: 7 }
   const m = /^\s*([\d.]+)\s*(?:-|to)\s*([\d.]+)\s*$/i.exec(str);
   if (!m) return null;
   const lower = parseFloat(m[1]), upper = parseFloat(m[2]);
   return isNaN(lower) || isNaN(upper) ? null : { lower, upper };
 };
+
 
 // -----------------------------
 // Component
@@ -190,14 +227,19 @@ function DownloadReport() {
     const left       = 30;
 
     // column widths
-    const totalW     = w - 2 * left;
-    const base       = totalW / 4.35;
-    const wParam     = base, wValue = base, wRange = 1.43 * base, wUnit = base;
+    const totalW = w - 2 * left;
+const base   = totalW / 4.35;
+// ↑ new – make the unit column wider and the range column narrower
+const wParam = base;
+const wValue = base;
+const wRange = base;         // ← narrower
+const wUnit  = 1.43 * base;  // ← wider
 
-    const x1 = left;
-    const x2 = x1 + wParam;
-    const x3 = x2 + wValue;
-    const x4 = x3 + wRange;
+const x1 = left;
+const x2 = x1 + wParam;
+const x3 = x2 + wValue;      // 3rd column: UNIT
+const x4 = x3 + wUnit;       // 4th column: RANGE
+
 
     const lineH      = 6;
     const ageDays    = data.total_day ? Number(data.total_day) : Number(data.age) * 365;
@@ -312,8 +354,8 @@ function DownloadReport() {
       const numRange = parseNumericRangeString(rangeStr);
       const numVal   = parseFloat(String(p.value));
       if (numRange && !isNaN(numVal)) {
-        if (numVal < numRange.lower) mark = "L";
-        else if (numVal > numRange.upper) mark = "H";
+        if (numVal < numRange.lower) mark = " L";
+        else if (numVal > numRange.upper) mark = " H";
       }
       const valStr = p.value !== "" ? `${p.value}${mark}` : "-";
 
@@ -334,13 +376,28 @@ function DownloadReport() {
       doc.setFont("helvetica", mark ? "bold" : "normal").setFontSize(9).setTextColor(0,0,0);
       doc.text(nameLines, x1+2, yPos+4);
       if (merged) {
-        doc.text(valueLines, x2+2, yPos+4);
+        // full‐width value: left‑align at the start of the merged area
+        const inset = 12;  
+
+        // recompute the wrap‐width to cover VALUE + UNIT + RANGE
+        const mergedWidth = wValue + wUnit + wRange;
+        const wrapped     = doc.splitTextToSize(
+          valStr,
+          mergedWidth - inset - 2  // leave a little right‐margin too
+        );
+  
+        // now draw it left‐aligned, inset from x2
+        doc.text(wrapped, x2 + inset, yPos + 4);
       } else {
-        doc.text(valueLines, x2 + wValue/2, yPos+4, {align:"center"});
-        doc.setFont("helvetica","normal");
-        doc.text(rangeLines, x3 + wRange/2, yPos+4, {align:"center"});
-        doc.text(unitLines,  x4 + wUnit /2, yPos+4, {align:"center"});
-      }
+        // normal 4‑column layout: center in the VALUE cell
+        doc.text(valueLines, x2 + wValue/2, yPos + 4, { align: "center" });
+
+        // UNIT cell closer to the top at yPos + 2
+        doc.text(unitLines, x3 + wUnit/2, yPos + 2, { align: "center" });
+        
+        // RANGE cell down again at yPos + 4
+        doc.text(rangeLines, x4 + wRange/2, yPos + 4, { align: "center" });   }
+      
       yPos += maxLines * lineH;
 
       // sub‑parameters
@@ -378,10 +435,11 @@ function DownloadReport() {
       const rowH = 7;
       doc.rect(left, yPos, totalW, rowH, "F");
       doc.setTextColor(255,255,255);
-      doc.text("PARAMETER", x1+2, yPos+5);
-      doc.text("VALUE",     x2 + wValue/2, yPos+5, {align:"center"});
-      doc.text("RANGE",     x3 + wRange/2, yPos+5, {align:"center"});
-      doc.text("UNIT",      x4 + wUnit /2, yPos+5, {align:"center"});
+      doc.text("PARAMETER", x1 + 2,        yPos + 5);
+      doc.text("VALUE",     x2 + wValue/2, yPos + 5, { align: "center" });
+      doc.text("UNIT",      x3 + wUnit/2,  yPos + 5, { align: "center" });
+      doc.text("RANGE",     x4 + wRange/2, yPos + 5, { align: "center" });
+      
       yPos += rowH + 2;
 
       // global + subheading parameters

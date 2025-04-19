@@ -10,7 +10,7 @@ import {
   SubmitHandler,
 } from "react-hook-form";
 import { database, auth } from "../../firebase";
-import { ref, push, set, get, DataSnapshot } from "firebase/database";
+import { ref, push, set,runTransaction, get, DataSnapshot } from "firebase/database";
 import { UserCircleIcon, PhoneIcon } from "@heroicons/react/24/outline";
 
 /* ─────────────────── Interfaces ─────────────────── */
@@ -54,6 +54,25 @@ interface PatientSuggestion {
   patientId: string;
 }
 
+
+
+async function generatePatientId(): Promise<string> {
+  const counterRef = ref(database, "patientIdPattern/patientIdKey");
+  const result = await runTransaction(counterRef, (current: string | null) => {
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    if (!current || !current.startsWith(today + "-")) {
+      return `${today}-0001`;
+    } else {
+      const [, seq] = current.split("-");
+      const nextSeq = String(parseInt(seq, 10) + 1).padStart(4, "0");
+      return `${today}-${nextSeq}`;
+    }
+  });
+  if (!result.committed || !result.snapshot.val()) {
+    throw new Error("Failed to generate patient ID");
+  }
+  return result.snapshot.val() as string;
+}
 /* ─────────────────── Main Component ─────────────────── */
 const PatientEntryPage: React.FC = () => {
   /* 1) Auth */
@@ -236,80 +255,79 @@ const PatientEntryPage: React.FC = () => {
   const remainingAmount =
     totalAmount - Number(discountAmount || 0) - Number(amountPaid || 0);
 
-  /* 11) UHID generator */
-  const generateUHID = (len = 10) =>
-    Array.from({ length: len }, () =>
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".charAt(
-        Math.floor(Math.random() * 36)
-      )
-    ).join("");
+ 
+  
 
   /* 12) Submit handler */
-  const onSubmit: SubmitHandler<IFormInput> = async (data) => {
-    try {
-      /* no duplicate tests */
-      const testIds = data.bloodTests.map((t) => t.testId);
-      if (new Set(testIds).size !== testIds.length) {
-        alert("Please remove duplicate tests before submitting.");
-        return;
-      }
-
-      const userEmail = currentUser?.email || "Unknown User";
-      const patientId =                       // FIX prefer-const
-        data.patientId?.trim() !== ""
-          ? data.patientId!.trim()
-          : generateUHID();
-      data.patientId = patientId;
-
-      /* total days for age */
-      const mult =
-        data.dayType === "year"
-          ? 360
-          : data.dayType === "month"
-          ? 30
-          : 1;
-      const total_day = data.age * mult;
-
-      /* store */
-      await set(push(ref(database, "patients")), {
-        ...data,
-        total_day,
-        enteredBy: userEmail,
-        createdAt: new Date().toISOString(),
-      });
-
-      /* WhatsApp */
-      const testNames = data.bloodTests.map((t) => t.testName).join(", ");
-      const msg =
-        `Dear ${data.name},\n\n` +
-        `We have received your request for: ${testNames}.\n\n` +
-        `Total  : Rs. ${totalAmount.toFixed(2)}\n` +
-        (Number(data.discountAmount) > 0
-          ? `Discount : Rs. ${Number(data.discountAmount).toFixed(2)}\n`
-          : "") +
-        `Paid   : Rs. ${Number(data.amountPaid).toFixed(2)}\n` +
-        `Balance: Rs. ${remainingAmount.toFixed(2)}\n\n` +
-        `Your UHID: ${patientId}\n` +
-        `Thank you for choosing us.\nRegards,\nMedBliss`;
-
-      const r = await fetch("https://wa.medblisss.com/send-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token: "99583991573",
-          number: `91${data.contact}`,
-          message: msg,
-        }),
-      });
-      if (!r.ok) throw new Error("WhatsApp send failed");
-
-      alert("Patient saved & WhatsApp sent!");
-      reset();
-    } catch (e) {
-      console.error(e);
-      alert("Something went wrong. Please try again.");
+ /* ─────────────────── Submit handler ─────────────────── */
+const onSubmit: SubmitHandler<IFormInput> = async (data) => {
+  try {
+    /* 1) No duplicate tests */
+    const testIds = data.bloodTests.map((t) => t.testId);
+    if (new Set(testIds).size !== testIds.length) {
+      alert("Please remove duplicate tests before submitting.");
+      return;
     }
-  };
+
+    /* 2) Determine patientId */
+    // reuse if the user picked one, otherwise generate atomically
+    if (!data.patientId?.trim()) {
+      data.patientId = await generatePatientId();
+    }
+
+    /* 3) Total days for age */
+    const mult =
+      data.dayType === "year" ? 360 :
+      data.dayType === "month" ? 30 :
+      1;
+    const total_day = data.age * mult;
+
+    /* 4) Store in Firebase */
+    const userEmail = currentUser?.email || "Unknown User";
+    await set(push(ref(database, "patients")), {
+      ...data,
+      total_day,
+      enteredBy: userEmail,
+      createdAt: new Date().toISOString(),
+    });
+
+    /* 5) Send WhatsApp confirmation */
+    const totalAmount = data.bloodTests.reduce((s, t) => s + t.price, 0);
+    const remainingAmount =
+      totalAmount - Number(data.discountAmount || 0) - Number(data.amountPaid || 0);
+
+    const testNames = data.bloodTests.map((t) => t.testName).join(", ");
+    const msg =
+      `Dear ${data.name},\n\n` +
+      `We have received your request for: ${testNames}.\n\n` +
+      `Total   : Rs. ${totalAmount.toFixed(2)}\n` +
+      (Number(data.discountAmount) > 0
+        ? `Discount: Rs. ${Number(data.discountAmount).toFixed(2)}\n`
+        : "") +
+      `Paid    : Rs. ${Number(data.amountPaid).toFixed(2)}\n` +
+      `Balance : Rs. ${remainingAmount.toFixed(2)}\n\n` +
+      `Your Lab Id: ${data.patientId}\n\n` +
+      `Thank you for choosing us.\nRegards,\nMedBliss`;
+
+    const r = await fetch("https://wa.medblisss.com/send-text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: "99583991573",
+        number: `91${data.contact}`,
+        message: msg,
+      }),
+    });
+    if (!r.ok) throw new Error("WhatsApp send failed");
+
+    alert("Patient saved & WhatsApp sent!");
+    reset();
+  } catch (e) {
+    console.error(e);
+    alert("Something went wrong. Please try again.");
+  }
+};
+
 
   /* 13) If not logged in */
   if (!currentUser) {
@@ -351,7 +369,7 @@ const PatientEntryPage: React.FC = () => {
                   })}
                   className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="MEDFORD">MEDFORD</option>
+                  <option value="MEDFORD">MEDFORD HOSPITAL </option>
                   <option value="Other">Other</option>
                 </select>
                 {errors.hospitalName && (
@@ -731,7 +749,7 @@ const PatientEntryPage: React.FC = () => {
                             )}
                             className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                           >
-                            <option value="inhospital">In Hospital</option>
+                            <option value="inhospital">InHome</option>
                             <option value="outsource">Outsource</option>
                           </select>
                         </div>
