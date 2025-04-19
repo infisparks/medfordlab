@@ -256,18 +256,29 @@ const PatientEntryForm: React.FC = () => {
   /* 10) Field array for blood tests */
   const { fields: bloodTestFields, append, remove } = useFieldArray({ control, name: "bloodTests" })
 
-  /* 11) Payment calculations */
-  const bloodTests = watch("bloodTests")
-  const discountAmount = watch("discountAmount")
-  const amountPaid = watch("amountPaid")
-  const totalAmount = bloodTests.reduce((s, t) => s + Number(t.price || 0), 0)
-  const remainingAmount = totalAmount - Number(discountAmount || 0) - Number(amountPaid || 0)
 
+
+
+  /* 11) Payment calculations */
+const bloodTests = watch("bloodTests")
+const discountAmount = watch("discountAmount")
+const amountPaid = watch("amountPaid")
+const totalAmount = bloodTests.reduce((s, t) => s + Number(t.price || 0), 0)
+const remainingAmount = totalAmount - Number(discountAmount || 0) - Number(amountPaid || 0)
+
+/* 11.a) Filter out already‑added tests */
+const unselectedBloodTests = useMemo(() => {
+  return availableBloodTests.filter(
+    t => !bloodTests.some(bt => bt.testId === t.id)
+  )
+}, [availableBloodTests, bloodTests])
   /* 12) Add selected test */
   const handleAddTest = () => {
     if (!selectedTest) return
+  
 
-    const test = availableBloodTests.find((t) => t.id === selectedTest)
+   const test = unselectedBloodTests.find((t) => t.id === selectedTest)
+  
     if (test) {
       append({
         testId: test.id,
@@ -278,7 +289,6 @@ const PatientEntryForm: React.FC = () => {
       setSelectedTest("")
     }
   }
-
   /* 13) Submit handler */
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     try {
@@ -635,7 +645,7 @@ const PatientEntryForm: React.FC = () => {
                         <SelectValue placeholder="Select a test" />
                       </SelectTrigger>
                       <SelectContent>
-                        {availableBloodTests.map((t) => (
+                      {unselectedBloodTests.map((t) => (
                           <SelectItem key={t.id} value={t.id}>
                             {t.testName}
                           </SelectItem>
