@@ -556,6 +556,13 @@ const TestModal: React.FC<TestModalProps> = ({
   } = useForm<BloodTestFormInputs>({ defaultValues });
 
   const paramFields = useFieldArray({ control, name: "parameters" });
+  
+  useEffect(() => {
+     if (paramFields.fields.length === 0) {
+      setValue("isOutsource", true);
+      }
+    }, [paramFields.fields.length, setValue]);
+  
   const subheadingFields = useFieldArray({ control, name: "subheadings" });
 
   const testNameErr = getFieldErrorMessage(errors, ["testName"]);
@@ -736,17 +743,23 @@ const TestModal: React.FC<TestModalProps> = ({
               {testPriceErr && <p className="text-red-500 text-xs">{testPriceErr}</p>}
             </div>
             {/* Outsource */}
-            <div>
-              <label className="block text-sm font-medium">
-                Outsource Test?
-                <input
-                  type="checkbox"
-                  {...register("isOutsource")}
-                  className="ml-2"
-                />
-              </label>
-            </div>
-
+          {/* Outsource (only show when there's at least one parameter) */}
+ {paramFields.fields.length > 0 ? (
+   <div>
+     <label className="block text-sm font-medium">
+       Outsource Test?
+       <input
+         type="checkbox"
+         {...register("isOutsource")}
+         className="ml-2"
+       />
+     </label>
+   </div>
+ ) : (
+   // when there are zero parameters we still need the field
+   // but we hide the checkbox and keep it set to true:
+   <input type="hidden" {...register("isOutsource")} value="true" />
+ )}
             {/* Parameters */}
             <div>
               <label className="block text-sm font-medium">Global Parameters</label>
@@ -913,7 +926,7 @@ const ManageBloodTests: React.FC = () => {
               <tr key={t.key} className="hover:bg-gray-50">
                 <td className="border px-4 py-2">
                   {t.testName}
-                  {t.isOutsource && (
+                  {(t.isOutsource || (t.parameters?.length || 0) === 0) && (
                     <span className="ml-2 inline-block px-2 py-1 text-xs font-medium bg-yellow-200 text-yellow-800 rounded">
                       Outsource Test
                     </span>

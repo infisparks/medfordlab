@@ -443,25 +443,39 @@ const x4 = x3 + wUnit;       // 4th column: RANGE
       yPos += rowH + 2;
 
       // global + subheading parameters
-      const subheads = tData.subheadings ?? [];
-      const subNames = subheads.flatMap(s => s.parameterNames);
-      const globals  = tData.parameters.filter(p => !subNames.includes(p.name));
-
-      globals.forEach(g => printRow(g));
-      subheads.forEach(sh => {
-        const rows = tData.parameters.filter(p => sh.parameterNames.includes(p.name));
-        if (!rows.length) return;
-        doc.setFont("helvetica","bold").setFontSize(10).setTextColor(0,51,102);
-        doc.text(sh.title, x1, yPos+5);
-        yPos += 6;
-        rows.forEach(r => printRow(r));
-      });
+          // global + subheading parameters
+          const subheads = tData.subheadings ?? [];
+          const subNames  = subheads.flatMap(s => s.parameterNames);
+          const globals   = tData.parameters.filter(p => !subNames.includes(p.name));
+    
+          globals.forEach(g => printRow(g));
+          subheads.forEach(sh => {
+            const rows = tData.parameters.filter(p => sh.parameterNames.includes(p.name));
+            if (!rows.length) return;
+            doc.setFont("helvetica","bold").setFontSize(10).setTextColor(0,51,102);
+            doc.text(sh.title, x1, yPos+5);
+            yPos += 6;
+            rows.forEach(r => printRow(r));
+          });
+          doc.setFont("helvetica", "italic");
+                doc.setFontSize(9);
+                doc.setTextColor(0);
+                doc.text(
+                  "--------------------- END OF THE REPORT ---------------------",
+                  w / 2,
+                  yPos + 4,
+                  { align: "center" }
+                );
+                yPos += 10;
+    
     }
 
     // footer stamp on every page
     const pages = doc.getNumberOfPages();
     for (let i=1;i<=pages;i++){ doc.setPage(i); await addStamp(); }
 
+
+    
     return doc.output("blob");
   };
 
