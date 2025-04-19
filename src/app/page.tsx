@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { database } from "../firebase";
+import { toWords } from 'number-to-words';
+
 import { ref, onValue, update, remove } from "firebase/database";
 import {
   UserIcon,
@@ -184,26 +186,27 @@ export default function Dashboard() {
   /* --- download bill (real) --- */
   const handleDownloadBill = () => {
     if (!selectedPatient) return;
-
+  
     const img = new Image();
     img.src = (letterhead as any).src ?? (letterhead as any);
     img.onload = () => {
+      // Draw letterhead into a canvas to get a data URL
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0);
-
-      const bgDataUrl = canvas.toDataURL("image/jpeg", 0.5); // 50 % quality
-
+      const bgDataUrl = canvas.toDataURL("image/jpeg", 0.5); // 50% quality
+  
+      // Create PDF
       const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
       const pageW = doc.internal.pageSize.getWidth();
       const pageH = doc.internal.pageSize.getHeight();
-
-      doc.setFont("helvetica", "normal").setFontSize(12);
+  
       doc.addImage(bgDataUrl, "JPEG", 0, 0, pageW, pageH);
-
-      /* patient details */
+      doc.setFont("helvetica", "normal").setFontSize(12);
+  
+      // Patient details two‐column layout
       const margin = 14;
       const colMid = pageW / 2;
       const leftKeyX = margin;
@@ -212,7 +215,7 @@ export default function Dashboard() {
       const rightKeyX = colMid + margin;
       const rightColonX = colMid + margin + 40;
       const rightValueX = colMid + margin + 44;
-
+  
       let y = 70;
       const drawRow = (kL: string, vL: string, kR: string, vR: string) => {
         doc.text(kL, leftKeyX, y);
@@ -223,28 +226,26 @@ export default function Dashboard() {
         doc.text(vR, rightValueX, y);
         y += 6;
       };
-
+  
       drawRow("Name", selectedPatient.name, "Patient ID", selectedPatient.patientId);
       drawRow(
         "Age / Gender",
         `${selectedPatient.age} y / ${selectedPatient.gender}`,
         "Registration Date",
-        new Date(selectedPatient.createdAt).toLocaleDateString(),
+        new Date(selectedPatient.createdAt).toLocaleDateString()
       );
       drawRow(
         "Ref. Doctor",
         selectedPatient.doctorName ?? "N/A",
         "Contact",
-        selectedPatient.contact ?? "N/A",
+        selectedPatient.contact ?? "N/A"
       );
-
       y += 4;
-
-      /* tests table */
-      const rows =
-        selectedPatient.bloodTests?.map((t) => [t.testName, t.price.toFixed(2)]) ?? [];
+  
+      // Tests table
+      const rows = selectedPatient.bloodTests?.map(t => [t.testName, t.price.toFixed(2)]) ?? [];
       autoTable(doc, {
-        head: [["Test Name", "Price (₹)"]],
+        head: [["Test Name", "Amount"]],
         body: rows,
         startY: y,
         theme: "grid",
@@ -254,9 +255,11 @@ export default function Dashboard() {
         margin: { left: margin, right: margin },
       });
       y = (doc as any).lastAutoTable.finalY + 10;
-
-      /* summary */
+  
+      // Summary & amount in words
       const { testTotal, remaining } = calculateAmounts(selectedPatient);
+      const remainingWords = toWords(Math.round(remaining));
+  
       autoTable(doc, {
         head: [["Description", "Amount"]],
         body: [
@@ -271,15 +274,30 @@ export default function Dashboard() {
         columnStyles: { 1: { fontStyle: "bold" } },
         margin: { left: margin, right: margin },
       });
-      y = (doc as any).lastAutoTable.finalY + 12;
-
-      doc.setFont("helvetica", "italic")
+      y = (doc as any).lastAutoTable.finalY + 8;
+  
+      // Print remaining in words, right-aligned
+      doc
+        .setFont("helvetica", "normal")
+        .setFontSize(10)
+        .text(
+          `(${remainingWords.charAt(0).toUpperCase() + remainingWords.slice(1)} only)`,
+          pageW - margin,
+          y,
+          { align: "right" }
+        );
+      y += 12;
+  
+      // Footer
+      doc
+        .setFont("helvetica", "italic")
         .setFontSize(10)
         .text("Thank you for choosing our services!", pageW / 2, y, { align: "center" });
-
+  
+      // Save PDF
       doc.save(`Bill_${selectedPatient.name}.pdf`);
     };
-
+  
     img.onerror = () => alert("Failed to load letterhead image.");
   };
 

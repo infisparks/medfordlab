@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import letterhead from "../../../public/bill.png";  // ✅ same image you use elsewhere
+import { toWords } from 'number-to-words';
 
 /* ─────────────────── Types ─────────────────── */
 interface BloodTest {
@@ -67,7 +68,8 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
       patient.discountAmount,
       patient.amountPaid
     );
-
+    // convert to words
+    const remainingWords = toWords(Math.round(remaining));
     /* ─── load letter‑head, then build PDF ─── */
     const img = new Image();
     img.src = (letterhead as any).src ?? (letterhead as any);
@@ -120,7 +122,7 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
 
       /* ─── tests table ─── */
       autoTable(doc, {
-        head: [["Test Name", "Price (₹)"]],
+        head: [["Test Name", "Amount"]],
         body: tests.map((t) => [t.testName, t.price.toFixed(2)]),
         startY: y,
         theme: "grid",
@@ -146,8 +148,19 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
         columnStyles: { 1: { fontStyle: "bold" } },
         margin: { left: margin, right: margin },
       });
-      y = (doc as any).lastAutoTable.finalY + 12;
-
+      y = (doc as any).lastAutoTable.finalY + 8;
+      
+      // ─── amount in words ───
+      doc
+        .setFont("helvetica", "normal")
+        .setFontSize(10)
+        .text(
+          `(${remainingWords.charAt(0).toUpperCase() + remainingWords.slice(1)} only)`,
+          pageW - margin,
+          y,
+          { align: "right" }
+        );
+      y += 12;
       /* ─── footer ─── */
       doc
         .setFont("helvetica", "italic")

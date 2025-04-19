@@ -461,7 +461,7 @@ const x4 = x3 + wUnit;       // 4th column: RANGE
                 doc.setFontSize(9);
                 doc.setTextColor(0);
                 doc.text(
-                  "--------------------- END OF THE REPORT ---------------------",
+                  "--------------------- END OF REPORT ---------------------",
                   w / 2,
                   yPos + 4,
                   { align: "center" }
