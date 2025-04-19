@@ -312,7 +312,10 @@ const unselectedBloodTests = useMemo(() => {
 
   // 4.a) Parse registrationTime ("hh:mm AM/PM")
   const [timePart, ampm] = data.registrationTime.split(" ")
-  let [hours, minutes] = timePart.split(":").map((v) => Number(v))
+  const [hoursStr, minutesStr] = timePart.split(":")
+  let hours = Number(hoursStr)
+  const minutes = Number(minutesStr)
+  
   if (ampm === "PM" && hours < 12) hours += 12
   if (ampm === "AM" && hours === 12) hours = 0
 
