@@ -690,7 +690,7 @@ const PatientEntryForm: React.FC = () => {
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  <SelectItem value="inhospital">InHome</SelectItem>
+                                  <SelectItem value="inhospital">InHouse</SelectItem>
                                   <SelectItem value="outsource">Outsource</SelectItem>
                                 </SelectContent>
                               </Select>
