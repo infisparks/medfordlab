@@ -118,7 +118,12 @@ export default function Dashboard() {
   /* --- filters --- */
   const filteredPatients = useMemo(() => {
     return patients.filter((p) => {
-      const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
+      const term = searchTerm.trim().toLowerCase();
+const matchesSearch =
+  !term ||
+  p.name.toLowerCase().includes(term) ||
+  (p.contact ?? "").includes(term);
+
       const matchesDate = selectedDate ? p.createdAt.startsWith(selectedDate) : true;
       const sampleCollected = !!p.sampleCollectedAt;
       const complete = isAllTestsComplete(p);
@@ -313,7 +318,7 @@ export default function Dashboard() {
         <div className="mb-4 flex flex-col md:flex-row gap-4">
           <input
             type="text"
-            placeholder="Search patients..."
+            placeholder="Search name or phone..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="p-2 border rounded-md"
