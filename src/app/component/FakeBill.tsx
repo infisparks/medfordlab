@@ -200,7 +200,7 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
           onClick={handleDownload}
           className="w-full bg-teal-600 text-white py-2 rounded hover:bg-teal-700"
         >
-          Download Fake Bill
+          Download  Bill
         </button>
       </div>
     </div>
