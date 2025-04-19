@@ -306,14 +306,28 @@ const unselectedBloodTests = useMemo(() => {
       const mult = data.dayType === "year" ? 360 : data.dayType === "month" ? 30 : 1
       const total_day = data.age * mult
 
+   
       /* 4) Store in Firebase */
       const userEmail = currentUser?.email || "Unknown User"
-      await set(push(ref(database, "patients")), {
-        ...data,
-        total_day,
-        enteredBy: userEmail,
-        createdAt: new Date().toISOString(),
-      })
+
+  // 4.a) Parse registrationTime ("hh:mm AM/PM")
+  const [timePart, ampm] = data.registrationTime.split(" ")
+  let [hours, minutes] = timePart.split(":").map((v) => Number(v))
+  if (ampm === "PM" && hours < 12) hours += 12
+  if (ampm === "AM" && hours === 12) hours = 0
+
+  // 4.b) Parse registrationDate ("YYYY-MM-DD")
+  const [year, month, day] = data.registrationDate.split("-").map((v) => Number(v))
+
+  // 4.c) Build a Date in local time
+  const createdAtDate = new Date(year, month - 1, day, hours, minutes)
+
+  await set(push(ref(database, "patients")), {
+    ...data,
+    total_day,
+    enteredBy: userEmail,
+    createdAt: createdAtDate.toISOString(),
+  })
 
       /* 5) Send WhatsApp confirmation */
       const totalAmount = data.bloodTests.reduce((s, t) => s + t.price, 0)
@@ -363,7 +377,7 @@ const unselectedBloodTests = useMemo(() => {
   /* 15) Render */
   return (
     <div className="h-screen bg-gray-50 p-2 overflow-auto">
-      <Card className="h-full">
+      <Card className="h-[calc(100vh-2rem)] overflow-auto">
         <CardContent className="p-3 h-full">
           <form onSubmit={handleSubmit(onSubmit)} className="h-full">
             {/* Header with Date/Time */}
