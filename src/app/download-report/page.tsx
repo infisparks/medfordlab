@@ -211,7 +211,7 @@ function DownloadReport() {
 
     const x1 = left;
     const x2 = x1 + wParam;
-    const x3 = x2 + wValue;
+    const x3 = x2 + wValue +15 ;
     const x4 = x3 + wUnit;
 
 
@@ -379,7 +379,7 @@ function DownloadReport() {
   // ── render NAME column (always at x1) ──
   doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0,0,0);
   doc.text(nameLines, x1    , yPos + 4);
-  const mergeMargin = 6; 
+  const mergeMargin = 19; 
   // ── now render VALUE / UNIT / RANGE by case ──
   if (fullyMerged) {
     // span VALUE + UNIT + RANGE across columns
