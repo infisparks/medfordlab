@@ -227,18 +227,21 @@ function DownloadReport() {
     const left       = 30;
 
     // column widths
-    const totalW = w - 2 * left;
+   // new: rebalance so RANGE is larger
+const totalW = w - 2 * left;
+// keep your “base” unit, but give range 1.5× base
 const base   = totalW / 4.35;
-// ↑ new – make the unit column wider and the range column narrower
 const wParam = base;
 const wValue = base;
-const wRange = base;         // ← narrower
-const wUnit  = 1.43 * base;  // ← wider
+const wRange = 1.5 * base;           
+// unit gets whatever’s left over
+const wUnit  = totalW - (wParam + wValue + wRange);
 
 const x1 = left;
 const x2 = x1 + wParam;
-const x3 = x2 + wValue;      // 3rd column: UNIT
-const x4 = x3 + wUnit;       // 4th column: RANGE
+const x3 = x2 + wValue;      // now VALUE ends here
+const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
+   // 4th column: RANGE
 
 
     const lineH      = 6;
@@ -393,7 +396,7 @@ const x4 = x3 + wUnit;       // 4th column: RANGE
        // 2) value: bold only if out‑of‑range
     doc.setFont("helvetica", mark ? "bold" : "normal");
     doc.text(valueLines, x2 + wValue/2, yPos + 4, { align: "center" });
-    
+
   doc.setFont("helvetica", "normal");
 
         // UNIT cell closer to the top at yPos + 2
