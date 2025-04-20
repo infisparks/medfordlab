@@ -1,7 +1,8 @@
 "use client"
 
 import type React from "react"
-import { useState, useEffect, useMemo } from "react"
+import  { useRef, useEffect, useState, useMemo } from "react"
+
 import { useForm, useFieldArray, type SubmitHandler } from "react-hook-form"
 import { database, auth } from "../../firebase"
 import { ref, push, set, runTransaction, get, type DataSnapshot } from "firebase/database"
@@ -67,25 +68,36 @@ interface PatientSuggestion {
   name: string
   contact: string
   patientId: string
+  age: number
+  dayType: "year"|"month"|"day"
+  gender: string
 }
 
+
 async function generatePatientId(): Promise<string> {
-  const counterRef = ref(database, "patientIdPattern/patientIdKey")
+  const now    = new Date();
+  const prefix = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`; 
+  // e.g. "202504" for April 2025
+
+  const counterRef = ref(database, "patientIdPattern/patientIdKey");
   const result = await runTransaction(counterRef, (current: string | null) => {
-    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "")
-    if (!current || !current.startsWith(today + "-")) {
-      return `${today}-0001`
+    if (!current || !current.startsWith(prefix + "-")) {
+      // first ID in this month
+      return `${prefix}-0001`;
     } else {
-      const [, seq] = current.split("-")
-      const nextSeq = String(Number.parseInt(seq, 10) + 1).padStart(4, "0")
-      return `${today}-${nextSeq}`
+      // bump the sequence
+      const [, seq] = current.split("-");
+      const nextSeq = String(parseInt(seq, 10) + 1).padStart(4, "0");
+      return `${prefix}-${nextSeq}`;
     }
-  })
+  });
+
   if (!result.committed || !result.snapshot.val()) {
-    throw new Error("Failed to generate patient ID")
+    throw new Error("Failed to generate patient ID");
   }
-  return result.snapshot.val() as string
+  return result.snapshot.val() as string;
 }
+
 
 /* ─────────────────── Main Component ─────────────────── */
 const PatientEntryForm: React.FC = () => {
@@ -207,31 +219,44 @@ const PatientEntryForm: React.FC = () => {
     })()
   }, [])
 
+
+
+  
+
+
   /* 8) Fetch EXISTING patients for suggestions */
   useEffect(() => {
     ;(async () => {
-      try {
-        const snap = await get(ref(database, "patients"))
-        if (snap.exists()) {
-          const temp: Record<string, PatientSuggestion> = {}
-          snap.forEach((child: DataSnapshot) => {
-            const d = child.val()
-            if (d?.patientId && !temp[d.patientId]) {
-              temp[d.patientId] = {
-                id: child.key!,
-                name: (d.name as string) || "",
-                contact: (d.contact as string) || "",
-                patientId: d.patientId as string,
-              }
+      const snap = await get(ref(database, "patients"));
+      if (snap.exists()) {
+        const temp: Record<string, PatientSuggestion> = {};
+        snap.forEach((child: DataSnapshot) => {
+          const d = child.val()
+          if (d?.patientId && !temp[d.patientId]) {
+            temp[d.patientId] = {
+              id: child.key!,
+              name:     (d.name     as string) || "",
+              contact:  (d.contact  as string) || "",
+              patientId:(d.patientId as string),
+              age:       Number(d.age)           || 0,
+              dayType:   (d.dayType as any)      || "year",
+              gender:    (d.gender  as string)   || "",
             }
-          })
-          setExistingPatients(Object.values(temp))
-        }
-      } catch (e) {
-        console.error(e)
+          }
+        })
+        
+  
+        // now dedupe by name (so each patient name appears only once)
+        const suggestions = Object.values(temp);
+        const uniquePatients = Array.from(
+          new Map(suggestions.map(p => [p.name, p])).values()
+        );
+  
+        setExistingPatients(uniquePatients);
       }
-    })()
-  }, [])
+    })();
+  }, []);
+  
 
   /* 9) Suggestions */
   const watchDoctorName = watch("doctorName") ?? ""
@@ -465,11 +490,14 @@ const handleRemoveAllTests = () => {
                             key={p.patientId}
                             className="px-2 py-1 hover:bg-gray-100 cursor-pointer"
                             onClick={() => {
-                              setValue("name", p.name.toUpperCase())
+                              setValue("name",    p.name.toUpperCase())
                               setValue("contact", p.contact)
-                              // Don't set patientId - we'll generate a new one
+                              setValue("age",     p.age)
+                              setValue("dayType", p.dayType)
+                              setValue("gender",  p.gender)
                               setShowPatientSuggestions(false)
                             }}
+                            
                           >
                             {p.name.toUpperCase()} – {p.contact}
                           </li>
@@ -624,13 +652,18 @@ const handleRemoveAllTests = () => {
                   <div className="w-1/2 relative">
                     <Label className="text-xs">Doctor Name</Label>
                     <div className="relative">
-                      <Input
-                        {...register("doctorName", {
-                          onChange: () => setShowDoctorSuggestions(true),
-                        })}
-                        className="h-8 text-xs pl-7"
-                        placeholder="Type doctor's name..."
-                      />
+                    <Input
+  {...register("doctorName", {
+    required: "Referring doctor is required",
+    onChange: () => setShowDoctorSuggestions(true),
+  })}
+/>
+{errors.doctorName && (
+  <p className="text-red-500 text-[10px] mt-0.5">
+    {errors.doctorName.message}
+  </p>
+)}
+
                       <UserIcon className="h-3.5 w-3.5 absolute left-2 top-[7px] text-gray-400" />
                     </div>
                     {showDoctorSuggestions && filteredDoctorSuggestions.length > 0 && (
