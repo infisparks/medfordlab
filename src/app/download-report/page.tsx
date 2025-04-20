@@ -373,8 +373,8 @@ const x4 = x3 + wUnit;       // 4th column: RANGE
       const maxLines   = Math.max(nameLines.length, valueLines.length, rangeLines.length, unitLines.length);
 
       // render
-      doc.setFont("helvetica", mark ? "bold" : "normal").setFontSize(9).setTextColor(0,0,0);
-      doc.text(nameLines, x1+2, yPos+4);
+        doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0,0,0);
+        doc.text(nameLines, x1+2, yPos+4);
       if (merged) {
         // full‐width value: left‑align at the start of the merged area
         const inset = 12;  
@@ -390,7 +390,11 @@ const x4 = x3 + wUnit;       // 4th column: RANGE
         doc.text(wrapped, x2 + inset, yPos + 4);
       } else {
         // normal 4‑column layout: center in the VALUE cell
-        doc.text(valueLines, x2 + wValue/2, yPos + 4, { align: "center" });
+       // 2) value: bold only if out‑of‑range
+    doc.setFont("helvetica", mark ? "bold" : "normal");
+    doc.text(valueLines, x2 + wValue/2, yPos + 4, { align: "center" });
+    
+  doc.setFont("helvetica", "normal");
 
         // UNIT cell closer to the top at yPos + 2
         doc.text(unitLines, x3 + wUnit/2, yPos + 2, { align: "center" });

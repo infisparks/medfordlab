@@ -290,7 +290,34 @@ const unselectedBloodTests = useMemo(() => {
     }
   }
   /* 13) Submit handler */
+
+
+// add all remaining tests
+const handleAddAllTests = () => {
+  unselectedBloodTests.forEach((t) =>
+    append({
+      testId: t.id,
+      testName: t.testName,
+      price: t.price,
+      testType: t.type,
+    })
+  );
+};
+
+// remove every selected test
+const handleRemoveAllTests = () => {
+  // remove from end→start so indexes stay valid
+  for (let i = bloodTestFields.length - 1; i >= 0; i--) {
+    remove(i);
+  }
+};
+
+
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
+    if (!data.bloodTests || data.bloodTests.length === 0) {
+      alert("Please add at least one blood test before submitting.");
+      return;
+    }
     try {
       /* 1) No duplicate tests */
       const testIds = data.bloodTests.map((t) => t.testId)
@@ -654,27 +681,56 @@ const unselectedBloodTests = useMemo(() => {
 
               {/* Blood Tests Section */}
               <div className="bg-gray-50 p-2 rounded-md">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold text-gray-700">Blood Tests</h3>
-                  <div className="flex items-center space-x-2">
-                    <Select value={selectedTest} onValueChange={setSelectedTest}>
-                      <SelectTrigger className="h-7 text-xs w-40">
-                        <SelectValue placeholder="Select a test" />
-                      </SelectTrigger>
-                      <SelectContent>
-                      {unselectedBloodTests.map((t) => (
-                          <SelectItem key={t.id} value={t.id}>
-                            {t.testName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={handleAddTest}>
-                      <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
-                      Add
-                    </Button>
-                  </div>
-                </div>
+              <div className="flex items-center justify-between mb-2">
+  <h3 className="text-sm font-semibold text-gray-700">Blood Tests</h3>
+
+  <div className="flex items-center space-x-1">
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-7 text-xs"
+      onClick={handleAddAllTests}
+    >
+      Add All
+    </Button>
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-7 text-xs"
+      onClick={handleRemoveAllTests}
+    >
+      Remove All
+    </Button>
+
+    <Select value={selectedTest} onValueChange={setSelectedTest}>
+      <SelectTrigger className="h-7 text-xs w-40">
+        <SelectValue placeholder="Select a test" />
+      </SelectTrigger>
+      <SelectContent>
+        {unselectedBloodTests.map((t) => (
+          <SelectItem key={t.id} value={t.id}>
+            {t.testName}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-7 text-xs"
+      onClick={handleAddTest}
+    >
+      <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
+      Add
+    </Button>
+  </div>
+</div>
+
+
 
                 {/* Blood Tests Table */}
                 <div className="border rounded-md overflow-hidden">
