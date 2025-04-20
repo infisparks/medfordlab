@@ -440,9 +440,9 @@ else if (unitOnlyMerge) {
  // recompute the width of the VALUE cell
  const valueCellWidth = omitUnit ? wValue + wUnit : wValue;
  // and the X‑position where RANGE now begins:
- const xRange = omitUnit
-   ? x2 + valueCellWidth
-   : x4;
+//  const xRange = omitUnit
+//    ? x2 + valueCellWidth
+//    : x4;
 
 
       if (skipCover) {

@@ -20,7 +20,7 @@ import type {
 // Local images (adjust path from this file's location)
 import letterhead from "../../../public/letterhead.png"; // Adjust path as needed
 import stamp from "../../../public/stamp.png"; // Adjust path as needed
-import bloodtestpage from "../../../public/testname.png"
+// import bloodtestpage from "../../../public/testname.png"
 // firstpage is not needed here as we are skipping the cover page
 
 // Define a type for the subheading structure based on its usage in the code
