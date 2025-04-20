@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
 import { ref as dbRef, get } from "firebase/database";
-import { database } from "../../firebase";                           // ← adjust if needed
+import { database } from "../../firebase";                 // ← adjust if needed
 import { getAuth } from "firebase/auth";
 import {
   getStorage,
@@ -13,19 +13,22 @@ import {
   getDownloadURL,
 } from "firebase/storage";
 
+// Import the graph report generator
+import { generateGraphPDF } from "./graphrerport";          // ← Import the new function
+
 // local images
 import letterhead from "../../../public/letterhead.png";
-import firstpage  from "../../../public/first.png";
-import stamp      from "../../../public/stamp.png";
+import firstpage from "../../../public/first.png";
+import stamp from "../../../public/stamp.png";
 
 // -----------------------------
-// Type Definitions
+// Type Definitions (keep as is)
 // -----------------------------
-interface AgeRangeItem {
+export interface AgeRangeItem {
   rangeKey: string;
   rangeValue: string;
 }
-interface Parameter {
+export interface Parameter {
   name: string;
   value: string | number;
   unit: string;
@@ -34,12 +37,12 @@ interface Parameter {
   visibility?: string;
   formula?: string;
 }
-interface BloodTestData {
+export interface BloodTestData {
   parameters: Parameter[];
   subheadings?: { title: string; parameterNames: string[] }[];
-  type?: string;         // e.g. "in‑house" | "outsource"
+  type?: string;      // e.g. "in‑house" | "outsource"
 }
-interface PatientData {
+export interface PatientData {
   name: string;
   age: string | number;
   gender: string;
@@ -54,9 +57,10 @@ interface PatientData {
 }
 
 // -----------------------------
-// Helper: Compress image as JPEG
+// Helper: Compress image as JPEG (keep as is)
 // -----------------------------
 const loadImageAsCompressedJPEG = async (url: string, quality = 0.5) => {
+  // ... (keep existing implementation)
   const res  = await fetch(url);
   const blob = await res.blob();
   return new Promise<string>((resolve, reject) => {
@@ -76,45 +80,13 @@ const loadImageAsCompressedJPEG = async (url: string, quality = 0.5) => {
 };
 
 // -----------------------------
-
-
-/**
- * Remove any Parameter or subparameter whose visibility === "hidden"
- */
-// function hideInvisible(
-//   bloodtest: Record<string, BloodTestData>
-// ): Record<string, BloodTestData> {
-//   const out: Record<string, BloodTestData> = {}
-//   for (const testKey in bloodtest) {
-//     const t = bloodtest[testKey]
-//     // skip outsourced tests entirely
-//     if (t.type === "outsource") continue
-
-//     // filter top‑level params
-//     const visibleParams = (t.parameters || [])
-//       .filter(p => p.visibility !== "hidden")
-//       .map(p => ({
-//         ...p,
-//         // also filter any subparameters
-//         subparameters: (p.subparameters || []).filter(sp => sp.visibility !== "hidden")
-//       }))
-
-//     out[testKey] = {
-//       ...t,
-//       parameters: visibleParams,
-//       subheadings: t.subheadings
-//     }
-//   }
-//   return out
-// }
-
-
-// Helper: convert age‑range keys
+// Helper functions (parseRangeKey, parseNumericRangeString) (keep as is)
 // -----------------------------
 const parseRangeKey = (key: string) => {
+  // ... (keep existing implementation)
   key = key.trim();
   const suf = key.slice(-1);
-  let mul   = 1;
+  let mul    = 1;
   if (suf === "m") mul = 30;
   else if (suf === "y") mul = 365;
   const core = key.replace(/[dmy]$/, "");
@@ -122,13 +94,13 @@ const parseRangeKey = (key: string) => {
   return { lower: Number(lo) * mul || 0, upper: Number(hi) * mul || Infinity };
 };
 
-// parse "1-20", "up to 20"
 const parseNumericRangeString = (str: string) => {
+    // ... (keep existing implementation)
   // ▸ “up to 12.5”  →  { lower: 0, upper: 12.5 }
   const up = /^\s*up\s*(?:to\s*)?([\d.]+)\s*$/i.exec(str);
   if (up) {
     const upper = parseFloat(up[1]);
-    return isNaN(upper) ? null : { lower: 0, upper };   // ← changed 1 → 0
+    return isNaN(upper) ? null : { lower: 0, upper };    // ← changed 1 → 0
   }
 
   // ▸ “4‑7” or “4 to 7”  →  { lower: 4, upper: 7 }
@@ -157,99 +129,98 @@ function DownloadReport() {
 
   const [patientData, setPatientData] = useState<PatientData | null>(null);
   const [isSending,   setIsSending]   = useState(false);
+  // --- NEW STATE for Graph Report Button ---
+  const [isGeneratingGraph, setIsGeneratingGraph] = useState(false);
 
   // -----------------------------
-  // Fetch patient
+  // Fetch patient (keep as is, including hideInvisible logic)
   // -----------------------------
-  useEffect(() => {
-    if (!patientId) return;
+   useEffect(() => {
+     if (!patientId) return;
 
-    (async () => {
-      try {
-        const snap = await get(dbRef(database, `patients/${patientId}`));
-        if (!snap.exists()) return alert("Patient not found");
+     (async () => {
+       try {
+         const snap = await get(dbRef(database, `patients/${patientId}`));
+         if (!snap.exists()) return alert("Patient not found");
 
-        const data = snap.val() as PatientData;
-        if (!data.bloodtest) return alert("No report found.");
-        data.bloodtest = hideInvisible(data);
-        setPatientData(data);
-      } catch (e) {
-        console.error(e); alert("Error fetching patient.");
-      }
-    })();
-  }, [patientId, router]);
+         const data = snap.val() as PatientData;
+         if (!data.bloodtest) return alert("No report found.");
+         data.bloodtest = hideInvisible(data); // Apply hiding logic
+         setPatientData(data);
+       } catch (e) {
+         console.error(e); alert("Error fetching patient.");
+       }
+     })();
+   }, [patientId, router]); // Removed hideInvisible from dependency array
 
-  const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
-    const out: Record<string, BloodTestData> = {};
-    if (!d.bloodtest) return out;
+   // Moved hideInvisible inside the component or define it outside if pure
+   const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
+     const out: Record<string, BloodTestData> = {};
+     if (!d.bloodtest) return out;
 
-    for (const k in d.bloodtest) {
-      const t = d.bloodtest[k];
+     for (const k in d.bloodtest) {
+       const t = d.bloodtest[k];
 
-      // ← skip any outsourced tests entirely
-      if (t.type === "outsource") continue;
+       // ← skip any outsourced tests entirely
+       if (t.type === "outsource") continue;
 
-      // ensure parameters is always an array
-      const keptParams = Array.isArray(t.parameters)
-        ? t.parameters
-            .filter((p) => p.visibility !== "hidden")
-            .map((p) => ({
-              ...p,
-              subparameters: Array.isArray(p.subparameters)
-                ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
-                : [],
-            }))
-        : [];
+       // ensure parameters is always an array
+       const keptParams = Array.isArray(t.parameters)
+         ? t.parameters
+             .filter((p) => p.visibility !== "hidden")
+             .map((p) => ({
+               ...p,
+               subparameters: Array.isArray(p.subparameters)
+                 ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
+                 : [],
+             }))
+         : [];
 
-      out[k] = {
-        ...t,
-        parameters: keptParams,
-        // preserve subheadings if you want
-        subheadings: t.subheadings,
-      };
-    }
-
-    return out;
-  };
+       out[k] = {
+         ...t,
+         parameters: keptParams,
+         // preserve subheadings if you want
+         subheadings: t.subheadings,
+       };
+     }
+     return out;
+   };
 
 
   // -----------------------------
-  // PDF builder
+  // PDF builder (generatePDFReport - keep as is)
   // -----------------------------
   const generatePDFReport = async (
     data: PatientData,
     includeLetterhead: boolean,
     skipCover: boolean
   ) => {
-    const doc        = new jsPDF("p", "mm", "a4");
-    const w          = doc.internal.pageSize.getWidth();
-    const h          = doc.internal.pageSize.getHeight();
-    const left       = 30;
+    // ... (keep existing extensive implementation for the main report)
+    const doc       = new jsPDF("p", "mm", "a4");
+    const w         = doc.internal.pageSize.getWidth();
+    const h         = doc.internal.pageSize.getHeight();
+    const left      = 30;
 
     // column widths
-   // new: rebalance so RANGE is larger
-const totalW = w - 2 * left;
-// keep your “base” unit, but give range 1.5× base
-const base   = totalW / 4.35;
-const wParam = base;
-const wValue = base;
-const wRange = 1.5 * base;           
-// unit gets whatever’s left over
-const wUnit  = totalW - (wParam + wValue + wRange);
+    const totalW = w - 2 * left;
+    const base   = totalW / 4.35;
+    const wParam = base;
+    const wValue = base;
+    const wRange = 1.5 * base;
+    const wUnit  = totalW - (wParam + wValue + wRange);
 
-const x1 = left;
-const x2 = x1 + wParam;
-const x3 = x2 + wValue;      // now VALUE ends here
-const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
-   // 4th column: RANGE
+    const x1 = left;
+    const x2 = x1 + wParam;
+    const x3 = x2 + wValue;
+    const x4 = x3 + wUnit;
 
 
-    const lineH      = 6;
-    const ageDays    = data.total_day ? Number(data.total_day) : Number(data.age) * 365;
-    const genderKey  = data.gender?.toLowerCase() ?? "";
+    const lineH     = 6;
+    const ageDays   = data.total_day ? Number(data.total_day) : Number(data.age) * 365;
+    const genderKey = data.gender?.toLowerCase() ?? "";
 
-    const auth       = getAuth();
-    let printedBy    = auth.currentUser?.displayName || auth.currentUser?.email || "Unknown";
+    const auth      = getAuth();
+    let printedBy   = auth.currentUser?.displayName || auth.currentUser?.email || "Unknown";
     if (printedBy.endsWith("@gmail.com")) printedBy = printedBy.replace("@gmail.com", "");
 
     // helpers ------------------------------------------------------
@@ -311,7 +282,7 @@ const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
       const xLeftValue         = xLeftColon + 2;
 
       // right column positions
-      const startRight         = w / 2 + 10;                    // where right block begins
+      const startRight         = w / 2 + 10;                  // where right block begins
       const maxRightLabelWidth = Math.max(...rightRows.map(r => doc.getTextWidth(r.label)));
       const xRightLabel        = startRight;
       const xRightColon        = xRightLabel + maxRightLabelWidth + 2;
@@ -379,8 +350,8 @@ const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
         doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0,0,0);
         doc.text(nameLines, x1+2, yPos+4);
       if (merged) {
-        // full‐width value: left‑align at the start of the merged area
-        const inset = 12;  
+        // full‐width value: left‐align at the start of the merged area
+        const inset = 12;
 
         // recompute the wrap‐width to cover VALUE + UNIT + RANGE
         const mergedWidth = wValue + wUnit + wRange;
@@ -388,23 +359,23 @@ const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
           valStr,
           mergedWidth - inset - 2  // leave a little right‐margin too
         );
-  
+
         // now draw it left‐aligned, inset from x2
         doc.text(wrapped, x2 + inset, yPos + 4);
       } else {
         // normal 4‑column layout: center in the VALUE cell
-       // 2) value: bold only if out‑of‑range
-    doc.setFont("helvetica", mark ? "bold" : "normal");
-    doc.text(valueLines, x2 + wValue/2, yPos + 4, { align: "center" });
+        // 2) value: bold only if out‑of‑range
+        doc.setFont("helvetica", mark ? "bold" : "normal");
+        doc.text(valueLines, x2 + wValue/2, yPos + 4, { align: "center" });
 
-  doc.setFont("helvetica", "normal");
+        doc.setFont("helvetica", "normal");
 
-        // UNIT cell closer to the top at yPos + 2
+        // UNIT cell closer to the top at yPos + 2
         doc.text(unitLines, x3 + wUnit/2, yPos + 2, { align: "center" });
-        
-        // RANGE cell down again at yPos + 4
+
+        // RANGE cell down again at yPos + 4
         doc.text(rangeLines, x4 + wRange/2, yPos + 4, { align: "center" });   }
-      
+
       yPos += maxLines * lineH;
 
       // sub‑parameters
@@ -431,7 +402,7 @@ const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
       yPos = headerY();
 
       doc.setDrawColor(0,51,102).setLineWidth(0.5);
-      doc.line(left, yPos, w-left, yPos);         // horizontal divider
+      doc.line(left, yPos, w-left, yPos);       // horizontal divider
 
       doc.setFont("helvetica","bold").setFontSize(13).setTextColor(0,51,102);
       doc.text(testKey.replace(/_/g," ").toUpperCase(), w/2, yPos + 8, {align:"center"});
@@ -446,43 +417,45 @@ const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
       doc.text("VALUE",     x2 + wValue/2, yPos + 5, { align: "center" });
       doc.text("UNIT",      x3 + wUnit/2,  yPos + 5, { align: "center" });
       doc.text("RANGE",     x4 + wRange/2, yPos + 5, { align: "center" });
-      
+
       yPos += rowH + 2;
 
       // global + subheading parameters
-          // global + subheading parameters
-          const subheads = tData.subheadings ?? [];
-          const subNames  = subheads.flatMap(s => s.parameterNames);
-          const globals   = tData.parameters.filter(p => !subNames.includes(p.name));
-    
-          globals.forEach(g => printRow(g));
-          subheads.forEach(sh => {
-            const rows = tData.parameters.filter(p => sh.parameterNames.includes(p.name));
-            if (!rows.length) return;
-            doc.setFont("helvetica","bold").setFontSize(10).setTextColor(0,51,102);
-            doc.text(sh.title, x1, yPos+5);
-            yPos += 6;
-            rows.forEach(r => printRow(r));
-          });
-          doc.setFont("helvetica", "italic");
-                doc.setFontSize(9);
-                doc.setTextColor(0);
-                doc.text(
-                  "--------------------- END OF REPORT ---------------------",
-                  w / 2,
-                  yPos + 4,
-                  { align: "center" }
-                );
-                yPos += 10;
-    
+      const subheads = tData.subheadings ?? [];
+      const subNames = subheads.flatMap(s => s.parameterNames);
+      const globals  = tData.parameters.filter(p => !subNames.includes(p.name));
+
+      globals.forEach(g => printRow(g));
+      subheads.forEach(sh => {
+        const rows = tData.parameters.filter(p => sh.parameterNames.includes(p.name));
+        if (!rows.length) return;
+        doc.setFont("helvetica","bold").setFontSize(10).setTextColor(0,51,102);
+        doc.text(sh.title, x1, yPos+5);
+        yPos += 6;
+        rows.forEach(r => printRow(r));
+      });
+      doc.setFont("helvetica", "italic");
+              doc.setFontSize(9);
+              doc.setTextColor(0);
+              doc.text(
+                "--------------------- END OF REPORT ---------------------",
+                w / 2,
+                yPos + 4,
+                { align: "center" }
+              );
+              yPos += 10;
+
     }
 
-    // footer stamp on every page
+    // footer stamp on every page (except cover if not skipped)
+    const startPage = skipCover ? 1 : 2;
     const pages = doc.getNumberOfPages();
-    for (let i=1;i<=pages;i++){ doc.setPage(i); await addStamp(); }
+    for (let i = startPage; i <= pages; i++) {
+        doc.setPage(i);
+        await addStamp();
+    }
 
 
-    
     return doc.output("blob");
   };
 
@@ -515,65 +488,125 @@ const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
     if (!patientData) return;
     try{
       setIsSending(true);
+      // Send the version *with* the cover page for WhatsApp
       const blob = await generatePDFReport(patientData,true,false);
       const store= getStorage();
       const snap = await uploadBytes(storageRef(store,`reports/${patientData.name}.pdf`),blob);
       const url  = await getDownloadURL(snap.ref);
 
       const payload = {
-        token   :"99583991573",
+        token   :"99583991573", // Replace with your actual token if needed
         number  :"91"+patientData.contact,
         imageUrl:url,
         caption :`Dear ${patientData.name},\n\nYour blood test report is now available:\n${url}\n\nRegards,\nYour Lab Team`,
       };
-      const res = await fetch("https://wa.medblisss.com/send-image-url",{
+      const res = await fetch("https://wa.medblisss.com/send-image-url",{ // Replace with your actual endpoint
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify(payload),
       });
       if (res.ok) alert("Report sent on WhatsApp!");
       else {
-        console.error(await res.json());
-        alert("Failed to send via WhatsApp.");
+        const errorData = await res.json().catch(() => ({ message: 'Unknown error' }));
+        console.error("WhatsApp API Error:", errorData);
+        alert(`Failed to send via WhatsApp. Status: ${res.status}`);
       }
-    }catch(e){ console.error(e); alert("Error sending WhatsApp."); }
-    finally{ setIsSending(false); }
+    }catch(e){
+       console.error("Error sending WhatsApp:", e);
+       alert("Error sending WhatsApp message.");
+    } finally{
+        setIsSending(false);
+    }
+  };
+
+  // --- NEW ACTION HANDLER for Graph Report ---
+  const downloadGraphReport = async () => {
+      if (!patientData) return;
+      setIsGeneratingGraph(true); // Set loading state
+      try {
+          // Call the function from graphreport.tsx
+          const blob = await generateGraphPDF(patientData);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `${patientData.name}_graph_report.pdf`; // Set filename
+          a.click();
+          URL.revokeObjectURL(url);
+      } catch (error) {
+          console.error("Error generating graph report:", error);
+          alert("Failed to generate graph report.");
+      } finally {
+          setIsGeneratingGraph(false); // Clear loading state
+      }
   };
 
   // ----------------------------- UI ------------------------------
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full space-y-6">
+      <div className="max-w-md w-full space-y-4"> {/* Reduced space-y-6 to space-y-4 */}
         {patientData ? (
-          <div className="bg-white rounded-xl shadow-lg p-8 space-y-6">
-            <h2 className="text-3xl font-bold text-center text-gray-800">Report Ready</h2>
+          <div className="bg-white rounded-xl shadow-lg p-8 space-y-4"> {/* Reduced space-y-6 to space-y-4 */}
+            <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">Report Ready</h2>
 
+            {/* Existing Buttons */}
             <button onClick={downloadWithLetter}
-              className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-4 rounded-xl font-medium">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              <span>Download PDF (Letterhead)</span>
+              className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out"> {/* Adjusted padding */}
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              <span>Download PDF (Letterhead)</span>
             </button>
 
             <button onClick={downloadNoLetter}
-              className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-4 rounded-xl font-medium">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg>
-              <span>Download PDF (No letterhead)</span>
+              className="w-full flex items-center justify-center space-x-3 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out"> {/* Adjusted padding */}
+               {/* Using a different download icon for variety */}
+               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}> <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" /> </svg>
+              <span>Download PDF (No letterhead)</span>
             </button>
 
-            <button onClick={()=>preview(true)}
-              className="w-full flex items-center justify-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-xl font-medium">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none"  viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-              <span>Preview (Letterhead)</span>
+             {/* --- NEW GRAPH REPORT BUTTON --- */}
+            <button onClick={downloadGraphReport} disabled={isGeneratingGraph}
+                className={`w-full flex items-center justify-center space-x-3 px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out ${
+                    isGeneratingGraph
+                        ? 'bg-gray-400 cursor-not-allowed'
+                        : 'bg-teal-600 hover:bg-teal-700 text-white'
+                }`}>
+                {isGeneratingGraph ? (
+                    <>
+                        <svg className="animate-spin h-5 w-5 mr-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        <span>Generating...</span>
+                    </>
+                ) : (
+                    <>
+                       {/* Bar Chart Icon */}
+                       <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}> <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /> </svg>
+                       <span>Download Graph Report</span>
+                    </>
+                )}
             </button>
 
-            <button onClick={()=>preview(false)}
-              className="w-full flex items-center justify-center space-x-3 bg-blue-600 hover:bg-blue-700 text-white px-6 py-4 rounded-xl font-medium">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none"  viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-              <span>Preview (No letterhead)</span>
+            {/* Preview Buttons */}
+            <button onClick={() => preview(true)}
+              className="w-full flex items-center justify-center space-x-3 bg-sky-600 hover:bg-sky-700 text-white px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out"> {/* Adjusted color and padding */}
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none"  viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+              <span>Preview (Letterhead)</span>
             </button>
 
+            <button onClick={() => preview(false)}
+              className="w-full flex items-center justify-center space-x-3 bg-sky-600 hover:bg-sky-700 text-white px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out"> {/* Adjusted color and padding */}
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none"  viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+              <span>Preview (No letterhead)</span>
+            </button>
+
+
+            {/* WhatsApp Button */}
             <button onClick={sendWhatsApp} disabled={isSending}
-              className="w-full flex items-center justify-center space-x-3 px-6 py-4 rounded-xl font-medium bg-[#25D366] hover:bg-[#128C7E] text-white">
+              className={`w-full flex items-center justify-center space-x-3 px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out ${
+                    isSending
+                        ? 'bg-gray-400 cursor-not-allowed'
+                        : 'bg-[#25D366] hover:bg-[#128C7E] text-white'
+                }`}> {/* Adjusted padding */}
               {isSending ? (
                 <>
                   <svg className="animate-spin h-5 w-5 mr-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -584,13 +617,13 @@ const x4 = x3 + wUnit;       // UNIT starts at x3, RANGE at x4
                 </>
               ) : (
                 <>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884"/></svg>
-                  <span>Send via WhatsApp</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884"/></svg>
+                  <span>Send via WhatsApp</span>
                 </>
               )}
             </button>
 
-            <p className="text-center text-sm text-gray-500">
+            <p className="text-center text-sm text-gray-500 pt-2"> {/* Added padding-top */}
               Report generated for {patientData.name}
             </p>
           </div>

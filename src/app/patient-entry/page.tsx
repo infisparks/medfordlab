@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import  { useRef, useEffect, useState, useMemo } from "react"
+import  {  useEffect, useState, useMemo } from "react"
 
 import { useForm, useFieldArray, type SubmitHandler } from "react-hook-form"
 import { database, auth } from "../../firebase"
