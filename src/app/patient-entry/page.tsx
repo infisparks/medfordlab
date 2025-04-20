@@ -188,7 +188,8 @@ const PatientEntryForm: React.FC = () => {
               id,
               testName: d.testName,
               price: Number(d.price),
-              type: d.type || "inhospital",
+               // if isOutsource === false → in‑hospital; otherwise (true or missing) → outsource
+       type: d.isOutsource === false ? "inhospital" : "outsource",
             }))
             .sort((a, b) => a.testName.localeCompare(b.testName))
           setAvailableBloodTests(arr)

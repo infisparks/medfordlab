@@ -744,22 +744,17 @@ const TestModal: React.FC<TestModalProps> = ({
             </div>
             {/* Outsource */}
           {/* Outsource (only show when there's at least one parameter) */}
- {paramFields.fields.length > 0 ? (
-   <div>
-     <label className="block text-sm font-medium">
-       Outsource Test?
-       <input
-         type="checkbox"
-         {...register("isOutsource")}
-         className="ml-2"
-       />
-     </label>
-   </div>
- ) : (
-   // when there are zero parameters we still need the field
-   // but we hide the checkbox and keep it set to true:
-   <input type="hidden" {...register("isOutsource")} value="true" />
- )}
+          <div>
+  <label className="block text-sm font-medium">
+    Outsource Test?
+    <input
+      type="checkbox"
+      {...register("isOutsource")}
+      className="ml-2"
+      defaultChecked={!!defaultValues.isOutsource}
+    />
+  </label>
+</div>
             {/* Parameters */}
             <div>
               <label className="block text-sm font-medium">Global Parameters</label>
