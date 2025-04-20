@@ -115,7 +115,7 @@ const PatientEntryForm: React.FC = () => {
     reset,
   } = useForm<IFormInput>({
     defaultValues: {
-      hospitalName: "MEDFORD",
+      hospitalName: "MEDFORD HOSPITAL",
       visitType: "opd",
       name: "",
       contact: "",
