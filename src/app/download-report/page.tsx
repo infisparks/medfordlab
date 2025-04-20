@@ -325,17 +325,20 @@ function DownloadReport() {
 
 
       // ── normalize “up to X” and “A to B” into “0 – X” or “A – B” ──
-{
-  // if it’s “up to 1.2” or “UP - 1.2”, capture the upper bound
-  const upMatch = /^\s*up\s*(?:to)?\s*[-–]?\s*(.+)$/i.exec(rangeStr);
-  if (upMatch) {
-    // lower = 0, upper = whatever follows “up”
-    rangeStr = `0 - ${upMatch[1].trim()}`;
-  } else if (/\bto\b/i.test(rangeStr)) {
-    // replace any standalone “to” with “-”
-    rangeStr = rangeStr.replace(/\bto\b/gi, "-");
-  }
-}
+      // {
+      //   // ▸ only normalize “up to X” when X is numeric
+      //   const upMatch = /^\s*up\s*(?:to)?\s*[-–]?\s*([\d.]+)\s*$/i.exec(rangeStr);
+      //   if (upMatch) {
+      //     rangeStr = `0 - ${upMatch[1]}`;
+      //   }
+      //   // ▸ only normalize “A to B” (or “A - B”) when both A and B are numeric
+      //   else if (/^\s*[\d.]+\s*(?:to|-)\s*[\d.]+\s*$/i.test(rangeStr)) {
+      //     rangeStr = rangeStr.replace(/\bto\b/gi, "-");
+      //   }
+      //   // everything else (e.g. “Not detected”, “<LOD”, descriptive text) stays untouched
+      // }
+      
+
 
       // out‑of‑range flag
       let mark = "";
@@ -381,36 +384,50 @@ function DownloadReport() {
   doc.text(nameLines, x1    , yPos + 4);
   const mergeMargin = 19; 
   // ── now render VALUE / UNIT / RANGE by case ──
-  if (fullyMerged) {
-    // span VALUE + UNIT + RANGE across columns
-    doc.setFont("helvetica", mark ? "bold" : "normal");
+  // ── now render VALUE / UNIT / RANGE by case ──
+if (fullyMerged) {
+  // no unit & no range → span VALUE+UNIT+RANGE
+  doc.setFont("helvetica", mark ? "bold" : "normal");
   doc.text(valueLines, x2 + mergeMargin, yPos + 4);
 }
 else if (unitOnlyMerge) {
-  // span VALUE across VALUE + UNIT columns, left‑aligned
+  // range present but unit empty → span VALUE+UNIT, then draw RANGE
   doc.setFont("helvetica", mark ? "bold" : "normal");
   doc.text(valueLines, x2 + mergeMargin, yPos + 4);
 
-  }
-  else if (unitOnlyMerge) {
-    // span VALUE across VALUE + UNIT columns
-    doc.setFont("helvetica", mark ? "bold" : "normal");
-    doc.text(
-      valueLines,
-      x2 + (wValue + wUnit) / 2,
-      yPos + 4,
-      { align: "center" }
-    );
-  }
-  else {
-    // normal 4‑column layout
-    doc.setFont("helvetica", mark ? "bold" : "normal");
-    doc.text(valueLines, x2 + wValue / 2, yPos + 4, { align: "center" });
+  doc.setFont("helvetica", "normal");
+  doc.text(
+    rangeLines,
+    x4 + wRange/2,
+    yPos + 4,
+    { align: "center" }
+  );
+}
+else {
+  // normal 4‑column layout
+  doc.setFont("helvetica", mark ? "bold" : "normal");
+  doc.text(
+    valueLines,
+    x2 + wValue/2,
+    yPos + 4,
+    { align: "center" }
+  );
 
-    doc.setFont("helvetica", "normal");
-    doc.text(unitLines,  x3 + wUnit / 2,  yPos + 2, { align: "center" });
-    doc.text(rangeLines, x4 + wRange / 2, yPos + 4, { align: "center" });
-  }
+  doc.setFont("helvetica", "normal");
+  doc.text(
+    unitLines,
+    x3 + wUnit/2,
+    yPos + 4,
+    { align: "center" }
+  );
+  doc.text(
+    rangeLines,
+    x4 + wRange/2,
+    yPos + 4,
+    { align: "center" }
+  );
+}
+
 
   // advance vertical
   const maxLines = Math.max(
