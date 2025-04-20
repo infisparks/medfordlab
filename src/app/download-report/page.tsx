@@ -199,11 +199,11 @@ function DownloadReport() {
     const doc       = new jsPDF("p", "mm", "a4");
     const w         = doc.internal.pageSize.getWidth();
     const h         = doc.internal.pageSize.getHeight();
-    const left      = 30;
+    const left      = 23;
 
     // column widths
     const totalW = w - 2 * left;
-    const base   = totalW / 4.35;
+    const base   = totalW / 4;
     const wParam = base;
     const wValue = base;
     const wRange = 1.5 * base;
@@ -350,52 +350,82 @@ function DownloadReport() {
       // merge columns logic
       const rangeEmpty = rangeStr.trim()==="";
       const unitEmpty  = p.unit.trim()==="";
-      const merged     = rangeEmpty && unitEmpty;
-
+      
+      // NEW: if only unit is missing (but range still present)
+      const unitOnlyMerge = !rangeEmpty && unitEmpty;
+      // merged still means neither unit *nor* range
+      const fullyMerged   = rangeEmpty && unitEmpty;
+      
       // split text
-      const nameLines  = doc.splitTextToSize(" ".repeat(indent) + p.name, wParam-4);
-      const valWidth   = merged ? wValue + wRange + wUnit : wValue;
-      const valueLines = doc.splitTextToSize(valStr, valWidth-4);
-      const rangeLines = merged ? [] : doc.splitTextToSize(rangeStr, wRange-4);
-      const unitLines  = merged ? [] : doc.splitTextToSize(p.unit,  wUnit -4);
-      const maxLines   = Math.max(nameLines.length, valueLines.length, rangeLines.length, unitLines.length);
+      const nameLines = doc.splitTextToSize(" ".repeat(indent) + p.name, wParam - 4);
+      
+      // if fullyMerged, span VALUE+UNIT+RANGE
+      // if unitOnlyMerge, span VALUE+UNIT
+      // otherwise just VALUE
+      let valueSpan = wValue;
+      if (fullyMerged)       valueSpan = wValue + wUnit + wRange;
+  else if (unitOnlyMerge) valueSpan = wValue + wUnit;
 
-      // render
-        doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0,0,0);
-        doc.text(nameLines, x1+2, yPos+4);
-      if (merged) {
-        // full‐width value: left‐align at the start of the merged area
-        const inset = 12;
+  const valueLines = doc.splitTextToSize(valStr, valueSpan - 4);
+  // only render range when there's a range cell
+  const rangeLines = fullyMerged
+    ? []
+    : doc.splitTextToSize(rangeStr, wRange - 4);
+  // only render unit when there's a unit cell
+  const unitLines = (!unitEmpty && !fullyMerged)
+    ? doc.splitTextToSize(p.unit, wUnit - 4)
+    : [];
 
-        // recompute the wrap‐width to cover VALUE + UNIT + RANGE
-        const mergedWidth = wValue + wUnit + wRange;
-        const wrapped     = doc.splitTextToSize(
-          valStr,
-          mergedWidth - inset - 2  // leave a little right‐margin too
-        );
+  // ── render NAME column (always at x1) ──
+  doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0,0,0);
+  doc.text(nameLines, x1    , yPos + 4);
+  const mergeMargin = 6; 
+  // ── now render VALUE / UNIT / RANGE by case ──
+  if (fullyMerged) {
+    // span VALUE + UNIT + RANGE across columns
+    doc.setFont("helvetica", mark ? "bold" : "normal");
+  doc.text(valueLines, x2 + mergeMargin, yPos + 4);
+}
+else if (unitOnlyMerge) {
+  // span VALUE across VALUE + UNIT columns, left‑aligned
+  doc.setFont("helvetica", mark ? "bold" : "normal");
+  doc.text(valueLines, x2 + mergeMargin, yPos + 4);
 
-        // now draw it left‐aligned, inset from x2
-        doc.text(wrapped, x2 + inset, yPos + 4);
-      } else {
-        // normal 4‑column layout: center in the VALUE cell
-        // 2) value: bold only if out‑of‑range
-        doc.setFont("helvetica", mark ? "bold" : "normal");
-        doc.text(valueLines, x2 + wValue/2, yPos + 4, { align: "center" });
+  }
+  else if (unitOnlyMerge) {
+    // span VALUE across VALUE + UNIT columns
+    doc.setFont("helvetica", mark ? "bold" : "normal");
+    doc.text(
+      valueLines,
+      x2 + (wValue + wUnit) / 2,
+      yPos + 4,
+      { align: "center" }
+    );
+  }
+  else {
+    // normal 4‑column layout
+    doc.setFont("helvetica", mark ? "bold" : "normal");
+    doc.text(valueLines, x2 + wValue / 2, yPos + 4, { align: "center" });
 
-        doc.setFont("helvetica", "normal");
+    doc.setFont("helvetica", "normal");
+    doc.text(unitLines,  x3 + wUnit / 2,  yPos + 2, { align: "center" });
+    doc.text(rangeLines, x4 + wRange / 2, yPos + 4, { align: "center" });
+  }
 
-        // UNIT cell closer to the top at yPos + 2
-        doc.text(unitLines, x3 + wUnit/2, yPos + 2, { align: "center" });
+  // advance vertical
+  const maxLines = Math.max(
+    nameLines.length,
+    valueLines.length,
+    rangeLines.length,
+    unitLines.length
+  );
+  yPos += maxLines * lineH;
 
-        // RANGE cell down again at yPos + 4
-        doc.text(rangeLines, x4 + wRange/2, yPos + 4, { align: "center" });   }
-
-      yPos += maxLines * lineH;
-
-      // sub‑parameters
-      if (p.subparameters?.length) p.subparameters.forEach(sp => printRow({...sp}, 2));
-    };
-
+  // ── sub‑parameters ──
+  if (p.subparameters?.length) {
+    p.subparameters.forEach(sp => printRow({ ...sp }, indent + 2));
+  }
+};
     // ----------------------------- build PDF ----------------------
     await addCover();
     if (!data.bloodtest) return doc.output("blob");
