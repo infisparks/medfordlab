@@ -215,7 +215,7 @@ function DownloadReport() {
     const x4 = x3 + wUnit;
 
 
-    const lineH     = 6;
+    const lineH     = 5;
     const ageDays   = data.total_day ? Number(data.total_day) : Number(data.age) * 365;
     const genderKey = data.gender?.toLowerCase() ?? "";
 
