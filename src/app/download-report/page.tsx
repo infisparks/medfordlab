@@ -323,6 +323,20 @@ function DownloadReport() {
       }
       rangeStr = rangeStr.replaceAll("/n", "\n");
 
+
+      // ── normalize “up to X” and “A to B” into “0 – X” or “A – B” ──
+{
+  // if it’s “up to 1.2” or “UP - 1.2”, capture the upper bound
+  const upMatch = /^\s*up\s*(?:to)?\s*[-–]?\s*(.+)$/i.exec(rangeStr);
+  if (upMatch) {
+    // lower = 0, upper = whatever follows “up”
+    rangeStr = `0 - ${upMatch[1].trim()}`;
+  } else if (/\bto\b/i.test(rangeStr)) {
+    // replace any standalone “to” with “-”
+    rangeStr = rangeStr.replace(/\bto\b/gi, "-");
+  }
+}
+
       // out‑of‑range flag
       let mark = "";
       const numRange = parseNumericRangeString(rangeStr);
@@ -390,6 +404,16 @@ function DownloadReport() {
     for (const testKey in data.bloodtest) {
       const tData = data.bloodtest[testKey];
       if (tData.type === "outsource" || !tData.parameters.length) continue;
+      
+ // ─── detect when this entire test has no units ───
+ const omitUnit = tData.parameters.every(p => p.unit.trim() === "");
+ // recompute the width of the VALUE cell
+ const valueCellWidth = omitUnit ? wValue + wUnit : wValue;
+ // and the X‑position where RANGE now begins:
+ const xRange = omitUnit
+   ? x2 + valueCellWidth
+   : x4;
+
 
       if (skipCover) {
         if (!first) doc.addPage();
