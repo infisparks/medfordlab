@@ -591,14 +591,16 @@ else {
   const preview = async (withLetter: boolean) => {
     if (!patientData) return;
   
+    // Only include checked tests
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest!).filter(([key]) =>
+        Object.entries(patientData.bloodtest ?? {}).filter(([key]) =>
           selectedTests.includes(key)
         )
       )
     };
+    
   
     // const blob = await generatePDFReport(filteredData, withLetter, true);
     // … upload & open …
@@ -621,14 +623,15 @@ else {
       };
   
       // Generate the PDF for only the selected tests
-      const blob = await generatePDFReport(filteredData, /* includeLetterhead */ true, /* skipCover */ false);
+      const blob = await generatePDFReport(filteredData, withLetter, true);
+
   
       // Upload to Firebase Storage
       const store = getStorage();
-      const filename = `reports/${filteredData.name}.pdf`;
-      const snap = await uploadBytes(storageRef(store, filename), blob);
-      const url  = await getDownloadURL(snap.ref);
-  
+      const name  = `reports/preview/${filteredData.name}_${withLetter ? 'with' : 'no'}_letterhead.pdf`;
+      const snap  = await uploadBytes(storageRef(store, name), blob);
+      const url   = await getDownloadURL(snap.ref);
+      window.open(url, "_blank");
       // Prepare WhatsApp payload
       const payload = {
         token:   "99583991573",                     // your API token
