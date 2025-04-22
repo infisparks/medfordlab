@@ -219,10 +219,10 @@ const PatientDetailEdit: React.FC = () => {
         return;
       }
     // example: allow 6 to 12 alphanumerics
-if (!/^[A-Z0-9]{6,12}$/.test(data.patientId)) {
-  alert("Patient ID must be 6–12 uppercase letters or digits.");
-  return;
-}
+// if (!/^[A-Z0-9]{6,12}$/.test(data.patientId)) {
+//   alert("Patient ID must be 6–12 uppercase letters or digits.");
+//   return;
+// }
 
 
       /* 2️⃣ update */

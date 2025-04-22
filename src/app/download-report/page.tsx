@@ -129,9 +129,16 @@ function DownloadReport() {
 
   const [patientData, setPatientData] = useState<PatientData | null>(null);
   const [isSending,   setIsSending]   = useState(false);
+
+// ─── insert here ───
+const [selectedTests, setSelectedTests] = useState<string[]>([]);
   // --- NEW STATE for Graph Report Button ---
+  
   const [isGeneratingGraph, setIsGeneratingGraph] = useState(false);
 
+
+
+  
   // -----------------------------
   // Fetch patient (keep as is, including hideInvisible logic)
   // -----------------------------
@@ -152,6 +159,13 @@ function DownloadReport() {
        }
      })();
    }, [patientId, router]); // Removed hideInvisible from dependency array
+
+
+   useEffect(() => {
+    if (patientData?.bloodtest) {
+      setSelectedTests(Object.keys(patientData.bloodtest));
+    }
+  }, [patientData]);
 
    // Moved hideInvisible inside the component or define it outside if pure
    const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
@@ -453,7 +467,7 @@ else {
       if (tData.type === "outsource" || !tData.parameters.length) continue;
       
  // ─── detect when this entire test has no units ───
- const omitUnit = tData.parameters.every(p => p.unit.trim() === "");
+//  const omitUnit = tData.parameters.every(p => p.unit.trim() === "");
  // recompute the width of the VALUE cell
 //  const valueCellWidth = omitUnit ? wValue + wUnit : wValue;
  // and the X‑position where RANGE now begins:
@@ -531,64 +545,120 @@ else {
   };
 
   // ----------------------------- Action handlers -----------------
-  const downloadWithLetter = async () =>{
+  const downloadWithLetter = async () => {
     if (!patientData) return;
-    const blob = await generatePDFReport(patientData,true,true);
+  
+    const filteredData: PatientData = {
+      ...patientData,
+      bloodtest: Object.fromEntries(
+        Object.entries(patientData.bloodtest!).filter(([key]) =>
+          selectedTests.includes(key)
+        )
+      )
+    };
+  
+    // ✅ Use filteredData
+    const blob = await generatePDFReport(filteredData, true, true);
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
-    a.href = url; a.download = `${patientData.name}_with_letterhead.pdf`; a.click();
+    a.href = url;
+    a.download = `${filteredData.name}_with_letterhead.pdf`;
+    a.click();
     URL.revokeObjectURL(url);
   };
-  const downloadNoLetter = async () =>{
+  
+  const downloadNoLetter = async () => {
     if (!patientData) return;
-    const blob = await generatePDFReport(patientData,false,true);
+  
+    const filteredData: PatientData = {
+      ...patientData,
+      bloodtest: Object.fromEntries(
+        Object.entries(patientData.bloodtest!).filter(([key]) =>
+          selectedTests.includes(key)
+        )
+      )
+    };
+  
+    const blob = await generatePDFReport(filteredData, false, true);
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
-    a.href = url; a.download = `${patientData.name}_no_letterhead.pdf`; a.click();
+    a.href = url;
+    a.download = `${filteredData.name}_no_letterhead.pdf`;
+    a.click();
     URL.revokeObjectURL(url);
   };
-  const preview = async (withLetter:boolean) =>{
+  
+  const preview = async (withLetter: boolean) => {
     if (!patientData) return;
-    const blob = await generatePDFReport(patientData,withLetter,true);
-    const store = getStorage();
-    const name  = `reports/preview/${patientData.name}_${withLetter?"":"no_"}letterhead.pdf`;
-    const snap  = await uploadBytes(storageRef(store,name),blob);
-    window.open(await getDownloadURL(snap.ref),"_blank");
+  
+    const filteredData: PatientData = {
+      ...patientData,
+      bloodtest: Object.fromEntries(
+        Object.entries(patientData.bloodtest!).filter(([key]) =>
+          selectedTests.includes(key)
+        )
+      )
+    };
+  
+    const blob = await generatePDFReport(filteredData, withLetter, true);
+    // … upload & open …
   };
-  const sendWhatsApp = async () =>{
+  
+  const sendWhatsApp = async () => {
     if (!patientData) return;
-    try{
+  
+    try {
       setIsSending(true);
-      // Send the version *with* the cover page for WhatsApp
-      const blob = await generatePDFReport(patientData,true,false);
-      const store= getStorage();
-      const snap = await uploadBytes(storageRef(store,`reports/${patientData.name}.pdf`),blob);
-      const url  = await getDownloadURL(snap.ref);
-
-      const payload = {
-        token   :"99583991573", // Replace with your actual token if needed
-        number  :"91"+patientData.contact,
-        imageUrl:url,
-        caption :`Dear ${patientData.name},\n\nYour blood test report is now available:\n${url}\n\nRegards,\nYour Lab Team`,
+  
+      // Build a PatientData object that only includes checked tests
+      const filteredData: PatientData = {
+        ...patientData,
+        bloodtest: Object.fromEntries(
+          Object.entries(patientData.bloodtest ?? {}).filter(([key]) =>
+            selectedTests.includes(key)
+          )
+        )
       };
-      const res = await fetch("https://wa.medblisss.com/send-image-url",{ // Replace with your actual endpoint
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(payload),
+  
+      // Generate the PDF for only the selected tests
+      const blob = await generatePDFReport(filteredData, /* includeLetterhead */ true, /* skipCover */ false);
+  
+      // Upload to Firebase Storage
+      const store = getStorage();
+      const filename = `reports/${filteredData.name}.pdf`;
+      const snap = await uploadBytes(storageRef(store, filename), blob);
+      const url  = await getDownloadURL(snap.ref);
+  
+      // Prepare WhatsApp payload
+      const payload = {
+        token:   "99583991573",                     // your API token
+        number:  "91" + filteredData.contact,       // patient's number
+        imageUrl:url,
+        caption: `Dear ${filteredData.name},\n\nYour blood test report is now available:\n${url}\n\nRegards,\nYour Lab Team`,
+      };
+  
+      // Send via your WhatsApp endpoint
+      const res = await fetch("https://wa.medblisss.com/send-image-url", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(payload),
       });
-      if (res.ok) alert("Report sent on WhatsApp!");
-      else {
-        const errorData = await res.json().catch(() => ({ message: 'Unknown error' }));
+  
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ message: "Unknown error" }));
         console.error("WhatsApp API Error:", errorData);
         alert(`Failed to send via WhatsApp. Status: ${res.status}`);
+      } else {
+        alert("Report sent on WhatsApp!");
       }
-    }catch(e){
-       console.error("Error sending WhatsApp:", e);
-       alert("Error sending WhatsApp message.");
-    } finally{
-        setIsSending(false);
+    } catch (e) {
+      console.error("Error sending WhatsApp message:", e);
+      alert("Error sending WhatsApp message.");
+    } finally {
+      setIsSending(false);
     }
   };
+  
 
   // --- NEW ACTION HANDLER for Graph Report ---
   const downloadGraphReport = async () => {
@@ -615,6 +685,29 @@ else {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full space-y-4"> {/* Reduced space-y-6 to space-y-4 */}
+       
+      <div className="flex flex-wrap gap-3">
+      {patientData?.bloodtest && Object.keys(patientData.bloodtest).map((testKey) => (
+        <label key={testKey} className="inline-flex items-center space-x-2">
+          <input
+            type="checkbox"
+            className="form-checkbox h-5 w-5 text-indigo-600"
+            checked={selectedTests.includes(testKey)}
+            onChange={() => {
+              setSelectedTests((prev) =>
+                prev.includes(testKey)
+                  ? prev.filter((k) => k !== testKey)
+                  : [...prev, testKey]
+              );
+            }}
+          />
+          <span className="text-sm">
+            {testKey.replace(/_/g, " ").toUpperCase()}
+          </span>
+        </label>
+      ))}
+    </div>
+       
         {patientData ? (
           <div className="bg-white rounded-xl shadow-lg p-8 space-y-4"> {/* Reduced space-y-6 to space-y-4 */}
             <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">Report Ready</h2>

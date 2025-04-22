@@ -79,10 +79,16 @@ export default function Dashboard() {
   const [newAmountPaid, setNewAmountPaid] = useState<string>("");
   const [paymentMode, setPaymentMode] = useState<string>("online");
   const [searchTerm, setSearchTerm] = useState<string>("");
-  const [selectedDate, setSelectedDate] = useState<string>("");
+  // const [selectedDate, setSelectedDate] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
   const [fakeBillPatient, setFakeBillPatient] = useState<Patient | null>(null); // <-- NEW
+
+  // ─────────────── add at top ───────────────
+const todayStr = new Date().toISOString().slice(0,10)   // "YYYY‑MM‑DD"
+const [startDate, setStartDate] = useState<string>(todayStr)
+const [endDate,   setEndDate]   = useState<string>(todayStr)
+// ─────────────────────────────────────────────
 
   /* --- helpers --- */
   const getRank = (p: Patient) => (!p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2);
@@ -118,31 +124,51 @@ export default function Dashboard() {
   /* --- filters --- */
   const filteredPatients = useMemo(() => {
     return patients.filter((p) => {
-      const term = searchTerm.trim().toLowerCase();
-const matchesSearch =
-  !term ||
-  p.name.toLowerCase().includes(term) ||
-  (p.contact ?? "").includes(term);
-
-      const matchesDate = selectedDate ? p.createdAt.startsWith(selectedDate) : true;
-      const sampleCollected = !!p.sampleCollectedAt;
-      const complete = isAllTestsComplete(p);
-      let matchesStatus = true;
+      const term = searchTerm.trim().toLowerCase()
+      const matchesSearch =
+        !term ||
+        p.name.toLowerCase().includes(term) ||
+        (p.contact ?? "").includes(term)
+  
+      // ← new: only include patients created between startDate and endDate
+      const created = p.createdAt.slice(0,10)      // "YYYY‑MM‑DD"
+      const inRange =
+        (!startDate || created >= startDate) &&
+        (!endDate   || created <= endDate)
+  
+      // your existing status logic...
+      const sampleCollected = !!p.sampleCollectedAt
+      const complete        = isAllTestsComplete(p)
+      let matchesStatus = true
       switch (statusFilter) {
         case "notCollected":
-          matchesStatus = !sampleCollected;
-          break;
+          matchesStatus = !sampleCollected
+          break
         case "sampleCollected":
-          matchesStatus = sampleCollected && !complete;
-          break;
+          matchesStatus = sampleCollected && !complete
+          break
         case "completed":
-          matchesStatus = sampleCollected && complete;
-          break;
+          matchesStatus = sampleCollected && complete
+          break
       }
-      return matchesSearch && matchesDate && matchesStatus;
-    });
-  }, [patients, searchTerm, selectedDate, statusFilter]);
+  
+      return matchesSearch && inRange && matchesStatus
+    })
+  }, [patients, searchTerm, startDate, endDate, statusFilter])
+  
+  useEffect(() => {
+    const total     = filteredPatients.length;
+    const completed = filteredPatients.filter(
+      p => p.sampleCollectedAt && isAllTestsComplete(p)
+    ).length;
+    const pending   = total - completed;
 
+    setMetrics({
+      totalTests:     total,
+      completedTests: completed,
+      pendingReports: pending,
+    });
+  }, [filteredPatients]);
   /* --- actions --- */
   const handleCollectSample = async (p: Patient) => {
     try {
@@ -153,6 +179,7 @@ const matchesSearch =
       alert("Error collecting sample.");
     }
   };
+  
 
   const handleDeletePatient = async (p: Patient) => {
     if (!confirm(`Delete ${p.name}?`)) return;
@@ -323,12 +350,21 @@ const matchesSearch =
             onChange={(e) => setSearchTerm(e.target.value)}
             className="p-2 border rounded-md"
           />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="p-2 border rounded-md"
-          />
+        {/* ───────────── date range inputs ───────────── */}
+<input
+  type="date"
+  value={startDate}
+  onChange={e => setStartDate(e.target.value)}
+  className="p-2 border rounded-md"
+/>
+<input
+  type="date"
+  value={endDate}
+  onChange={e => setEndDate(e.target.value)}
+  className="p-2 border rounded-md"
+/>
+{/* ────────────────────────────────────────────── */}
+
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
