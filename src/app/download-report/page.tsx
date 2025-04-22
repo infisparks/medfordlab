@@ -455,7 +455,7 @@ else {
  // ─── detect when this entire test has no units ───
  const omitUnit = tData.parameters.every(p => p.unit.trim() === "");
  // recompute the width of the VALUE cell
- const valueCellWidth = omitUnit ? wValue + wUnit : wValue;
+//  const valueCellWidth = omitUnit ? wValue + wUnit : wValue;
  // and the X‑position where RANGE now begins:
 //  const xRange = omitUnit
 //    ? x2 + valueCellWidth

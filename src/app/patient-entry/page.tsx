@@ -585,12 +585,12 @@ const handleRemoveAllTests = () => {
                   <div className="w-1/3">
                     <Label className="text-xs">Hospital</Label>
                     <div className="relative">
-                      <Select defaultValue="MEDFORD" onValueChange={(value) => setValue("hospitalName", value)}>
+                      <Select defaultValue="MEDFORD HOSPITAL" onValueChange={(value) => setValue("hospitalName", value)}>
                         <SelectTrigger className="h-8 text-xs pl-7">
                           <SelectValue placeholder="Select hospital" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="MEDFORD">MEDFORD HOSPITAL</SelectItem>
+                          <SelectItem value="MEDFORD HOSPITAL">MEDFORD HOSPITAL</SelectItem>
                           <SelectItem value="Other">Other</SelectItem>
                         </SelectContent>
                       </Select>
