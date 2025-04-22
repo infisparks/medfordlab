@@ -623,15 +623,14 @@ else {
       };
   
       // Generate the PDF for only the selected tests
-      const blob = await generatePDFReport(filteredData, withLetter, true);
-
+      const blob = await generatePDFReport(filteredData, /* includeLetterhead */ true, /* skipCover */ false);
   
       // Upload to Firebase Storage
       const store = getStorage();
-      const name  = `reports/preview/${filteredData.name}_${withLetter ? 'with' : 'no'}_letterhead.pdf`;
-      const snap  = await uploadBytes(storageRef(store, name), blob);
-      const url   = await getDownloadURL(snap.ref);
-      window.open(url, "_blank");
+      const filename = `reports/${filteredData.name}.pdf`;
+      const snap = await uploadBytes(storageRef(store, filename), blob);
+      const url  = await getDownloadURL(snap.ref);
+  
       // Prepare WhatsApp payload
       const payload = {
         token:   "99583991573",                     // your API token
