@@ -591,20 +591,31 @@ else {
   const preview = async (withLetter: boolean) => {
     if (!patientData) return;
   
-    // Only include checked tests
+    // Build a PatientData object containing only the checked tests
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest ?? {}).filter(([key]) =>
-          selectedTests.includes(key)
-        )
+        Object.entries(patientData.bloodtest ?? {})
+          .filter(([key]) => selectedTests.includes(key))
       )
     };
-    
   
-    // const blob = await generatePDFReport(filteredData, withLetter, true);
-    // … upload & open …
+    try {
+      // Generate the PDF blob (skipCover=true so it doesn't add the first-page image)
+      const blob = await generatePDFReport(filteredData, withLetter, true);
+      const url  = URL.createObjectURL(blob);
+  
+      // Open in a new tab for preview
+      window.open(url, "_blank");
+  
+      // Revoke the URL after a bit (garbage‑collect)
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      console.error("Preview error:", err);
+      alert("Failed to generate preview.");
+    }
   };
+  
   
   const sendWhatsApp = async () => {
     if (!patientData) return;
