@@ -600,7 +600,7 @@ else {
       )
     };
   
-    const blob = await generatePDFReport(filteredData, withLetter, true);
+    // const blob = await generatePDFReport(filteredData, withLetter, true);
     // … upload & open …
   };
   
