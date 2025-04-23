@@ -75,22 +75,20 @@ interface PatientSuggestion {
 
 
 async function generatePatientId(): Promise<string> {
-  // e.g. "202504" for April 2025
-  const now    = new Date();
-  const yyyy   = now.getFullYear();
-  const mm     = String(now.getMonth() + 1).padStart(2, "0");
-  const dd     = String(now.getDate()).padStart(2, "0");
-  // prefix is full date: YYYYMMDD
-  const prefix = `${yyyy}${mm}${dd}`;
+  const now  = new Date();
+  const yyyy = now.getFullYear();
+  const mm   = String(now.getMonth() + 1).padStart(2, "0");
+
+  // now we only reset per month
+  const prefix = `${yyyy}${mm}`; // e.g. "202504" for April 2025
 
   const counterRef = ref(database, "patientIdPattern/patientIdKey");
   const result = await runTransaction(counterRef, (current: string | null) => {
-    // if nothing stored yet, or the stored key is from a different day,
-    // reset counter to 0001
+    // if no key yet, or it's from a different month, start at 0001
     if (!current || !current.startsWith(prefix + "-")) {
       return `${prefix}-0001`;
     } else {
-      // bump the sequence
+      // bump the 4-digit sequence
       const [, seq] = current.split("-");
       const nextSeq = String(parseInt(seq, 10) + 1).padStart(4, "0");
       return `${prefix}-${nextSeq}`;
