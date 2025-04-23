@@ -1,10 +1,53 @@
-"use client";  // This is now a Client Component
+// components/AuthProvider.tsx
+"use client";
 
 import React, { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { ref, get } from "firebase/database";
 import { auth, database } from "../firebase";
+
+const allowedRoutes: Record<string, string[]> = {
+  admin: [
+    "/", 
+    "/dashboard",
+    "/admin",
+    "/admingraph",
+    "/login",
+    "/blood-values",
+    "/blood-values/new",  
+    "/component",
+    "/createbloodtest",
+    "/doctoradmin",
+    "/doctorregistration",
+    "/download-report",
+    "/pacakgedetail",
+    "/package",
+    "/patient-detail",
+    "/patient-registration",
+    "/patient-entry",
+    "/register",
+    "/uidlogin",
+    "/updatetest",
+  ],
+  technician: [
+    "/", 
+    "/dashboard", 
+    "/patient-detail",
+    "/blood-values",
+    "/blood-values/new",  
+    "/login",
+    "/patient-entry",
+    "/patient-registration",
+    "/download-report",
+  ],
+  phlebotomist: [
+    "/", 
+    "/dashboard",
+    "/download-report",
+    "/login",
+  ],
+};
 
 export default function AuthProvider({
   children,
@@ -17,25 +60,30 @@ export default function AuthProvider({
   const [role, setRole] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // 1) onAuthStateChanged → fetch role or send to /login
   useEffect(() => {
-    // Listen for Firebase Auth state changes.
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        router.push("/login");
+        setRole(null);
         setIsLoading(false);
-      } else {
-        // Fetch the user’s role
-        const roleRef = ref(database, `user/${user.uid}/role`);
-        try {
-          const snapshot = await get(roleRef);
-          if (snapshot.exists()) {
-            setRole(snapshot.val());
-          } else {
-            setRole("staff");
-          }
-        } catch (error) {
-          console.error("Error fetching role:", error);
+        router.replace("/login");
+        return;
+      }
+
+      try {
+        const snap = await get(ref(database, `user/${user.uid}/role`));
+        if (snap.exists()) {
+          setRole(snap.val());
+        } else {
+          // no role in DB → treat as unauthenticated
+          setRole(null);
+          router.replace("/login");
         }
+      } catch (err) {
+        console.error("Error fetching role:", err);
+        setRole(null);
+        router.replace("/login");
+      } finally {
         setIsLoading(false);
       }
     });
@@ -43,26 +91,26 @@ export default function AuthProvider({
     return () => unsubscribe();
   }, [router]);
 
-  // Optionally protect certain routes based on role
+  // 2) once we know role, guard access
   useEffect(() => {
-    if (!isLoading && role) {
-      if (role === "staff") {
-        const restrictedRoutes = ["/admin", "/updatetest", "/pacakgedetail", "/package"];
-        if (restrictedRoutes.includes(pathname)) {
-          router.push("/");
-        }
-      } else if (role === "mini-admin") {
-        if (pathname === "/admin") {
-          router.push("/");
-        }
-      }
+    if (isLoading) return;     // still waiting on auth/role
+    if (!role) return;         // already sent to /login
+
+    const allowed = allowedRoutes[role];
+    if (!allowed) {
+      router.replace("/login");
+      return;
+    }
+    if (!allowed.includes(pathname)) {
+      router.replace("/");
     }
   }, [isLoading, role, pathname, router]);
 
-  // You can also pass `role` to your children via context if needed
+  // 3) while auth & role-loading, render a spinner
   if (isLoading) {
     return <div>Loading...</div>;
   }
 
+  // 4) passed all checks → render children
   return <>{children}</>;
 }

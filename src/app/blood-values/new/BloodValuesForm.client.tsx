@@ -82,6 +82,7 @@ interface SuggestPos {
   width: number;
 }
 
+
 /* ------------------------------------------------------------------ */
 const BloodValuesForm: React.FC = () => {
   const router = useRouter();
@@ -389,12 +390,29 @@ const BloodValuesForm: React.FC = () => {
       { shouldValidate: false }
     );
   };
+  const reportDate = new Date().toISOString();  // keeps both date & time
+
 
   /* ───────── Submit ───────── */
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
     try {
       for (const t of data.tests) {
         const key = t.testName.toLowerCase().replace(/\s+/g, "_").replace(/[.#$[\]]/g, "");
+
+
+     // ── 1) compute “now” once per submission
+           const now = new Date().toISOString();
+    
+            // ── 2) point at the existing record
+          const testRef = ref(database, `patients/${data.patientId}/bloodtest/${key}`);
+             const existingSnap = await get(testRef);
+             const existing = existingSnap.exists() ? existingSnap.val() : {};
+    
+             // ── 3) preserve old dates if present, else use now
+             const createdAt  = existing.createdAt  ?? now;
+             const reportedOn = existing.reportedOn ?? now;
+      
+
         const params = t.parameters
           .map((p) => {
             const subs = p.subparameters?.filter((sp) => sp.value !== "") ?? [];
@@ -410,11 +428,12 @@ const BloodValuesForm: React.FC = () => {
           })
           .filter(Boolean) as TestParameterValue[];
 
-        await set(ref(database, `patients/${data.patientId}/bloodtest/${key}`), {
-          parameters: params,
-          subheadings: t.subheadings || [],
-          createdAt: new Date().toISOString(),
-        });
+          await set(testRef, {
+                     parameters:  params,
+                     subheadings: t.subheadings || [],
+                     createdAt,            // old or now
+                      reportedOn,           // old or now
+                    });
       }
 
       alert("Saved!");

@@ -1,11 +1,13 @@
-"use client";
+"use client"
 
-import React, { useState, useEffect, useMemo } from "react";
-import Link from "next/link";
-import { database } from "../firebase";
-import { toWords } from 'number-to-words';
+import React, { useState, useEffect, useMemo } from "react"
+import Link from "next/link"
+import { database, auth } from "../firebase"
+import { toWords } from "number-to-words"
 
-import { ref, onValue, update, remove } from "firebase/database";
+import { ref, onValue, update, remove } from "firebase/database"
+import { ref as dbRef, onValue as onValueDb } from "firebase/database" // ← to fetch role
+
 import {
   UserIcon,
   ChartBarIcon,
@@ -13,132 +15,148 @@ import {
   UserGroupIcon,
   DocumentPlusIcon,
   ArrowDownTrayIcon,
-} from "@heroicons/react/24/outline";
-import letterhead from "../../public/bill.png";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
-import FakeBill from "./component/FakeBill";   // <-- Fake bill component
+} from "@heroicons/react/24/outline"
+import letterhead from "../../public/bill.png"
+import { jsPDF } from "jspdf"
+import autoTable from "jspdf-autotable"
+import FakeBill from "./component/FakeBill" // <-- Fake bill component
+import { onAuthStateChanged } from "firebase/auth"
+
+// ← adjust path if needed
 
 /* --------------------  Types  -------------------- */
 interface BloodTest {
-  testId: string;
-  testName: string;
-  price: number;
-  testType?: string;
+  testId: string
+  testName: string
+  price: number
+  testType?: string
 }
 
 interface Patient {
-  id: string;
-  name: string;
-  patientId: string;
-  age: number;
-  gender: string;
-  contact?: string;
-  createdAt: string;
-  doctorName: string;
-  discountAmount: number; // ₹ flat discount
-  amountPaid: number;
-  bloodTests?: BloodTest[];
-  bloodtest?: Record<string, any>;
-  report?: boolean;
-  sampleCollectedAt?: string;
-  paymentHistory?: { amount: number; paymentMode: string; time: string }[];
+  id: string
+  name: string
+  patientId: string
+  age: number
+  gender: string
+  contact?: string
+  createdAt: string
+  doctorName: string
+  discountAmount: number // ₹ flat discount
+  amountPaid: number
+  bloodTests?: BloodTest[]
+  bloodtest?: Record<string, any>
+  report?: boolean
+  sampleCollectedAt?: string
+  paymentHistory?: { amount: number; paymentMode: string; time: string }[]
 }
 
 /* --------------------  Utilities  -------------------- */
 const slugifyTestName = (name: string) =>
-  name.toLowerCase().replace(/\s+/g, "_").replace(/[.#$[\]]/g, "");
+  name
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[.#$[\]]/g, "")
 
 const isTestFullyEntered = (p: Patient, t: BloodTest): boolean => {
-  if (t.testType?.toLowerCase() === "outsource") return true;
-  if (!p.bloodtest) return false;
-  const data = p.bloodtest[slugifyTestName(t.testName)];
-  if (!data?.parameters) return false;
-  return data.parameters.every((par: any) => par.value !== "" && par.value != null);
-};
+  if (t.testType?.toLowerCase() === "outsource") return true
+  if (!p.bloodtest) return false
+  const data = p.bloodtest[slugifyTestName(t.testName)]
+  if (!data?.parameters) return false
+  return data.parameters.every((par: any) => par.value !== "" && par.value != null)
+}
 
 const isAllTestsComplete = (p: Patient) =>
-  !p.bloodTests?.length || p.bloodTests.every((bt) => isTestFullyEntered(p, bt));
+  !p.bloodTests?.length || p.bloodTests.every((bt) => isTestFullyEntered(p, bt))
 
 const calculateAmounts = (p: Patient) => {
-  const testTotal = p.bloodTests?.reduce((s, t) => s + t.price, 0) || 0;
-  const remaining = testTotal - Number(p.discountAmount || 0) - Number(p.amountPaid || 0);
-  return { testTotal, remaining };
-};
+  const testTotal = p.bloodTests?.reduce((s, t) => s + t.price, 0) || 0
+  const remaining = testTotal - Number(p.discountAmount || 0) - Number(p.amountPaid || 0)
+  return { testTotal, remaining }
+}
 
 /* --------------------  Component  -------------------- */
 export default function Dashboard() {
   /* --- state --- */
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [patients, setPatients] = useState<Patient[]>([])
   const [metrics, setMetrics] = useState({
     totalTests: 0,
     pendingReports: 0,
     completedTests: 0,
-  });
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [newAmountPaid, setNewAmountPaid] = useState<string>("");
-  const [paymentMode, setPaymentMode] = useState<string>("online");
-  const [searchTerm, setSearchTerm] = useState<string>("");
+  })
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
+  const [newAmountPaid, setNewAmountPaid] = useState<string>("")
+  const [paymentMode, setPaymentMode] = useState<string>("online")
+  const [searchTerm, setSearchTerm] = useState<string>("")
   // const [selectedDate, setSelectedDate] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null);
-  const [fakeBillPatient, setFakeBillPatient] = useState<Patient | null>(null); // <-- NEW
+  const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null)
+  const [fakeBillPatient, setFakeBillPatient] = useState<Patient | null>(null) // <-- NEW
 
   // ─────────────── add at top ───────────────
-const todayStr = new Date().toISOString().slice(0,10)   // "YYYY‑MM‑DD"
-const [startDate, setStartDate] = useState<string>(todayStr)
-const [endDate,   setEndDate]   = useState<string>(todayStr)
-// ─────────────────────────────────────────────
+  const todayStr = new Date().toISOString().slice(0, 10) // "YYYY‑MM‑DD"
+  const [startDate, setStartDate] = useState<string>(todayStr)
+  const [endDate, setEndDate] = useState<string>(todayStr)
+  // ─────────────────────────────────────────────
 
+  const [sampleModalPatient, setSampleModalPatient] = useState<Patient | null>(null)
+  const [sampleDateTime, setSampleDateTime] = useState<string>(() => new Date().toISOString().slice(0, 16))
   /* --- helpers --- */
-  const getRank = (p: Patient) => (!p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2);
+  const getRank = (p: Patient) => (!p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2)
 
   /* --- fetch patients --- */
   useEffect(() => {
     const unsub = onValue(ref(database, "patients"), (snap) => {
-      if (!snap.exists()) return;
+      if (!snap.exists()) return
       const arr: Patient[] = Object.entries<any>(snap.val()).map(([id, d]) => ({
         id,
         ...d,
         discountAmount: Number(d.discountAmount || 0),
         age: Number(d.age),
-      }));
+      }))
       arr.sort((a, b) => {
-        const r = getRank(a) - getRank(b);
-        return r !== 0 ? r : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      });
-      setPatients(arr);
+        const r = getRank(a) - getRank(b)
+        return r !== 0 ? r : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      })
+      setPatients(arr)
 
       /* metrics */
-      const total = arr.length;
-      const completed = arr.filter((p) => p.sampleCollectedAt && isAllTestsComplete(p)).length;
+      const total = arr.length
+      const completed = arr.filter((p) => p.sampleCollectedAt && isAllTestsComplete(p)).length
       setMetrics({
         totalTests: total,
         completedTests: completed,
         pendingReports: total - completed,
-      });
-    });
-    return unsub;
-  }, []);
+      })
+    })
+    return unsub
+  }, [])
+
+  const [role, setRole] = useState<string>("staff")
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user) return
+      const roleRef = dbRef(database, `user/${user.uid}/role`)
+      onValueDb(roleRef, (snap) => {
+        const r = snap.val()
+        setRole(r || "staff")
+      })
+    })
+    return () => unsub()
+  }, [])
 
   /* --- filters --- */
   const filteredPatients = useMemo(() => {
     return patients.filter((p) => {
       const term = searchTerm.trim().toLowerCase()
-      const matchesSearch =
-        !term ||
-        p.name.toLowerCase().includes(term) ||
-        (p.contact ?? "").includes(term)
-  
+      const matchesSearch = !term || p.name.toLowerCase().includes(term) || (p.contact ?? "").includes(term)
+
       // ← new: only include patients created between startDate and endDate
-      const created = p.createdAt.slice(0,10)      // "YYYY‑MM‑DD"
-      const inRange =
-        (!startDate || created >= startDate) &&
-        (!endDate   || created <= endDate)
-  
+      const created = p.createdAt.slice(0, 10) // "YYYY‑MM‑DD"
+      const inRange = (!startDate || created >= startDate) && (!endDate || created <= endDate)
+
       // your existing status logic...
       const sampleCollected = !!p.sampleCollectedAt
-      const complete        = isAllTestsComplete(p)
+      const complete = isAllTestsComplete(p)
       let matchesStatus = true
       switch (statusFilter) {
         case "notCollected":
@@ -151,131 +169,147 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
           matchesStatus = sampleCollected && complete
           break
       }
-  
+
       return matchesSearch && inRange && matchesStatus
     })
   }, [patients, searchTerm, startDate, endDate, statusFilter])
-  
+
   useEffect(() => {
-    const total     = filteredPatients.length;
-    const completed = filteredPatients.filter(
-      p => p.sampleCollectedAt && isAllTestsComplete(p)
-    ).length;
-    const pending   = total - completed;
+    const total = filteredPatients.length
+    const completed = filteredPatients.filter((p) => p.sampleCollectedAt && isAllTestsComplete(p)).length
+    const pending = total - completed
 
     setMetrics({
-      totalTests:     total,
+      totalTests: total,
       completedTests: completed,
       pendingReports: pending,
-    });
-  }, [filteredPatients]);
+    })
+  }, [filteredPatients])
   /* --- actions --- */
+
+  const handleSaveSampleDate = async () => {
+    if (!sampleModalPatient) return
+    try {
+      await update(ref(database, `patients/${sampleModalPatient.id}`), {
+        sampleCollectedAt: new Date(sampleDateTime).toISOString(),
+      })
+      alert(`Sample time updated for ${sampleModalPatient.name}`)
+    } catch (e) {
+      console.error(e)
+      alert("Error saving sample time.")
+    } finally {
+      setSampleModalPatient(null)
+    }
+  }
+
   const handleCollectSample = async (p: Patient) => {
     try {
-      await update(ref(database, `patients/${p.id}`), { sampleCollectedAt: new Date().toISOString() });
-      alert(`Sample collected for ${p.name}!`);
+      await update(ref(database, `patients/${p.id}`), { sampleCollectedAt: new Date().toISOString() })
+      alert(`Sample collected for ${p.name}!`)
     } catch (e) {
-      console.error(e);
-      alert("Error collecting sample.");
+      console.error(e)
+      alert("Error collecting sample.")
     }
-  };
-  
+  }
 
   const handleDeletePatient = async (p: Patient) => {
-    if (!confirm(`Delete ${p.name}?`)) return;
+    if (!confirm(`Delete ${p.name}?`)) return
     try {
-      await remove(ref(database, `patients/${p.id}`));
-      if (expandedPatientId === p.id) setExpandedPatientId(null);
-      alert("Deleted!");
+      await remove(ref(database, `patients/${p.id}`))
+      if (expandedPatientId === p.id) setExpandedPatientId(null)
+      alert("Deleted!")
     } catch (e) {
-      console.error(e);
-      alert("Error deleting.");
+      console.error(e)
+      alert("Error deleting.")
     }
-  };
+  }
 
   const handleUpdateAmount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedPatient) return;
+    e.preventDefault()
+    if (!selectedPatient) return
     // parse the string, default to 0 if empty or invalid
-    const added = parseFloat(newAmountPaid) || 0;
-    const updatedAmountPaid = selectedPatient.amountPaid + added;
-  
+    const added = Number.parseFloat(newAmountPaid) || 0
+    const updatedAmountPaid = selectedPatient.amountPaid + added
+
     await update(ref(database, `patients/${selectedPatient.id}`), {
       amountPaid: updatedAmountPaid,
       paymentHistory: [
         ...(selectedPatient.paymentHistory || []),
         { amount: added, paymentMode, time: new Date().toISOString() },
       ],
-    });
+    })
     // reset the field back to empty string
-    setNewAmountPaid("");
-    setSelectedPatient(null);
-    setPaymentMode("online");
-    alert("Payment updated!");
-  };
-  
+    setNewAmountPaid("")
+    setSelectedPatient(null)
+    setPaymentMode("online")
+    alert("Payment updated!")
+  }
 
+  const format12Hour = (iso: string) =>
+    new Date(iso).toLocaleString("en-US", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
   /* --- download bill (real) --- */
   const handleDownloadBill = () => {
-    if (!selectedPatient) return;
-  
-    const img = new Image();
-    img.src = (letterhead as any).src ?? (letterhead as any);
+    if (!selectedPatient) return
+
+    const img = new Image()
+    img.src = (letterhead as any).src ?? (letterhead as any)
     img.onload = () => {
       // Draw letterhead into a canvas to get a data URL
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0);
-      const bgDataUrl = canvas.toDataURL("image/jpeg", 0.5); // 50% quality
-  
+      const canvas = document.createElement("canvas")
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx = canvas.getContext("2d")!
+      ctx.drawImage(img, 0, 0)
+      const bgDataUrl = canvas.toDataURL("image/jpeg", 0.5) // 50% quality
+
       // Create PDF
-      const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-      const pageW = doc.internal.pageSize.getWidth();
-      const pageH = doc.internal.pageSize.getHeight();
-  
-      doc.addImage(bgDataUrl, "JPEG", 0, 0, pageW, pageH);
-      doc.setFont("helvetica", "normal").setFontSize(12);
-  
+      const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" })
+      const pageW = doc.internal.pageSize.getWidth()
+      const pageH = doc.internal.pageSize.getHeight()
+
+      doc.addImage(bgDataUrl, "JPEG", 0, 0, pageW, pageH)
+      doc.setFont("helvetica", "normal").setFontSize(12)
+
       // Patient details two‐column layout
-      const margin = 14;
-      const colMid = pageW / 2;
-      const leftKeyX = margin;
-      const leftColonX = margin + 40;
-      const leftValueX = margin + 44;
-      const rightKeyX = colMid + margin;
-      const rightColonX = colMid + margin + 40;
-      const rightValueX = colMid + margin + 44;
-  
-      let y = 70;
+      const margin = 14
+      const colMid = pageW / 2
+      const leftKeyX = margin
+      const leftColonX = margin + 40
+      const leftValueX = margin + 44
+      const rightKeyX = colMid + margin
+      const rightColonX = colMid + margin + 40
+      const rightValueX = colMid + margin + 44
+
+      let y = 70
       const drawRow = (kL: string, vL: string, kR: string, vR: string) => {
-        doc.text(kL, leftKeyX, y);
-        doc.text(":", leftColonX, y);
-        doc.text(vL, leftValueX, y);
-        doc.text(kR, rightKeyX, y);
-        doc.text(":", rightColonX, y);
-        doc.text(vR, rightValueX, y);
-        y += 6;
-      };
-  
-      drawRow("Name", selectedPatient.name, "Patient ID", selectedPatient.patientId);
+        doc.text(kL, leftKeyX, y)
+        doc.text(":", leftColonX, y)
+        doc.text(vL, leftValueX, y)
+        doc.text(kR, rightKeyX, y)
+        doc.text(":", rightColonX, y)
+        doc.text(vR, rightValueX, y)
+        y += 6
+      }
+
+      drawRow("Name", selectedPatient.name, "Patient ID", selectedPatient.patientId)
       drawRow(
         "Age / Gender",
         `${selectedPatient.age} y / ${selectedPatient.gender}`,
         "Registration Date",
-        new Date(selectedPatient.createdAt).toLocaleDateString()
-      );
-      drawRow(
-        "Ref. Doctor",
-        selectedPatient.doctorName ?? "N/A",
-        "Contact",
-        selectedPatient.contact ?? "N/A"
-      );
-      y += 4;
-  
+        new Date(selectedPatient.createdAt).toLocaleDateString(),
+      )
+      drawRow("Ref. Doctor", selectedPatient.doctorName ?? "N/A", "Contact", selectedPatient.contact ?? "N/A")
+      y += 4
+
       // Tests table
-      const rows = selectedPatient.bloodTests?.map(t => [t.testName, t.price.toFixed(2)]) ?? [];
+      const rows = selectedPatient.bloodTests?.map((t) => [t.testName, t.price.toFixed(2)]) ?? []
       autoTable(doc, {
         head: [["Test Name", "Amount"]],
         body: rows,
@@ -285,13 +319,13 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
         headStyles: { fillColor: [30, 79, 145], fontStyle: "bold" },
         columnStyles: { 1: { fontStyle: "bold" } },
         margin: { left: margin, right: margin },
-      });
-      y = (doc as any).lastAutoTable.finalY + 10;
-  
+      })
+      y = (doc as any).lastAutoTable.finalY + 10
+
       // Summary & amount in words
-      const { testTotal, remaining } = calculateAmounts(selectedPatient);
-      const remainingWords = toWords(Math.round(remaining));
-  
+      const { testTotal, remaining } = calculateAmounts(selectedPatient)
+      const remainingWords = toWords(Math.round(remaining))
+
       autoTable(doc, {
         head: [["Description", "Amount"]],
         body: [
@@ -305,33 +339,30 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
         styles: { font: "helvetica", fontSize: 11 },
         columnStyles: { 1: { fontStyle: "bold" } },
         margin: { left: margin, right: margin },
-      });
-      y = (doc as any).lastAutoTable.finalY + 8;
-  
+      })
+      y = (doc as any).lastAutoTable.finalY + 8
+
       // Print remaining in words, right-aligned
       doc
         .setFont("helvetica", "normal")
         .setFontSize(10)
-        .text(
-          `(${remainingWords.charAt(0).toUpperCase() + remainingWords.slice(1)} only)`,
-          pageW - margin,
-          y,
-          { align: "right" }
-        );
-      y += 12;
-  
+        .text(`(${remainingWords.charAt(0).toUpperCase() + remainingWords.slice(1)} only)`, pageW - margin, y, {
+          align: "right",
+        })
+      y += 12
+
       // Footer
       doc
         .setFont("helvetica", "italic")
         .setFontSize(10)
-        .text("Thank you for choosing our services!", pageW / 2, y, { align: "center" });
-  
+        .text("Thank you for choosing our services!", pageW / 2, y, { align: "center" })
+
       // Save PDF
-      doc.save(`Bill_${selectedPatient.name}.pdf`);
-    };
-  
-    img.onerror = () => alert("Failed to load letterhead image.");
-  };
+      doc.save(`Bill_${selectedPatient.name}.pdf`)
+    }
+
+    img.onerror = () => alert("Failed to load letterhead image.")
+  }
 
   /* --------------------  RENDER  -------------------- */
   return (
@@ -350,20 +381,20 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
             onChange={(e) => setSearchTerm(e.target.value)}
             className="p-2 border rounded-md"
           />
-        {/* ───────────── date range inputs ───────────── */}
-<input
-  type="date"
-  value={startDate}
-  onChange={e => setStartDate(e.target.value)}
-  className="p-2 border rounded-md"
-/>
-<input
-  type="date"
-  value={endDate}
-  onChange={e => setEndDate(e.target.value)}
-  className="p-2 border rounded-md"
-/>
-{/* ────────────────────────────────────────────── */}
+          {/* ───────────── date range inputs ───────────── */}
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="p-2 border rounded-md"
+          />
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="p-2 border rounded-md"
+          />
+          {/* ────────────────────────────────────────────── */}
 
           <select
             value={statusFilter}
@@ -420,27 +451,18 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50">
-                {["Patient", "Tests", "Entry Date", "Status", "Remaining", "Actions"].map(
-                  (h) => (
-                    <th
-                      key={h}
-                      className="px-6 py-3 text-left text-sm font-medium text-gray-500"
-                    >
-                      {h}
-                    </th>
-                  ),
-                )}
+                {["Patient", "Tests", "Entry Date", "Status", "Remaining", "Actions"].map((h) => (
+                  <th key={h} className="px-6 py-3 text-left text-sm font-medium text-gray-500">
+                    {h}
+                  </th>
+                ))}
               </thead>
               <tbody className="divide-y">
                 {filteredPatients.map((p) => {
-                  const sampleCollected = !!p.sampleCollectedAt;
-                  const complete = isAllTestsComplete(p);
-                  const status = !sampleCollected
-                    ? "Not Collected"
-                    : complete
-                    ? "Completed"
-                    : "Pending";
-                  const { remaining } = calculateAmounts(p);
+                  const sampleCollected = !!p.sampleCollectedAt
+                  const complete = isAllTestsComplete(p)
+                  const status = !sampleCollected ? "Not Collected" : complete ? "Completed" : "Pending"
+                  const { remaining } = calculateAmounts(p)
 
                   return (
                     <React.Fragment key={p.id}>
@@ -455,26 +477,19 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
                           {p.bloodTests?.length ? (
                             <ul className="list-disc pl-4">
                               {p.bloodTests.map((t) => {
-                                const done =
-                                  t.testType?.toLowerCase() === "outsource" ||
-                                  isTestFullyEntered(p, t);
+                                const done = t.testType?.toLowerCase() === "outsource" || isTestFullyEntered(p, t)
                                 return (
-                                  <li
-                                    key={t.testId}
-                                    className={done ? "text-green-600" : "text-red-500"}
-                                  >
+                                  <li key={t.testId} className={done ? "text-green-600" : "text-red-500"}>
                                     {t.testName}
                                   </li>
-                                );
+                                )
                               })}
                             </ul>
                           ) : (
                             <span className="text-gray-400">No tests</span>
                           )}
                         </td>
-                        <td className="px-6 py-4 text-sm">
-                          {new Date(p.createdAt).toLocaleDateString()}
-                        </td>
+                        <td className="px-6 py-4 text-sm">{new Date(p.createdAt).toLocaleDateString()}</td>
                         <td className="px-6 py-4">
                           {status === "Not Collected" && (
                             <span className="px-3 py-1 text-xs rounded-full bg-red-100 text-red-800">
@@ -482,9 +497,7 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
                             </span>
                           )}
                           {status === "Pending" && (
-                            <span className="px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800">
-                              Pending
-                            </span>
+                            <span className="px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800">Pending</span>
                           )}
                           {status === "Completed" && (
                             <span className="px-3 py-1 text-xs rounded-full bg-green-100 text-green-800">
@@ -494,18 +507,14 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
                         </td>
                         <td className="px-6 py-4 text-sm">
                           {remaining > 0 ? (
-                            <span className="text-red-600 font-bold">
-                              ₹{remaining.toFixed(2)}
-                            </span>
+                            <span className="text-red-600 font-bold">₹{remaining.toFixed(2)}</span>
                           ) : (
                             "0"
                           )}
                         </td>
                         <td className="px-6 py-4">
                           <button
-                            onClick={() =>
-                              setExpandedPatientId(expandedPatientId === p.id ? null : p.id)
-                            }
+                            onClick={() => setExpandedPatientId(expandedPatientId === p.id ? null : p.id)}
                             className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700"
                           >
                             Actions
@@ -517,91 +526,156 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
                         <tr>
                           <td colSpan={6} className="bg-gray-50">
                             <div className="p-4 flex flex-wrap gap-2">
-                              {!sampleCollected && (
-                                <button
-                                  onClick={() => handleCollectSample(p)}
-                                  className="px-4 py-2 bg-red-600 text-white rounded-md text-sm hover:bg-red-700"
-                                >
-                                  Collect Sample
-                                </button>
+                              {sampleModalPatient && (
+                                <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+                                  <div className="bg-white rounded-xl shadow-lg max-w-sm w-full p-6 relative">
+                                    <button
+                                      onClick={() => setSampleModalPatient(null)}
+                                      className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+                                    >
+                                      ✕
+                                    </button>
+                                    <h3 className="text-lg font-semibold mb-4">
+                                      Set Sample Collected Time for {sampleModalPatient.name}
+                                    </h3>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                      Date &amp; Time
+                                    </label>
+                                    <input
+                                      type="datetime-local"
+                                      value={sampleDateTime}
+                                      onChange={(e) => setSampleDateTime(e.target.value)}
+                                      className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
+                                    />
+                                    <p className="mt-2 text-sm text-gray-600">
+                                      Selected: {format12Hour(sampleDateTime)}
+                                    </p>
+
+                                    <div className="mt-6 flex justify-end space-x-2">
+                                      <button
+                                        onClick={() => setSampleModalPatient(null)}
+                                        className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
+                                      >
+                                        Cancel
+                                      </button>
+                                      <button
+                                        onClick={handleSaveSampleDate}
+                                        className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                                      >
+                                        Save
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
                               )}
 
-                              {sampleCollected && (
-                                <Link
-                                  href={`/download-report?patientId=${p.id}`}
-                                  className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700"
-                                >
-                                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                                  Download Report
-                                </Link>
+                              {/* Show only Download Report button for phlebotomist role */}
+                              {role === "phlebotomist" ? (
+                                <>
+                                  {sampleCollected && (
+                                    <Link
+                                      href={`/download-report?patientId=${p.id}`}
+                                      className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700"
+                                    >
+                                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                      Download Report
+                                    </Link>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  {/* Original buttons for other roles */}
+                                  {!sampleCollected && (
+                                    <button
+                                      onClick={() => {
+                                        setSampleModalPatient(p)
+                                        // pre-fill picker with "now"
+                                        setSampleDateTime(new Date().toISOString().slice(0, 16))
+                                      }}
+                                      className="px-4 py-2 bg-red-600 text-white rounded-md text-sm hover:bg-red-700"
+                                    >
+                                      Collect Sample
+                                    </button>
+                                  )}
+
+                                  {sampleCollected && (
+                                    <Link
+                                      href={`/download-report?patientId=${p.id}`}
+                                      className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700"
+                                    >
+                                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                      Download Report
+                                    </Link>
+                                  )}
+
+                                  {sampleCollected && !complete && (
+                                    <Link
+                                      href={`/blood-values/new?patientId=${p.id}`}
+                                      className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
+                                    >
+                                      <DocumentPlusIcon className="h-4 w-4 mr-2" />
+                                      Add/Edit Values
+                                    </Link>
+                                  )}
+
+                                  {sampleCollected && complete && (
+                                    <Link
+                                      href={`/blood-values/new?patientId=${p.id}`}
+                                      className="inline-flex items-center px-4 py-2 bg-blue-500 text-white rounded-md text-sm hover:bg-blue-600"
+                                    >
+                                      Edit Test
+                                    </Link>
+                                  )}
+
+                                  <button
+                                    onClick={() => {
+                                      setSelectedPatient(p)
+                                      setNewAmountPaid("")
+                                    }}
+                                    className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700"
+                                  >
+                                    Update Payment
+                                  </button>
+
+                                  {selectedPatient?.id === p.id && (
+                                    <button
+                                      onClick={handleDownloadBill}
+                                      className="inline-flex items-center px-4 py-2 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700"
+                                    >
+                                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                      Download Bill
+                                    </button>
+                                  )}
+
+                                  {/* ---- Generate Fake Bill button ---- */}
+                                  <button
+                                    onClick={() => setFakeBillPatient(p)}
+                                    className="px-4 py-2 bg-purple-600 text-white rounded-md text-sm hover:bg-purple-700"
+                                  >
+                                    Generate Bill
+                                  </button>
+
+                                  <Link
+                                    href={`/patient-detail?patientId=${p.id}`}
+                                    className="px-4 py-2 bg-orange-600 text-white rounded-md text-sm hover:bg-orange-700"
+                                  >
+                                    Edit Details
+                                  </Link>
+
+                                  <button
+                                    onClick={() => handleDeletePatient(p)}
+                                    className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm hover:bg-gray-700"
+                                  >
+                                    Delete
+                                  </button>
+                                </>
                               )}
-
-                              {sampleCollected && !complete && (
-                                <Link
-                                  href={`/blood-values/new?patientId=${p.id}`}
-                                  className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
-                                >
-                                  <DocumentPlusIcon className="h-4 w-4 mr-2" />
-                                  Add/Edit Values
-                                </Link>
-                              )}
-
-                              {sampleCollected && complete && (
-                                <Link
-                                  href={`/blood-values/new?patientId=${p.id}`}
-                                  className="inline-flex items-center px-4 py-2 bg-blue-500 text-white rounded-md text-sm hover:bg-blue-600"
-                                >
-                                  Edit Test
-                                </Link>
-                              )}
-
-                              <button
-                                onClick={() => {
-                                  setSelectedPatient(p);
-                                  setNewAmountPaid("");
-                                }}
-                                className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700"
-                              >
-                                Update Payment
-                              </button>
-
-                              {selectedPatient?.id === p.id && (
-                                <button
-                                  onClick={handleDownloadBill}
-                                  className="inline-flex items-center px-4 py-2 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700"
-                                >
-                                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                                  Download Bill
-                                </button>
-                              )}
-
-                              {/* ---- Generate Fake Bill button ---- */}
-                              <button
-                                onClick={() => setFakeBillPatient(p)}
-                                className="px-4 py-2 bg-purple-600 text-white rounded-md text-sm hover:bg-purple-700"
-                              >
-                                Generate  Bill
-                              </button>
-
-                              <Link
-                                href={`/patient-detail?patientId=${p.id}`}
-                                className="px-4 py-2 bg-orange-600 text-white rounded-md text-sm hover:bg-orange-700"
-                              >
-                                Edit Details
-                              </Link>
-
-                              <button
-                                onClick={() => handleDeletePatient(p)}
-                                className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm hover:bg-gray-700"
-                              >
-                                Delete
-                              </button>
                             </div>
                           </td>
                         </tr>
                       )}
                     </React.Fragment>
-                  );
+                  )
                 })}
               </tbody>
             </table>
@@ -622,12 +696,10 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
             >
               ✕
             </button>
-            <h3 className="text-xl font-semibold mb-4">
-              Update Payment for {selectedPatient.name}
-            </h3>
+            <h3 className="text-xl font-semibold mb-4">Update Payment for {selectedPatient.name}</h3>
 
             {(() => {
-              const { testTotal, remaining } = calculateAmounts(selectedPatient);
+              const { testTotal, remaining } = calculateAmounts(selectedPatient)
               return (
                 <div className="mb-4 space-y-2 text-sm">
                   <div className="flex justify-between">
@@ -647,7 +719,7 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
                     <span>₹{remaining.toFixed(2)}</span>
                   </div>
                 </div>
-              );
+              )
             })()}
 
             <div className="mb-4">
@@ -661,19 +733,17 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
 
             <form onSubmit={handleUpdateAmount}>
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700">
-                  Additional Payment (Rs)
-                </label>
+                <label className="block text-sm font-medium text-gray-700">Additional Payment (Rs)</label>
                 <input
-       type="number"
-       step="0.01"
-       // now a string, so you can clear it
-       value={newAmountPaid}
-       onChange={(e) => setNewAmountPaid(e.target.value)}
-       className="mt-1 w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
-       placeholder="Enter amount"   // removes the forced 0
-     required
-     />
+                  type="number"
+                  step="0.01"
+                  // now a string, so you can clear it
+                  value={newAmountPaid}
+                  onChange={(e) => setNewAmountPaid(e.target.value)}
+                  className="mt-1 w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Enter amount" // removes the forced 0
+                  required
+                />
               </div>
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700">Payment Mode</label>
@@ -698,9 +768,7 @@ const [endDate,   setEndDate]   = useState<string>(todayStr)
       )}
 
       {/* Fake Bill modal */}
-      {fakeBillPatient && (
-        <FakeBill patient={fakeBillPatient} onClose={() => setFakeBillPatient(null)} />
-      )}
+      {fakeBillPatient && <FakeBill patient={fakeBillPatient} onClose={() => setFakeBillPatient(null)} />}
     </div>
-  );
+  )
 }
