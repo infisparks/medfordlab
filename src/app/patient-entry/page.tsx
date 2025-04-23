@@ -75,32 +75,38 @@ interface PatientSuggestion {
 
 
 async function generatePatientId(): Promise<string> {
-  const now  = new Date();
-  const yyyy = now.getFullYear();
-  const mm   = String(now.getMonth() + 1).padStart(2, "0");
+  const now  = new Date()
+  const yyyy = now.getFullYear()
+  const mm   = String(now.getMonth() + 1).padStart(2, "0")
+  const dd   = String(now.getDate()).padStart(2, "0")
 
-  // now we only reset per month
-  const prefix = `${yyyy}${mm}`; // e.g. "202504" for April 2025
+  // Use only YYYYMM as the key for transactional counter
+  const monthKey = `${yyyy}${mm}`         // e.g. "202504"
+  const counterRef = ref(database, "patientIdPattern/monthlyKey")
 
-  const counterRef = ref(database, "patientIdPattern/patientIdKey");
   const result = await runTransaction(counterRef, (current: string | null) => {
-    // if no key yet, or it's from a different month, start at 0001
-    if (!current || !current.startsWith(prefix + "-")) {
-      return `${prefix}-0001`;
+    // first run this month → start at 0001
+    if (!current || !current.startsWith(monthKey + "-")) {
+      return `${monthKey}-0001`
     } else {
       // bump the 4-digit sequence
-      const [, seq] = current.split("-");
-      const nextSeq = String(parseInt(seq, 10) + 1).padStart(4, "0");
-      return `${prefix}-${nextSeq}`;
+      const [, seq] = current.split("-")
+      const nextSeq = String(parseInt(seq, 10) + 1).padStart(4, "0")
+      return `${monthKey}-${nextSeq}`
     }
-  });
+  })
 
   if (!result.committed || !result.snapshot.val()) {
-    throw new Error("Failed to generate patient ID");
+    throw new Error("Failed to generate patient ID")
   }
-  return result.snapshot.val() as string;
-}
 
+  // extract just the sequence portion
+  const fullKey = result.snapshot.val() as string  // e.g. "202504-0023"
+  const seq     = fullKey.split("-")[1]            // "0023"
+
+  // return full-date id: YYYYMMDD-#### 
+  return `${yyyy}${mm}${dd}-${seq}`               // e.g. "20250422-0023"
+}
 
 /* ─────────────────── Main Component ─────────────────── */
 const PatientEntryForm: React.FC = () => {
