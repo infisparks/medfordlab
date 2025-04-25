@@ -10,7 +10,8 @@ import {
   Path,
 } from "react-hook-form";
 import { useSearchParams, useRouter } from "next/navigation";
-import { database } from "../../../firebase";
+import { database ,auth  } from "../../../firebase";
+
 import { ref, get, set } from "firebase/database";
 import {
   FiDroplet,
@@ -395,7 +396,12 @@ const BloodValuesForm: React.FC = () => {
 
   /* ───────── Submit ───────── */
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
+    
     try {
+
+      const fullEmail = auth.currentUser?.email ?? "";
+// ── strip off everything from the "@"
+const enteredBy = fullEmail.split("@")[0];
       for (const t of data.tests) {
         const key = t.testName.toLowerCase().replace(/\s+/g, "_").replace(/[.#$[\]]/g, "");
 
@@ -432,7 +438,8 @@ const BloodValuesForm: React.FC = () => {
                      parameters:  params,
                      subheadings: t.subheadings || [],
                      createdAt,            // old or now
-                      reportedOn,           // old or now
+                      reportedOn,          
+                      enteredBy,     // old or now
                     });
       }
 

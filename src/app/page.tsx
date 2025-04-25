@@ -48,6 +48,8 @@ interface Patient {
   report?: boolean
   sampleCollectedAt?: string
   paymentHistory?: { amount: number; paymentMode: string; time: string }[]
+  deleteRequest?: { reason: string; requestedBy: string; requestedAt: string }
+  deleted?: boolean
 }
 
 /* --------------------  Utilities  -------------------- */
@@ -74,6 +76,17 @@ const calculateAmounts = (p: Patient) => {
   return { testTotal, remaining }
 }
 
+const calculateTotalsForSelected = (selectedIds: string[], patients: Patient[]) => {
+  const selected = patients.filter((p) => selectedIds.includes(p.id))
+  const totalAmount = selected.reduce((sum, p) => {
+    const { testTotal } = calculateAmounts(p)
+    return sum + testTotal
+  }, 0)
+  const totalPaid = selected.reduce((sum, p) => sum + Number(p.amountPaid || 0), 0)
+  const totalDiscount = selected.reduce((sum, p) => sum + Number(p.discountAmount || 0), 0)
+  return { totalAmount, totalPaid, totalDiscount, remaining: totalAmount - totalPaid - totalDiscount }
+}
+
 /* --------------------  Component  -------------------- */
 export default function Dashboard() {
   /* --- state --- */
@@ -91,6 +104,9 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null)
   const [fakeBillPatient, setFakeBillPatient] = useState<Patient | null>(null) // <-- NEW
+  const [selectedPatients, setSelectedPatients] = useState<string[]>([])
+  const [selectAll, setSelectAll] = useState(false)
+  const [showCheckboxes, setShowCheckboxes] = useState<boolean>(false)
 
   // ─────────────── add at top ───────────────
   const todayStr = new Date().toISOString().slice(0, 10) // "YYYY‑MM‑DD"
@@ -100,6 +116,14 @@ export default function Dashboard() {
 
   const [sampleModalPatient, setSampleModalPatient] = useState<Patient | null>(null)
   const [sampleDateTime, setSampleDateTime] = useState<string>(() => new Date().toISOString().slice(0, 16))
+
+  const [deleteRequestPatients, setDeleteRequestPatients] = useState<
+    Record<string, { reason: string; requestedBy: string }>
+  >({})
+  const [deletedPatients, setDeletedPatients] = useState<string[]>([])
+  const [deleteReason, setDeleteReason] = useState<string>("")
+  const [deleteRequestModalPatient, setDeleteRequestModalPatient] = useState<Patient | null>(null)
+
   /* --- helpers --- */
   const getRank = (p: Patient) => (!p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2)
 
@@ -113,6 +137,27 @@ export default function Dashboard() {
         discountAmount: Number(d.discountAmount || 0),
         age: Number(d.age),
       }))
+
+      // Extract delete requests and deleted status
+      const deleteRequests: Record<string, { reason: string; requestedBy: string }> = {}
+      const deleted: string[] = []
+
+      arr.forEach((p) => {
+        if (p.deleteRequest) {
+          deleteRequests[p.id] = {
+            reason: p.deleteRequest.reason,
+            requestedBy: p.deleteRequest.requestedBy,
+          }
+        }
+
+        if (p.deleted) {
+          deleted.push(p.id)
+        }
+      })
+
+      setDeleteRequestPatients(deleteRequests)
+      setDeletedPatients(deleted)
+
       arr.sort((a, b) => {
         const r = getRank(a) - getRank(b)
         return r !== 0 ? r : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -147,6 +192,11 @@ export default function Dashboard() {
   /* --- filters --- */
   const filteredPatients = useMemo(() => {
     return patients.filter((p) => {
+      // Filter out deleted patients for non-admin users
+      if (deletedPatients.includes(p.id) && role !== "admin") {
+        return false
+      }
+
       const term = searchTerm.trim().toLowerCase()
       const matchesSearch = !term || p.name.toLowerCase().includes(term) || (p.contact ?? "").includes(term)
 
@@ -172,7 +222,7 @@ export default function Dashboard() {
 
       return matchesSearch && inRange && matchesStatus
     })
-  }, [patients, searchTerm, startDate, endDate, statusFilter])
+  }, [patients, searchTerm, startDate, endDate, statusFilter, deletedPatients, role])
 
   useEffect(() => {
     const total = filteredPatients.length
@@ -254,6 +304,22 @@ export default function Dashboard() {
       minute: "2-digit",
       hour12: true,
     })
+
+  const handleToggleSelectAll = () => {
+    if (selectAll) {
+      setSelectedPatients([])
+    } else {
+      setSelectedPatients(filteredPatients.map((p) => p.id))
+    }
+    setSelectAll(!selectAll)
+  }
+
+  const handleToggleSelect = (patientId: string) => {
+    setSelectedPatients((prev) =>
+      prev.includes(patientId) ? prev.filter((id) => id !== patientId) : [...prev, patientId],
+    )
+  }
+
   /* --- download bill (real) --- */
   const handleDownloadBill = () => {
     if (!selectedPatient) return
@@ -364,6 +430,240 @@ export default function Dashboard() {
     img.onerror = () => alert("Failed to load letterhead image.")
   }
 
+  const handleDownloadMultipleBills = () => {
+    if (selectedPatients.length === 0) {
+      alert("Please select at least one patient")
+      return
+    }
+
+    const selectedPatientsData = patients.filter((p) => selectedPatients.includes(p.id))
+
+    // Group patients by date
+    const patientsByDate = selectedPatientsData.reduce(
+      (acc, patient) => {
+        const date = patient.createdAt.slice(0, 10)
+        if (!acc[date]) acc[date] = []
+        acc[date].push(patient)
+        return acc
+      },
+      {} as Record<string, Patient[]>,
+    )
+
+    // Sort dates
+    const sortedDates = Object.keys(patientsByDate).sort()
+
+    // Calculate totals
+    const { totalAmount, totalPaid, totalDiscount, remaining } = calculateTotalsForSelected(selectedPatients, patients)
+
+    const img = new Image()
+    img.src = (letterhead as any).src ?? (letterhead as any)
+    img.onload = () => {
+      // Draw letterhead into a canvas to get a data URL
+      const canvas = document.createElement("canvas")
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx = canvas.getContext("2d")!
+      ctx.drawImage(img, 0, 0)
+      const bgDataUrl = canvas.toDataURL("image/jpeg", 0.5) // 50% quality
+
+      // Create PDF
+      const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" })
+      const pageW = doc.internal.pageSize.getWidth()
+      const pageH = doc.internal.pageSize.getHeight()
+
+      // Skip summary pages and go directly to individual patient bills
+      sortedDates.forEach((date) => {
+        const patientsOnDate = patientsByDate[date]
+
+        // Individual patient bills
+        patientsOnDate.forEach((patient) => {
+          // For the first patient, use the first page
+          if (date === sortedDates[0] && patient === patientsOnDate[0]) {
+            doc.addImage(bgDataUrl, "JPEG", 0, 0, pageW, pageH)
+          } else {
+            // For subsequent patients, add a new page
+            doc.addPage()
+            doc.addImage(bgDataUrl, "JPEG", 0, 0, pageW, pageH)
+          }
+
+          doc.setFont("helvetica", "normal").setFontSize(12)
+
+          // Patient details two‐column layout
+          const margin = 14
+          const colMid = pageW / 2
+          const leftKeyX = margin
+          const leftColonX = margin + 40
+          const leftValueX = margin + 44
+          const rightKeyX = colMid + margin
+          const rightColonX = colMid + margin + 40
+          const rightValueX = colMid + margin + 44
+
+          let y = 70
+          const drawRow = (kL: string, vL: string, kR: string, vR: string) => {
+            doc.text(kL, leftKeyX, y)
+            doc.text(":", leftColonX, y)
+            doc.text(vL, leftValueX, y)
+            doc.text(kR, rightKeyX, y)
+            doc.text(":", rightColonX, y)
+            doc.text(vR, rightValueX, y)
+            y += 6
+          }
+
+          drawRow("Name", patient.name, "Patient ID", patient.patientId)
+          drawRow(
+            "Age / Gender",
+            `${patient.age} y / ${patient.gender}`,
+            "Registration Date",
+            new Date(patient.createdAt).toLocaleDateString(),
+          )
+          drawRow("Ref. Doctor", patient.doctorName ?? "N/A", "Contact", patient.contact ?? "N/A")
+          y += 4
+
+          // Tests table
+          const rows = patient.bloodTests?.map((t) => [t.testName, t.price.toFixed(2)]) ?? []
+          autoTable(doc, {
+            head: [["Test Name", "Amount"]],
+            body: rows,
+            startY: y,
+            theme: "grid",
+            styles: { font: "helvetica", fontSize: 11 },
+            headStyles: { fillColor: [30, 79, 145], fontStyle: "bold" },
+            columnStyles: { 1: { fontStyle: "bold" } },
+            margin: { left: margin, right: margin },
+          })
+          y = (doc as any).lastAutoTable.finalY + 10
+
+          // Summary & amount in words
+          const { testTotal, remaining } = calculateAmounts(patient)
+          const remainingWords = toWords(Math.round(remaining))
+
+          autoTable(doc, {
+            head: [["Description", "Amount"]],
+            body: [
+              ["Test Total", testTotal.toFixed(2)],
+              ["Discount", patient.discountAmount.toFixed(2)],
+              ["Amount Paid", patient.amountPaid.toFixed(2)],
+              ["Remaining", remaining.toFixed(2)],
+            ],
+            startY: y,
+            theme: "plain",
+            styles: { font: "helvetica", fontSize: 11 },
+            columnStyles: { 1: { fontStyle: "bold" } },
+            margin: { left: margin, right: margin },
+          })
+          y = (doc as any).lastAutoTable.finalY + 8
+
+          // Print remaining in words, right-aligned
+          doc
+            .setFont("helvetica", "normal")
+            .setFontSize(10)
+            .text(`(${remainingWords.charAt(0).toUpperCase() + remainingWords.slice(1)} only)`, pageW - margin, y, {
+              align: "right",
+            })
+          y += 12
+
+          // Footer
+          doc
+            .setFont("helvetica", "italic")
+            .setFontSize(10)
+            .text("Thank you for choosing our services!", pageW / 2, y, { align: "center" })
+        })
+      })
+
+      // Save PDF
+      doc.save(`Multiple_Bills_${new Date().toLocaleDateString().replace(/\//g, "-")}.pdf`)
+    }
+
+    img.onerror = () => alert("Failed to load letterhead image.")
+  }
+
+  const handleDeleteRequest = (patient: Patient) => {
+    setDeleteRequestModalPatient(patient)
+    setDeleteReason("")
+  }
+
+  const submitDeleteRequest = async () => {
+    if (!deleteRequestModalPatient || !deleteReason.trim()) return
+
+    try {
+      // Get the current user's email
+      const userEmail = auth.currentUser?.email || "unknown"
+
+      // Update the deleteRequestPatients state
+      setDeleteRequestPatients((prev) => ({
+        ...prev,
+        [deleteRequestModalPatient.id]: {
+          reason: deleteReason,
+          requestedBy: userEmail,
+        },
+      }))
+
+      // You could also save this to your database
+      await update(ref(database, `patients/${deleteRequestModalPatient.id}`), {
+        deleteRequest: {
+          reason: deleteReason,
+          requestedBy: userEmail,
+          requestedAt: new Date().toISOString(),
+        },
+      })
+
+      alert("Delete request submitted")
+    } catch (e) {
+      console.error(e)
+      alert("Error submitting delete request")
+    } finally {
+      setDeleteRequestModalPatient(null)
+    }
+  }
+
+  const handleApproveDelete = async (patient: Patient) => {
+    if (!confirm(`Permanently delete ${patient.name}?`)) return
+
+    try {
+      // Mark as deleted in the database
+      await update(ref(database, `patients/${patient.id}`), {
+        deleted: true,
+        deletedAt: new Date().toISOString(),
+        deleteRequest: null, // Clear the request
+      })
+
+      // Update local state
+      setDeletedPatients((prev) => [...prev, patient.id])
+      setDeleteRequestPatients((prev) => {
+        const newState = { ...prev }
+        delete newState[patient.id]
+        return newState
+      })
+
+      if (expandedPatientId === patient.id) setExpandedPatientId(null)
+      alert("Patient marked as deleted")
+    } catch (e) {
+      console.error(e)
+      alert("Error deleting patient")
+    }
+  }
+
+  const handleUndoDeleteRequest = async (patient: Patient) => {
+    try {
+      // Remove delete request from database
+      await update(ref(database, `patients/${patient.id}`), {
+        deleteRequest: null,
+      })
+
+      // Update local state
+      setDeleteRequestPatients((prev) => {
+        const newState = { ...prev }
+        delete newState[patient.id]
+        return newState
+      })
+
+      alert("Delete request removed")
+    } catch (e) {
+      console.error(e)
+      alert("Error removing delete request")
+    }
+  }
+
   /* --------------------  RENDER  -------------------- */
   return (
     <div className="min-h-screen bg-gray-50">
@@ -372,6 +672,20 @@ export default function Dashboard() {
       </header>
 
       <main className="p-4 md:p-6">
+        {/* Download Bills button */}
+        <div className="mb-4 flex justify-between items-center">
+          <h1 className="text-2xl font-semibold">Patient Dashboard</h1>
+          <button
+            onClick={() => {
+              // Show checkboxes when button is clicked
+              setShowCheckboxes((prev) => !prev)
+            }}
+            className="px-6 py-2 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700 flex items-center"
+          >
+            <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
+            {showCheckboxes ? "Cancel Selection" : "Download Bills"}
+          </button>
+        </div>
         {/* filters */}
         <div className="mb-4 flex flex-col md:flex-row gap-4">
           <input
@@ -408,8 +722,51 @@ export default function Dashboard() {
           </select>
         </div>
 
+        {selectedPatients.length > 0 && (
+          <div className="mb-4 p-4 bg-white rounded-xl shadow-sm border">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+              <div>
+                <h3 className="font-medium">Selected: {selectedPatients.length} patients</h3>
+                {(() => {
+                  const { totalAmount, totalPaid, totalDiscount, remaining } = calculateTotalsForSelected(
+                    selectedPatients,
+                    patients,
+                  )
+                  return (
+                    <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-sm text-gray-500">Total Amount</p>
+                        <p className="font-semibold">₹{totalAmount.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Total Paid</p>
+                        <p className="font-semibold">₹{totalPaid.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Total Discount</p>
+                        <p className="font-semibold">₹{totalDiscount.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Remaining</p>
+                        <p className="font-semibold">₹{remaining.toFixed(2)}</p>
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+              <button
+                onClick={handleDownloadMultipleBills}
+                className="inline-flex items-center px-6 py-3 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700"
+              >
+                <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
+                Download Selected Bills
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
           {[
             { icon: ChartBarIcon, label: "Total Tests", val: metrics.totalTests, bg: "blue" },
             {
@@ -425,37 +782,48 @@ export default function Dashboard() {
               bg: "green",
             },
           ].map((m, i) => (
-            <div key={i} className="bg-white p-6 rounded-xl shadow-sm border">
-              <div className="flex items-center space-x-4">
-                <div className={`p-3 bg-${m.bg}-50 rounded-lg`}>
-                  {React.createElement(m.icon, { className: `h-6 w-6 text-${m.bg}-600` })}
+            <div key={i} className="bg-white p-3 rounded-lg shadow-sm border">
+              <div className="flex items-center space-x-3">
+                <div className={`p-2 bg-${m.bg}-50 rounded-lg`}>
+                  {React.createElement(m.icon, { className: `h-5 w-5 text-${m.bg}-600` })}
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500 mb-1">{m.label}</p>
-                  <p className="text-2xl font-semibold">{m.val}</p>
+                  <p className="text-xs text-gray-500 mb-0.5">{m.label}</p>
+                  <p className="text-xl font-semibold">{m.val}</p>
                 </div>
               </div>
             </div>
           ))}
         </div>
 
-        {/* patient table */}
-        <div className="bg-white rounded-xl shadow-sm border">
-          <div className="p-6 border-b">
-            <h2 className="text-lg font-semibold flex items-center">
-              <UserIcon className="h-5 w-5 mr-2 text-gray-600" />
+        <div className="bg-white rounded-lg shadow-sm border">
+          <div className="p-3 border-b">
+            <h2 className="text-base font-semibold flex items-center">
+              <UserIcon className="h-4 w-4 mr-2 text-gray-600" />
               Recent Patients
             </h2>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-50">
-                {["Patient", "Tests", "Entry Date", "Status", "Remaining", "Actions"].map((h) => (
-                  <th key={h} className="px-6 py-3 text-left text-sm font-medium text-gray-500">
-                    {h}
-                  </th>
-                ))}
+              <thead className="bg-gray-50 text-xs">
+                <tr>
+                  {showCheckboxes && (
+                    <th className="px-3 py-2 text-left font-medium text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={selectAll}
+                        onChange={handleToggleSelectAll}
+                        className="h-3 w-3 text-indigo-600 border-gray-300 rounded"
+                      />
+                    </th>
+                  )}
+                  {["Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left font-medium text-gray-500">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
               </thead>
               <tbody className="divide-y">
                 {filteredPatients.map((p) => {
@@ -466,16 +834,35 @@ export default function Dashboard() {
 
                   return (
                     <React.Fragment key={p.id}>
-                      <tr className="hover:bg-gray-50">
-                        <td className="px-6 py-4">
-                          <p className="font-medium">{p.name}</p>
-                          <p className="text-sm text-gray-500">
+                      <tr
+                        className={`hover:bg-gray-50 ${deleteRequestPatients[p.id] ? "bg-red-100" : ""} ${deletedPatients.includes(p.id) ? "bg-red-200" : ""}`}
+                      >
+                        {deleteRequestPatients[p.id] && role === "admin" && (
+                          <div className="absolute right-0 top-0 bg-red-100 text-xs p-1 rounded-bl-md max-w-xs overflow-hidden">
+                            <span className="font-bold">Delete reason:</span> {deleteRequestPatients[p.id].reason}
+                          </div>
+                        )}
+                        <td
+                          className={`px-3 py-2 relative ${deleteRequestPatients[p.id] ? "bg-red-100" : ""} ${deletedPatients.includes(p.id) ? "bg-red-200" : ""}`}
+                        >
+                          {showCheckboxes && (
+                            <input
+                              type="checkbox"
+                              checked={selectedPatients.includes(p.id)}
+                              onChange={() => handleToggleSelect(p.id)}
+                              className="h-3 w-3 text-indigo-600 border-gray-300 rounded"
+                            />
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <p className="font-medium text-sm">{p.name}</p>
+                          <p className="text-xs text-gray-500">
                             {p.age}y • {p.gender}
                           </p>
                         </td>
-                        <td className="px-6 py-4 text-sm">
+                        <td className="px-3 py-2 text-xs">
                           {p.bloodTests?.length ? (
-                            <ul className="list-disc pl-4">
+                            <ul className="list-disc pl-3">
                               {p.bloodTests.map((t) => {
                                 const done = t.testType?.toLowerCase() === "outsource" || isTestFullyEntered(p, t)
                                 return (
@@ -489,33 +876,36 @@ export default function Dashboard() {
                             <span className="text-gray-400">No tests</span>
                           )}
                         </td>
-                        <td className="px-6 py-4 text-sm">{new Date(p.createdAt).toLocaleDateString()}</td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 py-2 text-xs">{new Date(p.createdAt).toLocaleDateString()}</td>
+                        <td className="px-3 py-2">
                           {status === "Not Collected" && (
-                            <span className="px-3 py-1 text-xs rounded-full bg-red-100 text-red-800">
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800">
                               Not Collected
                             </span>
                           )}
                           {status === "Pending" && (
-                            <span className="px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800">Pending</span>
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">Pending</span>
                           )}
                           {status === "Completed" && (
-                            <span className="px-3 py-1 text-xs rounded-full bg-green-100 text-green-800">
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800">
                               Completed
                             </span>
                           )}
                         </td>
-                        <td className="px-6 py-4 text-sm">
+                        <td className="px-3 py-2 text-xs">
                           {remaining > 0 ? (
                             <span className="text-red-600 font-bold">₹{remaining.toFixed(2)}</span>
                           ) : (
                             "0"
                           )}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-3 py-2 text-xs">
+                          <span className="text-blue-600 font-bold">₹{calculateAmounts(p).testTotal.toFixed(2)}</span>
+                        </td>
+                        <td className="px-3 py-2">
                           <button
                             onClick={() => setExpandedPatientId(expandedPatientId === p.id ? null : p.id)}
-                            className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700"
+                            className="px-3 py-1 bg-indigo-600 text-white rounded-md text-xs hover:bg-indigo-700"
                           >
                             Actions
                           </button>
@@ -524,8 +914,17 @@ export default function Dashboard() {
 
                       {expandedPatientId === p.id && (
                         <tr>
-                          <td colSpan={6} className="bg-gray-50">
-                            <div className="p-4 flex flex-wrap gap-2">
+                          <td colSpan={showCheckboxes ? 8 : 7} className="bg-gray-50 p-2">
+                            <div className="flex flex-wrap gap-1 text-xs">
+                              {deleteRequestPatients[p.id] && (
+                                <div className="w-full mb-2 p-2 bg-red-100 rounded text-sm">
+                                  <p className="font-bold">
+                                    Delete request by: {deleteRequestPatients[p.id].requestedBy}
+                                  </p>
+                                  <p>Reason: {deleteRequestPatients[p.id].reason}</p>
+                                </div>
+                              )}
+
                               {sampleModalPatient && (
                                 <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
                                   <div className="bg-white rounded-xl shadow-lg max-w-sm w-full p-6 relative">
@@ -575,9 +974,14 @@ export default function Dashboard() {
                                   {sampleCollected && (
                                     <Link
                                       href={`/download-report?patientId=${p.id}`}
-                                      className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700"
+                                      className={`inline-flex items-center px-3 py-1 bg-green-600 text-white rounded-md text-xs ${
+                                        deleteRequestPatients[p.id]
+                                          ? "opacity-50 pointer-events-none"
+                                          : "hover:bg-green-700"
+                                      }`}
+                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
                                     >
-                                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                      <ArrowDownTrayIcon className="h-3 w-3 mr-1" />
                                       Download Report
                                     </Link>
                                   )}
@@ -589,10 +993,10 @@ export default function Dashboard() {
                                     <button
                                       onClick={() => {
                                         setSampleModalPatient(p)
-                                        // pre-fill picker with "now"
                                         setSampleDateTime(new Date().toISOString().slice(0, 16))
                                       }}
-                                      className="px-4 py-2 bg-red-600 text-white rounded-md text-sm hover:bg-red-700"
+                                      className="px-3 py-1 bg-red-600 text-white rounded-md text-xs hover:bg-red-700"
+                                      disabled={!!deleteRequestPatients[p.id]}
                                     >
                                       Collect Sample
                                     </button>
@@ -601,9 +1005,14 @@ export default function Dashboard() {
                                   {sampleCollected && (
                                     <Link
                                       href={`/download-report?patientId=${p.id}`}
-                                      className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md text-sm hover:bg-green-700"
+                                      className={`inline-flex items-center px-3 py-1 bg-green-600 text-white rounded-md text-xs ${
+                                        deleteRequestPatients[p.id]
+                                          ? "opacity-50 pointer-events-none"
+                                          : "hover:bg-green-700"
+                                      }`}
+                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
                                     >
-                                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                      <ArrowDownTrayIcon className="h-3 w-3 mr-1" />
                                       Download Report
                                     </Link>
                                   )}
@@ -611,9 +1020,14 @@ export default function Dashboard() {
                                   {sampleCollected && !complete && (
                                     <Link
                                       href={`/blood-values/new?patientId=${p.id}`}
-                                      className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700"
+                                      className={`inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded-md text-xs ${
+                                        deleteRequestPatients[p.id]
+                                          ? "opacity-50 pointer-events-none"
+                                          : "hover:bg-blue-700"
+                                      }`}
+                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
                                     >
-                                      <DocumentPlusIcon className="h-4 w-4 mr-2" />
+                                      <DocumentPlusIcon className="h-3 w-3 mr-1" />
                                       Add/Edit Values
                                     </Link>
                                   )}
@@ -621,7 +1035,12 @@ export default function Dashboard() {
                                   {sampleCollected && complete && (
                                     <Link
                                       href={`/blood-values/new?patientId=${p.id}`}
-                                      className="inline-flex items-center px-4 py-2 bg-blue-500 text-white rounded-md text-sm hover:bg-blue-600"
+                                      className={`inline-flex items-center px-3 py-1 bg-blue-500 text-white rounded-md text-xs ${
+                                        deleteRequestPatients[p.id]
+                                          ? "opacity-50 pointer-events-none"
+                                          : "hover:bg-blue-600"
+                                      }`}
+                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
                                     >
                                       Edit Test
                                     </Link>
@@ -632,7 +1051,8 @@ export default function Dashboard() {
                                       setSelectedPatient(p)
                                       setNewAmountPaid("")
                                     }}
-                                    className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700"
+                                    className="px-3 py-1 bg-indigo-600 text-white rounded-md text-xs hover:bg-indigo-700"
+                                    disabled={!!deleteRequestPatients[p.id]}
                                   >
                                     Update Payment
                                   </button>
@@ -640,9 +1060,10 @@ export default function Dashboard() {
                                   {selectedPatient?.id === p.id && (
                                     <button
                                       onClick={handleDownloadBill}
-                                      className="inline-flex items-center px-4 py-2 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700"
+                                      className="inline-flex items-center px-3 py-1 bg-teal-600 text-white rounded-md text-xs hover:bg-teal-700"
+                                      disabled={!!deleteRequestPatients[p.id]}
                                     >
-                                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                                      <ArrowDownTrayIcon className="h-3 w-3 mr-1" />
                                       Download Bill
                                     </button>
                                   )}
@@ -650,24 +1071,62 @@ export default function Dashboard() {
                                   {/* ---- Generate Fake Bill button ---- */}
                                   <button
                                     onClick={() => setFakeBillPatient(p)}
-                                    className="px-4 py-2 bg-purple-600 text-white rounded-md text-sm hover:bg-purple-700"
+                                    className="px-3 py-1 bg-purple-600 text-white rounded-md text-xs hover:bg-purple-700"
+                                    disabled={!!deleteRequestPatients[p.id]}
                                   >
                                     Generate Bill
                                   </button>
 
                                   <Link
                                     href={`/patient-detail?patientId=${p.id}`}
-                                    className="px-4 py-2 bg-orange-600 text-white rounded-md text-sm hover:bg-orange-700"
+                                    className={`px-3 py-1 bg-orange-600 text-white rounded-md text-xs ${
+                                      deleteRequestPatients[p.id]
+                                        ? "opacity-50 pointer-events-none"
+                                        : "hover:bg-orange-700"
+                                    }`}
+                                    onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
                                   >
                                     Edit Details
                                   </Link>
 
-                                  <button
-                                    onClick={() => handleDeletePatient(p)}
-                                    className="px-4 py-2 bg-gray-600 text-white rounded-md text-sm hover:bg-gray-700"
-                                  >
-                                    Delete
-                                  </button>
+                                  {role === "admin" ? (
+                                    <>
+                                      {deleteRequestPatients[p.id] ? (
+                                        <>
+                                          <button
+                                            onClick={() => handleApproveDelete(p)}
+                                            className="px-3 py-1 bg-red-600 text-white rounded-md text-xs hover:bg-red-700"
+                                          >
+                                            Approve Delete
+                                          </button>
+                                          <button
+                                            onClick={() => handleUndoDeleteRequest(p)}
+                                            className="px-3 py-1 bg-gray-600 text-white rounded-md text-xs hover:bg-gray-700"
+                                          >
+                                            Undo Request
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          onClick={() => handleDeletePatient(p)}
+                                          className="px-3 py-1 bg-gray-600 text-white rounded-md text-xs hover:bg-gray-700"
+                                        >
+                                          Delete
+                                        </button>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <>
+                                      {!deleteRequestPatients[p.id] && (
+                                        <button
+                                          onClick={() => handleDeleteRequest(p)}
+                                          className="px-3 py-1 bg-yellow-600 text-white rounded-md text-xs hover:bg-yellow-700"
+                                        >
+                                          Request Delete
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
                                 </>
                               )}
                             </div>
@@ -763,6 +1222,51 @@ export default function Dashboard() {
                 Update Payment
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Request Modal */}
+      {deleteRequestModalPatient && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
+            <button
+              onClick={() => setDeleteRequestModalPatient(null)}
+              className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+            >
+              ✕
+            </button>
+            <h3 className="text-xl font-semibold mb-4">Request Deletion for {deleteRequestModalPatient.name}</h3>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Reason for Deletion (Required)</label>
+              <textarea
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
+                rows={4}
+                placeholder="Please provide a detailed reason for this deletion request"
+                required
+              />
+            </div>
+
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => setDeleteRequestModalPatient(null)}
+                className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitDeleteRequest}
+                disabled={!deleteReason.trim()}
+                className={`px-4 py-2 rounded-md text-white ${
+                  deleteReason.trim() ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"
+                }`}
+              >
+                Submit Request
+              </button>
+            </div>
           </div>
         </div>
       )}

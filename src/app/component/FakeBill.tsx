@@ -54,7 +54,7 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
   const [tests, setTests] = useState<BloodTest[]>(
     patient.bloodTests?.map((t) => ({ ...t })) ?? []
   );
-
+  const [customPaid, setCustomPaid] = useState<number>(patient.amountPaid)
   const handlePriceChange = (id: string, price: number) =>
     setTests((prev) => prev.map((t) => (t.testId === id ? { ...t, price } : t)));
 
@@ -63,11 +63,7 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
    * -------------------------------------------------- */
   const handleDownload = () => {
     /* ─── calculate amounts ─── */
-    const { testTotal, remaining } = calcAmounts(
-      tests,
-      patient.discountAmount,
-      patient.amountPaid
-    );
+    const { testTotal, remaining } = calcAmounts(tests, patient.discountAmount, customPaid);
     // convert to words
     const remainingWords = toWords(Math.round(remaining));
     /* ─── load letter‑head, then build PDF ─── */
@@ -87,37 +83,45 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
 
       /* background + base font */
       doc.addImage(bg, "JPEG", 0, 0, pageW, pageH);
-      doc.setFont("helvetica", "normal").setFontSize(12);
-
-      /* ─── patient details (two‑column) ─── */
-      const margin = 14;
-      const mid = pageW / 2;
-      const Lk = margin,
-        Lc = margin + 40,
-        Lv = margin + 44;
-      const Rk = mid + margin,
-        Rc = mid + margin + 40,
-        Rv = mid + margin + 44;
-
-      let y = 70;
+      doc.setFont("helvetica", "normal");
+      const margin = 14
+      const mid = pageW / 2
+      const Lk = margin,       Lc = margin + 40,   Lv = margin + 44
+      const Rk = mid + margin, Rc = mid + margin + 40, Rv = mid + margin + 44
+      
+      let y = 70
+      // calculate wrap width for name
+      const leftValueWidth = (pageW/2 + margin) - Lv - 4
+      doc.setFontSize(9) 
+      // ─── wrap Name row ───
+      const nameLines = doc.splitTextToSize(patient.name.toUpperCase(), leftValueWidth)
+      doc.text("Name", Lk,    y)
+      doc.text(":",    Lc,    y)
+      doc.text(nameLines, Lv, y)
+      doc.text("Patient ID", Rk, y)
+      doc.text(":",         Rc, y)
+      doc.text(patient.patientId, Rv, y)
+      y += nameLines.length * 6
+      
+      // ─── all other rows single-line ───
       const row = (kL: string, vL: string, kR: string, vR: string) => {
-        doc.text(kL, Lk, y);
-        doc.text(":", Lc, y);
-        doc.text(vL, Lv, y);
-        doc.text(kR, Rk, y);
-        doc.text(":", Rc, y);
-        doc.text(vR, Rv, y);
-        y += 6;
-      };
-
-      row("Name", patient.name, "Patient ID", patient.patientId);
+        doc.text(kL, Lk, y)
+        doc.text(":",  Lc, y)
+        doc.text(vL, Lv, y)
+        doc.text(kR, Rk, y)
+        doc.text(":",  Rc, y)
+        doc.text(vR, Rv, y)
+        y += 6
+      }
+      
       row(
         "Age / Gender",
         `${patient.age} y / ${patient.gender}`,
         "Registration Date",
         new Date(patient.createdAt).toLocaleDateString()
-      );
-      row("Ref. Doctor", patient.doctorName ?? "N/A", "Contact", patient.contact ?? "N/A");
+      )
+      row("Ref. Doctor", patient.doctorName ?? "N/A", "Contact", patient.contact ?? "N/A")
+    
       y += 4;
 
       /* ─── tests table ─── */
@@ -138,8 +142,8 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
         head: [["Description", "Amount"]],
         body: [
           ["Test Total", testTotal.toFixed(2)],
-          ["Discount", patient.discountAmount.toFixed(2)],
-          ["Amount Paid", patient.amountPaid.toFixed(2)],
+          // ["Discount", patient.discountAmount.toFixed(2)],
+          ["Amount Paid", customPaid.toFixed(2)],
           ["Remaining", remaining.toFixed(2)],
         ],
         startY: y,
@@ -169,7 +173,7 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
           align: "center",
         });
 
-      doc.save(`FakeBill_${patient.name}.pdf`);
+      doc.save(`Medfordlab_${patient.name}.pdf`);
     };
 
     img.onerror = () => alert("Failed to load letter‑head image.");
@@ -208,6 +212,17 @@ export default function FakeBill({ patient, onClose }: FakeBillProps) {
             </div>
           ))}
         </div>
+        <div className="mb-4 flex items-center space-x-2">
+  <label className="w-1/2 text-sm font-medium">Total Paid (Rs.)</label>
+  <input
+    type="number"
+    min="0"
+    step="0.01"
+    value={customPaid}
+    onChange={e => setCustomPaid(Number(e.target.value))}
+    className="w-24 px-2 py-1 border rounded"
+  />
+</div>
 
         <button
           onClick={handleDownload}

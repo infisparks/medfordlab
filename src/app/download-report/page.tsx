@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { jsPDF } from "jspdf"
 import { ref as dbRef, get, update } from "firebase/database"
 import { database } from "../../firebase" // ← adjust if needed
-import { getAuth } from "firebase/auth"
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage"
 
 // Import the graph report generator
@@ -37,6 +36,7 @@ export interface BloodTestData {
   subheadings?: { title: string; parameterNames: string[] }[]
   type?: string // e.g. "in‑house" | "outsource"
   reportedOn?: string
+  enteredBy?: string
 }
 export interface PatientData {
   name: string
@@ -166,13 +166,13 @@ function DownloadReport() {
   }
 
   function toLocalDateTimeInputValue(dateInput: string | Date) {
-    const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+    const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput
     // offset in ms
-    const tzOffset = d.getTimezoneOffset() * 60000;
+    const tzOffset = d.getTimezoneOffset() * 60000
     // subtract the offset so the ISO string will be in local time
-    const localISO = new Date(d.getTime() - tzOffset).toISOString();
+    const localISO = new Date(d.getTime() - tzOffset).toISOString()
     // drop the seconds and milliseconds, leaving "YYYY-MM-DDTHH:mm"
-    return localISO.slice(0, 16);
+    return localISO.slice(0, 16)
   }
 
   // Function to save the updated time
@@ -182,7 +182,7 @@ function DownloadReport() {
     try {
       const testRef = dbRef(database, `patients/${patientId}/bloodtest/${updateTimeModal.testKey}`)
       const newReportedOn = new Date(updateTimeModal.currentTime).toISOString()
-      
+
       await update(testRef, { reportedOn: newReportedOn })
 
       // Update local state to reflect the change
@@ -268,8 +268,8 @@ function DownloadReport() {
         parameters: keptParams,
         // preserve subheadings if you want
         subheadings: t.subheadings,
-            // make absolutely sure reportedOn stays through
-            reportedOn: t.reportedOn,
+        // make absolutely sure reportedOn stays through
+        reportedOn: t.reportedOn,
       }
     }
     return out
@@ -281,6 +281,7 @@ function DownloadReport() {
   const generatePDFReport = async (data: PatientData, includeLetterhead: boolean, skipCover: boolean) => {
     // ... (keep existing extensive implementation for the main report)
     const doc = new jsPDF("p", "mm", "a4")
+    let printedBy = "Unknown"
     const w = doc.internal.pageSize.getWidth()
     const h = doc.internal.pageSize.getHeight()
     const left = 23
@@ -289,9 +290,9 @@ function DownloadReport() {
     const totalW = w - 2 * left
     const base = totalW / 4
     // ↑ you can adjust these ratios however you like
-    const wParam = base * 1.1 // bump PARAMETER +10%
-    const wValue = base * 0.7
-    const wRange = 1.5 * base
+    const wParam = base * 1.4 // was 1.3 → now 1.4
+    const wValue = base * 0.6 // was 0.7 → now 0.6
+    const wRange = base * 1.2 // was 1.7 → now 1.6
     // UNIT now automatically increases to fill the remaining space
     const wUnit = totalW - (wParam + wValue + wRange)
     const x1 = left
@@ -302,10 +303,6 @@ function DownloadReport() {
     const lineH = 5
     const ageDays = data.total_day ? Number(data.total_day) : Number(data.age) * 365
     const genderKey = data.gender?.toLowerCase() ?? ""
-
-    const auth = getAuth()
-    let printedBy = auth.currentUser?.displayName || auth.currentUser?.email || "Unknown"
-    if (printedBy.endsWith("@gmail.com")) printedBy = printedBy.replace("@gmail.com", "")
 
     // helpers ------------------------------------------------------
     const addCover = async () => {
@@ -330,17 +327,16 @@ function DownloadReport() {
       const sw = 40,
         sh = 30,
         sx = w - left - sw,
-        sy = h - sh - 30
+        // move stamp 15 mm from bottom (instead of 30)
+        sy = h - sh - 23
       try {
         const img = await loadImageAsCompressedJPEG(stamp.src, 0.5)
         doc.addImage(img, "JPEG", sx, sy, sw, sh)
       } catch (e) {
         console.error(e)
       }
-      doc.setFont("helvetica", "bold").setFontSize(10)
-      doc.text("Printed by", left, sy + sh - 8)
-      doc.setFont("helvetica", "normal").setFontSize(11)
-      doc.text(printedBy, left, sy + sh - 4)
+      doc.setFont("helvetica", "normal").setFontSize(10)
+      doc.text(`Printed by ${printedBy}`, left, sy + sh - 0)
     }
 
     /** -------------------- HEADER (uniform – colon aligned) ------------------ */
@@ -360,59 +356,68 @@ function DownloadReport() {
     //   return reportedOnDates[0].toLocaleString()
     // }
     const headerY = (reportedOnRaw?: string) => {
-      const gap = 7;
-      let y = 50;
-      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(0,0,0);
-    
-      // sample col and registration
-      const sampleDT = data.sampleCollectedAt
-        ? new Date(data.sampleCollectedAt)
-        : new Date(data.createdAt);
-    
-      // format _this_ test’s reportedOn (or show “–”)
-      const reportedOnStr = reportedOnRaw
-        ? new Date(reportedOnRaw).toLocaleString()
-        : "-";
-    
+      const gap = 7
+      let y = 50
+      doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(0, 0, 0)
+
+      // data rows
+      const sampleDT = data.sampleCollectedAt ? new Date(data.sampleCollectedAt) : new Date(data.createdAt)
+      const reportedOnStr = reportedOnRaw ? new Date(reportedOnRaw).toLocaleString() : "-"
+
       const leftRows = [
-        { label: "Patient Name",           value: data.name.toUpperCase() },
-        { label: "Age/Sex",                value: `${data.age} Years /${data.gender}` },
-        { label: "Ref Doctor",             value: (data.doctorName || "-").toUpperCase() },
-        { label: "Client Name",            value: (data.hospitalName || "-").toUpperCase() },
-      ];
+        { label: "Patient Name", value: data.name.toUpperCase() },
+        { label: "Age/Sex", value: `${data.age} Years / ${data.gender}` },
+        { label: "Ref Doctor", value: (data.doctorName || "-").toUpperCase() },
+        { label: "Client Name", value: (data.hospitalName || "-").toUpperCase() },
+      ]
+
       const rightRows = [
-        { label: "Patient ID",             value: data.patientId },
-        { label: "Sample Collected on",    value: sampleDT.toLocaleString() },
-        { label: "Registration On",        value: new Date(data.createdAt).toLocaleString() },
-        { label: "Reported On",            value: reportedOnStr },
-      ];
-    
-      // measure, align cols…
-      const maxLeft = Math.max(...leftRows.map(r=>doc.getTextWidth(r.label)));
-      const xLL   = left;
-      const xLC   = xLL + maxLeft + 2;
-      const xLV   = xLC + 2;
-    
-      const startR = w/2 + 10;
-      const maxRight = Math.max(...rightRows.map(r=>doc.getTextWidth(r.label)));
-      const xRL   = startR;
-      const xRC   = xRL + maxRight + 2;
-      const xRV   = xRC + 2;
-    
+        { label: "Patient ID", value: data.patientId },
+        { label: "Sample Collected on", value: sampleDT.toLocaleString() },
+        { label: "Registration On", value: new Date(data.createdAt).toLocaleString() },
+        { label: "Reported On", value: reportedOnStr },
+      ]
+
+      // measure label widths
+      const maxLeftLabel = Math.max(...leftRows.map((r) => doc.getTextWidth(r.label)))
+      const maxRightLabel = Math.max(...rightRows.map((r) => doc.getTextWidth(r.label)))
+
+      // column X positions
+      const xLL = left
+      const xLC = xLL + maxLeftLabel + 2
+      const xLV = xLC + 2
+      const startR = w / 2 + 10
+      const xRL = startR
+      const xRC = xRL + maxRightLabel + 2
+      const xRV = xRC + 2
+
+      // compute wrap width for name only
+      const leftValueWidth = startR - xLV - 4
+
       for (let i = 0; i < leftRows.length; i++) {
-        // left
-        doc.text(leftRows[i].label, xLL, y);
-        doc.text(":", xLC, y);
-        doc.text(leftRows[i].value, xLV, y);
-        // right
-        doc.text(rightRows[i].label, xRL, y);
-        doc.text(":", xRC, y);
-        doc.text(rightRows[i].value, xRV, y);
-        y += gap - 2;
+        // LEFT LABEL + COLON
+        doc.text(leftRows[i].label, xLL, y)
+        doc.text(":", xLC, y)
+
+        // LEFT VALUE: wrap only row 0 (Patient Name), else single-line
+        if (i === 0) {
+          const nameLines = doc.splitTextToSize(leftRows[i].value, leftValueWidth)
+          doc.text(nameLines, xLV, y)
+          y += nameLines.length * (gap - 2)
+        } else {
+          doc.text(leftRows[i].value, xLV, y)
+          y += gap - 2
+        }
+
+        // RIGHT SIDE: always single-line, keep in sync with left
+        doc.text(rightRows[i].label, xRL, y - (gap - 2)) // same y-start as left row
+        doc.text(":", xRC, y - (gap - 2))
+        doc.text(rightRows[i].value, xRV, y - (gap - 2))
       }
-    
-      return y;
+
+      return y
     }
+
     /** ------------------------------------------------------------------------ */
 
     // ----- core row printer (unchanged) -----------------------------
@@ -527,15 +532,28 @@ function DownloadReport() {
       const tData = data.bloodtest[testKey]
       if (tData.type === "outsource" || !tData.parameters.length) continue
 
-      // ─── detect when this entire test has no units ───
-      //  const omitUnit = tData.parameters.every(p => p.unit.trim() === "");
-      // recompute the width of the VALUE cell
-      //  const valueCellWidth = omitUnit ? wValue + wUnit : wValue;
-      // and the X‑position where RANGE now begins:
-      //  const xRange = omitUnit
-      //    ? x2 + valueCellWidth
-      //    : x4;
+      console.log("looking in /users for:", tData.enteredBy)
 
+      let printerName = "Unknown"
+      if (tData.enteredBy) {
+        try {
+          // First try to get user from /users path
+          const userSnap = await get(dbRef(database, `users/${tData.enteredBy}`))
+          if (userSnap.exists()) {
+            const usr = userSnap.val() as { name?: string }
+            printerName = usr.name || tData.enteredBy
+          } else {
+            // If no user found, use the enteredBy value directly
+            console.log(`User not found in database, using enteredBy value: ${tData.enteredBy}`)
+            printerName = tData.enteredBy
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error)
+          // Fallback to using enteredBy value
+          printerName = tData.enteredBy
+        }
+      }
+      printedBy = printerName
       if (skipCover) {
         if (!first) doc.addPage()
       } else {
@@ -544,7 +562,7 @@ function DownloadReport() {
       first = false
 
       await addLetter()
-      yPos = headerY(tData.reportedOn);
+      yPos = headerY(tData.reportedOn)
 
       doc.setDrawColor(0, 51, 102).setLineWidth(0.5)
       doc.line(left, yPos, w - left, yPos) // horizontal divider
@@ -583,7 +601,7 @@ function DownloadReport() {
       })
       yPos += 3
       doc.setFont("helvetica", "italic")
-      doc.setFontSize(9)
+      doc.setFontSize(7)
       doc.setTextColor(0)
       doc.text("--------------------- END OF REPORT ---------------------", w / 2, yPos + 4, { align: "center" })
       yPos += 10
@@ -750,7 +768,7 @@ function DownloadReport() {
             {/* Report Actions Card */}
             <div className="bg-white rounded-xl shadow-lg p-8 space-y-4 col-span-1 md:col-span-2">
               <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">Report Ready</h2>
-              
+
               {/* Existing Buttons */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <button
@@ -954,9 +972,7 @@ function DownloadReport() {
                 )}
               </button>
 
-              <p className="text-center text-sm text-gray-500 pt-2">
-                Report generated for {patientData.name}
-              </p>
+              <p className="text-center text-sm text-gray-500 pt-2">Report generated for {patientData.name}</p>
             </div>
 
             {/* Test Selection Card */}
@@ -967,11 +983,14 @@ function DownloadReport() {
                   Object.keys(patientData.bloodtest).map((testKey) => {
                     const test = patientData.bloodtest![testKey]
                     const reportedOn = test.reportedOn ? new Date(test.reportedOn) : null
+                    const isStoolTest = testKey === "stool_occult_blood"
 
                     return (
                       <div
                         key={testKey}
-                        className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50"
+                        className={`flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 ${
+                          isStoolTest ? "border-amber-300 bg-amber-50 hover:bg-amber-100" : ""
+                        }`}
                       >
                         <div className="flex items-start space-x-3">
                           <input
@@ -981,16 +1000,26 @@ function DownloadReport() {
                             checked={selectedTests.includes(testKey)}
                             onChange={() => {
                               setSelectedTests((prev) =>
-                                prev.includes(testKey) ? prev.filter((k) => k !== testKey) : [...prev, testKey]
+                                prev.includes(testKey) ? prev.filter((k) => k !== testKey) : [...prev, testKey],
                               )
                             }}
                           />
                           <div>
                             <label htmlFor={`test-${testKey}`} className="font-medium cursor-pointer">
                               {testKey.replace(/_/g, " ").toUpperCase()}
+                              {isStoolTest && (
+                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800">
+                                  Stool Test
+                                </span>
+                              )}
                             </label>
                             {reportedOn && (
-                              <p className="text-sm text-gray-500">Reported on: {reportedOn.toLocaleString()}</p>
+                              <p className="text-sm text-gray-500">
+                                Reported on: {reportedOn.toLocaleString()}
+                                {isStoolTest && test.enteredBy && (
+                                  <span className="ml-2 text-xs text-gray-500">by {test.enteredBy}</span>
+                                )}
+                              </p>
                             )}
                           </div>
                         </div>
@@ -1029,7 +1058,7 @@ function DownloadReport() {
             <p className="mt-4 text-sm text-gray-500">This may take a few moments.</p>
           </div>
         )}
-        
+
         {/* Update Time Modal */}
         {updateTimeModal.isOpen && (
           <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
@@ -1074,4 +1103,3 @@ function DownloadReport() {
     </div>
   )
 }
-

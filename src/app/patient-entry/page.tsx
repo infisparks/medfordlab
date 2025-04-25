@@ -135,26 +135,24 @@ const PatientEntryForm: React.FC = () => {
     setValue,
     reset,
   } = useForm<IFormInput>({
-    defaultValues: {
-      hospitalName: "MEDFORD HOSPITAL",
-      visitType: "opd",
-      name: "",
-      contact: "",
-      age: 0,
-      dayType: "year",
-      gender: "",
-      address: "",
-      email: "",
-      doctorName: "",
-      doctorId: "",
-      bloodTests: [], // Start with empty array
-      discountAmount: 0,
-      amountPaid: 0,
-      paymentMode: "online",
-      patientId: "",
-      registrationDate: currentDate,
-      registrationTime: currentTime,
-    },
+   defaultValues: {
+     hospitalName: "MEDFORD HOSPITAL",
+     visitType: "opd",
+     name: "",
+     contact: "",
+     dayType: "year",
+     gender: "",
+     address: "",
+     email: "",
+     doctorName: "",
+     doctorId: "",
+     bloodTests: [],
+     paymentMode: "online",
+     patientId: "",
+     registrationDate: currentDate,
+     registrationTime: currentTime,
+     // age, discountAmount, amountPaid are now undefined → show as blank
+   },
   })
 
   /* 4) Local state */
@@ -349,6 +347,11 @@ const handleRemoveAllTests = () => {
 
 
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
+
+
+    data.discountAmount = isNaN(data.discountAmount) ? 0 : data.discountAmount
+    data.amountPaid     = isNaN(data.amountPaid)     ? 0 : data.amountPaid
+
     if (!data.bloodTests || data.bloodTests.length === 0) {
       alert("Please add at least one blood test before submitting.");
       return;
@@ -360,7 +363,7 @@ const handleRemoveAllTests = () => {
         alert("Please remove duplicate tests before submitting.")
         return
       }
-
+    
       /* 2) Always generate a new patient ID */
       data.patientId = await generatePatientId()
 
@@ -539,15 +542,17 @@ const handleRemoveAllTests = () => {
                 {/* Age, Age Unit, Gender in flex */}
                 <div className="flex gap-2 mb-2">
                   <div className="w-1/4">
-                    <Label className="text-xs">Age</Label>
-                    <Input
-                      type="number"
-                      {...register("age", {
-                        required: "Age is required",
-                        min: { value: 1, message: "Age must be positive" },
-                      })}
-                      className="h-8 text-xs"
-                    />
+                  <Label className="text-xs">Age</Label>
+<Input
+  type="number"
+  {...register("age", {
+    required: "Age is required",
+    min: { value: 1, message: "Age must be positive" },
+  })}
+  onWheel={e => e.currentTarget.blur()}
+  className="h-8 text-xs"
+  placeholder=""
+/>
                     {errors.age && <p className="text-red-500 text-[10px] mt-0.5">{errors.age.message}</p>}
                   </div>
 
@@ -798,15 +803,16 @@ const handleRemoveAllTests = () => {
                           <TableRow key={field.id}>
                             <TableCell className="text-xs py-1 px-2">{watch(`bloodTests.${idx}.testName`)}</TableCell>
                             <TableCell className="text-xs py-1 px-2">
-                              <Input
-                                type="number"
-                                {...register(`bloodTests.${idx}.price` as const, {
-                                  valueAsNumber: true,
-                                  min: { value: 0, message: "Price cannot be negative" },
-                                })}
-                                className="h-6 text-xs p-1"
-                              />
-                            </TableCell>
+  <Input
+    type="number"
+    {...register(`bloodTests.${idx}.price` as const, {
+      valueAsNumber: true,
+    })}
+    disabled
+    className="h-6 text-xs p-1 bg-gray-100 cursor-not-allowed"
+  />
+</TableCell>
+
                             <TableCell className="text-xs py-1 px-2">
                               <Select
                                 defaultValue={watch(`bloodTests.${idx}.testType`)}
@@ -852,6 +858,8 @@ const handleRemoveAllTests = () => {
                         type="number"
                         step="0.01"
                         {...register("discountAmount", { valueAsNumber: true })}
+                        onWheel={e => e.currentTarget.blur()}
+                        placeholder="0"
                         className="h-8 text-xs"
                       />
                     </div>
@@ -861,6 +869,8 @@ const handleRemoveAllTests = () => {
                         type="number"
                         step="0.01"
                         {...register("amountPaid", { valueAsNumber: true })}
+                        onWheel={e => e.currentTarget.blur()}
+                        placeholder="0"
                         className="h-8 text-xs"
                       />
                     </div>
