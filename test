@@ -1,0 +1,30 @@
+<thead className="bg-gray-50 text-xs">
+  <tr>
+    {showCheckboxes && (
+      <th className="px-3 py-2 text-left font-medium text-gray-500">
+          <input
+                        type="checkbox"
+                        checked={selectAll}
+                        onChange={handleToggleSelectAll}
+                        className="h-3 w-3 text-indigo-600 border-gray-300 rounded"
+                      />
+      </th>
+    )}
+    {[
+       { label: "Patient", align: "left" },
+       { label: "Tests", align: "left" },
+       { label: "Entry Date", align: "left" },
+       { label: "Status", align: "left" },
+       { label: "Remaining", align: "right" },
+       { label: "Total Amount", align: "right" },
+       { label: "Actions", align: "left" },
+    ].map(({ label, align }) => (
+      <th
+        key={label}
+        className={`px-3 py-2 text-${align} font-medium text-gray-500`}
+      >
+        {label}
+      </th>
+    ))}
+  </tr>
+</thead>

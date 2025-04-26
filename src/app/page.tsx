@@ -818,7 +818,7 @@ export default function Dashboard() {
                       />
                     </th>
                   )}
-                  {["Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map((h) => (
+                  {["." ,"Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map((h) => (
                     <th key={h} className="px-3 py-2 text-left font-medium text-gray-500">
                       {h}
                     </th>
