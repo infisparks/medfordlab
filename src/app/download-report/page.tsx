@@ -50,6 +50,7 @@ export interface PatientData {
   doctorName?: string
   hospitalName?: string
   bloodtest?: Record<string, BloodTestData>
+  dayType?: string
 }
 
 // -----------------------------
@@ -366,7 +367,12 @@ function DownloadReport() {
 
       const leftRows = [
         { label: "Patient Name", value: data.name.toUpperCase() },
-        { label: "Age/Sex", value: `${data.age} Years / ${data.gender}` },
+        {
+          label: "Age/Sex",
+          value: `${data.age} ${
+            data.dayType === "day" ? "Days" : data.dayType === "month" ? "Months" : "Years"
+          } / ${data.gender}`,
+        },
         { label: "Ref Doctor", value: (data.doctorName || "-").toUpperCase() },
         { label: "Client Name", value: (data.hospitalName || "-").toUpperCase() },
       ]
