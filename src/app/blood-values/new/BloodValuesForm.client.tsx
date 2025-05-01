@@ -420,19 +420,29 @@ const enteredBy = fullEmail.split("@")[0];
       
 
         const params = t.parameters
-          .map((p) => {
-            const subs = p.subparameters?.filter((sp) => sp.value !== "") ?? [];
-            if (p.value !== "" || subs.length) {
-              const obj: any = { ...p, subparameters: subs };
-              if (p.valueType === "number" && p.value !== "") obj.value = +p.value;
-              subs.forEach((sp) => {
-                if (sp.valueType === "number" && sp.value !== "") sp.value = +sp.value;
-              });
-              return obj;
-            }
-            return null;
-          })
-          .filter(Boolean) as TestParameterValue[];
+  .map((p) => {
+    const subs = p.subparameters?.filter((sp) => sp.value !== "") ?? [];
+    if (p.value !== "" || subs.length) {
+      const obj: any = { ...p, subparameters: subs };
+      if (p.valueType === "number" && p.value !== "") {
+        // Store as string if it has trailing zeros, otherwise as number
+        const strValue = String(p.value);
+        const numValue = +p.value;
+        obj.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
+      }
+      subs.forEach((sp) => {
+        if (sp.valueType === "number" && sp.value !== "") {
+          // Same for subparameters
+          const strValue = String(sp.value);
+          const numValue = +sp.value;
+          sp.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
+        }
+      });
+      return obj;
+    }
+    return null;
+  })
+  .filter(Boolean) as TestParameterValue[];
 
           await set(testRef, {
                      parameters:  params,

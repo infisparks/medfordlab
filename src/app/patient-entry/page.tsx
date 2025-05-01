@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import  {  useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo } from "react"
 
 import { useForm, useFieldArray, type SubmitHandler } from "react-hook-form"
 import { database, auth } from "../../firebase"
@@ -69,19 +69,18 @@ interface PatientSuggestion {
   contact: string
   patientId: string
   age: number
-  dayType: "year"|"month"|"day"
+  dayType: "year" | "month" | "day"
   gender: string
 }
 
-
 async function generatePatientId(): Promise<string> {
-  const now  = new Date()
+  const now = new Date()
   const yyyy = now.getFullYear()
-  const mm   = String(now.getMonth() + 1).padStart(2, "0")
-  const dd   = String(now.getDate()).padStart(2, "0")
+  const mm = String(now.getMonth() + 1).padStart(2, "0")
+  const dd = String(now.getDate()).padStart(2, "0")
 
   // Use only YYYYMM as the key for transactional counter
-  const monthKey = `${yyyy}${mm}`         // e.g. "202504"
+  const monthKey = `${yyyy}${mm}` // e.g. "202504"
   const counterRef = ref(database, "patientIdPattern/monthlyKey")
 
   const result = await runTransaction(counterRef, (current: string | null) => {
@@ -91,7 +90,7 @@ async function generatePatientId(): Promise<string> {
     } else {
       // bump the 4-digit sequence
       const [, seq] = current.split("-")
-      const nextSeq = String(parseInt(seq, 10) + 1).padStart(4, "0")
+      const nextSeq = String(Number.parseInt(seq, 10) + 1).padStart(4, "0")
       return `${monthKey}-${nextSeq}`
     }
   })
@@ -101,11 +100,11 @@ async function generatePatientId(): Promise<string> {
   }
 
   // extract just the sequence portion
-  const fullKey = result.snapshot.val() as string  // e.g. "202504-0023"
-  const seq     = fullKey.split("-")[1]            // "0023"
+  const fullKey = result.snapshot.val() as string // e.g. "202504-0023"
+  const seq = fullKey.split("-")[1] // "0023"
 
-  // return full-date id: YYYYMMDD-#### 
-  return `${yyyy}${mm}${dd}-${seq}`               // e.g. "20250422-0023"
+  // return full-date id: YYYYMMDD-####
+  return `${yyyy}${mm}${dd}-${seq}` // e.g. "20250422-0023"
 }
 
 /* ─────────────────── Main Component ─────────────────── */
@@ -114,16 +113,9 @@ const PatientEntryForm: React.FC = () => {
   const [currentUser, setCurrentUser] = useState(auth.currentUser)
   useEffect(() => auth.onAuthStateChanged(setCurrentUser), [])
 
-  /* 2) Current date and time for registration */
-  const now = new Date()
-  const currentDate = now.toISOString().split("T")[0]
-
-  // Format time in 12-hour format
-  const hours = now.getHours()
-  const minutes = now.getMinutes()
-  const ampm = hours >= 12 ? "PM" : "AM"
-  const hours12 = hours % 12 || 12
-  const currentTime = `${hours12.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")} ${ampm}`
+  /* 2) Current date and time for registration - fetched from online source */
+  const [currentDate, setCurrentDate] = useState("")
+  const [currentTime, setCurrentTime] = useState("")
 
   /* 3) Form */
   const {
@@ -135,25 +127,72 @@ const PatientEntryForm: React.FC = () => {
     setValue,
     reset,
   } = useForm<IFormInput>({
-   defaultValues: {
-     hospitalName: "MEDFORD HOSPITAL",
-     visitType: "opd",
-     name: "",
-     contact: "",
-     dayType: "year",
-     gender: "",
-     address: "",
-     email: "",
-     doctorName: "",
-     doctorId: "",
-     bloodTests: [],
-     paymentMode: "online",
-     patientId: "",
-     registrationDate: currentDate,
-     registrationTime: currentTime,
-     // age, discountAmount, amountPaid are now undefined → show as blank
-   },
+    defaultValues: {
+      hospitalName: "MEDFORD HOSPITAL",
+      visitType: "opd",
+      name: "",
+      contact: "",
+      dayType: "year",
+      gender: "",
+      address: "",
+      email: "",
+      doctorName: "",
+      doctorId: "",
+      bloodTests: [],
+      paymentMode: "online",
+      patientId: "",
+      registrationDate: "",
+      registrationTime: "",
+      // age, discountAmount, amountPaid are now undefined → show as blank
+    },
   })
+
+  /* Fetch current time from online source */
+  useEffect(() => {
+    // Fetch current time from WorldTimeAPI for Mumbai timezone
+    fetch("https://worldtimeapi.org/api/timezone/Asia/Kolkata")
+      .then((response) => response.json())
+      .then((data) => {
+        const dateTime = new Date(data.datetime)
+
+        // Format date as YYYY-MM-DD
+        const year = dateTime.getFullYear()
+        const month = String(dateTime.getMonth() + 1).padStart(2, "0")
+        const day = String(dateTime.getDate()).padStart(2, "0")
+        const formattedDate = `${year}-${month}-${day}`
+
+        // Format time in 12-hour format
+        const hours = dateTime.getHours()
+        const minutes = dateTime.getMinutes()
+        const ampm = hours >= 12 ? "PM" : "AM"
+        const hours12 = hours % 12 || 12
+        const formattedTime = `${hours12.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")} ${ampm}`
+
+        setCurrentDate(formattedDate)
+        setCurrentTime(formattedTime)
+
+        // Update form values
+        setValue("registrationDate", formattedDate)
+        setValue("registrationTime", formattedTime)
+      })
+      .catch((error) => {
+        console.error("Error fetching time:", error)
+        // Fallback to local time if API fails
+        const now = new Date()
+        const localDate = now.toISOString().split("T")[0]
+
+        const hours = now.getHours()
+        const minutes = now.getMinutes()
+        const ampm = hours >= 12 ? "PM" : "AM"
+        const hours12 = hours % 12 || 12
+        const localTime = `${hours12.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")} ${ampm}`
+
+        setCurrentDate(localDate)
+        setCurrentTime(localTime)
+        setValue("registrationDate", localDate)
+        setValue("registrationTime", localTime)
+      })
+  }, []) // Remove setValue from dependency array
 
   /* 4) Local state */
   const [doctorList, setDoctorList] = useState<{ id: string; doctorName: string }[]>([])
@@ -195,8 +234,8 @@ const PatientEntryForm: React.FC = () => {
               id,
               testName: d.testName,
               price: Number(d.price),
-               // if isOutsource === false → in‑hospital; otherwise (true or missing) → outsource
-       type: d.isOutsource === false ? "inhospital" : "outsource",
+              // if isOutsource === false → in‑hospital; otherwise (true or missing) → outsource
+              type: d.isOutsource === false ? "inhospital" : "outsource",
             }))
             .sort((a, b) => a.testName.localeCompare(b.testName))
           setAvailableBloodTests(arr)
@@ -227,44 +266,35 @@ const PatientEntryForm: React.FC = () => {
     })()
   }, [])
 
-
-
-  
-
-
   /* 8) Fetch EXISTING patients for suggestions */
   useEffect(() => {
     ;(async () => {
-      const snap = await get(ref(database, "patients"));
+      const snap = await get(ref(database, "patients"))
       if (snap.exists()) {
-        const temp: Record<string, PatientSuggestion> = {};
+        const temp: Record<string, PatientSuggestion> = {}
         snap.forEach((child: DataSnapshot) => {
           const d = child.val()
           if (d?.patientId && !temp[d.patientId]) {
             temp[d.patientId] = {
               id: child.key!,
-              name:     (d.name     as string) || "",
-              contact:  (d.contact  as string) || "",
-              patientId:(d.patientId as string),
-              age:       Number(d.age)           || 0,
-              dayType:   (d.dayType as any)      || "year",
-              gender:    (d.gender  as string)   || "",
+              name: (d.name as string) || "",
+              contact: (d.contact as string) || "",
+              patientId: d.patientId as string,
+              age: Number(d.age) || 0,
+              dayType: (d.dayType as any) || "year",
+              gender: (d.gender as string) || "",
             }
           }
         })
-        
-  
+
         // now dedupe by name (so each patient name appears only once)
-        const suggestions = Object.values(temp);
-        const uniquePatients = Array.from(
-          new Map(suggestions.map(p => [p.name, p])).values()
-        );
-  
-        setExistingPatients(uniquePatients);
+        const suggestions = Object.values(temp)
+        const uniquePatients = Array.from(new Map(suggestions.map((p) => [p.name, p])).values())
+
+        setExistingPatients(uniquePatients)
       }
-    })();
-  }, []);
-  
+    })()
+  }, [])
 
   /* 9) Suggestions */
   const watchDoctorName = watch("doctorName") ?? ""
@@ -289,29 +319,23 @@ const PatientEntryForm: React.FC = () => {
   /* 10) Field array for blood tests */
   const { fields: bloodTestFields, append, remove } = useFieldArray({ control, name: "bloodTests" })
 
-
-
-
   /* 11) Payment calculations */
-const bloodTests = watch("bloodTests")
-const discountAmount = watch("discountAmount")
-const amountPaid = watch("amountPaid")
-const totalAmount = bloodTests.reduce((s, t) => s + Number(t.price || 0), 0)
-const remainingAmount = totalAmount - Number(discountAmount || 0) - Number(amountPaid || 0)
+  const bloodTests = watch("bloodTests")
+  const discountAmount = watch("discountAmount")
+  const amountPaid = watch("amountPaid")
+  const totalAmount = bloodTests.reduce((s, t) => s + Number(t.price || 0), 0)
+  const remainingAmount = totalAmount - Number(discountAmount || 0) - Number(amountPaid || 0)
 
-/* 11.a) Filter out already‑added tests */
-const unselectedBloodTests = useMemo(() => {
-  return availableBloodTests.filter(
-    t => !bloodTests.some(bt => bt.testId === t.id)
-  )
-}, [availableBloodTests, bloodTests])
+  /* 11.a) Filter out already‑added tests */
+  const unselectedBloodTests = useMemo(() => {
+    return availableBloodTests.filter((t) => !bloodTests.some((bt) => bt.testId === t.id))
+  }, [availableBloodTests, bloodTests])
   /* 12) Add selected test */
   const handleAddTest = () => {
     if (!selectedTest) return
-  
 
-   const test = unselectedBloodTests.find((t) => t.id === selectedTest)
-  
+    const test = unselectedBloodTests.find((t) => t.id === selectedTest)
+
     if (test) {
       append({
         testId: test.id,
@@ -324,37 +348,33 @@ const unselectedBloodTests = useMemo(() => {
   }
   /* 13) Submit handler */
 
-
-// add all remaining tests
-const handleAddAllTests = () => {
-  unselectedBloodTests.forEach((t) =>
-    append({
-      testId: t.id,
-      testName: t.testName,
-      price: t.price,
-      testType: t.type,
-    })
-  );
-};
-
-// remove every selected test
-const handleRemoveAllTests = () => {
-  // remove from end→start so indexes stay valid
-  for (let i = bloodTestFields.length - 1; i >= 0; i--) {
-    remove(i);
+  // add all remaining tests
+  const handleAddAllTests = () => {
+    unselectedBloodTests.forEach((t) =>
+      append({
+        testId: t.id,
+        testName: t.testName,
+        price: t.price,
+        testType: t.type,
+      }),
+    )
   }
-};
 
+  // remove every selected test
+  const handleRemoveAllTests = () => {
+    // remove from end→start so indexes stay valid
+    for (let i = bloodTestFields.length - 1; i >= 0; i--) {
+      remove(i)
+    }
+  }
 
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
-
-
     data.discountAmount = isNaN(data.discountAmount) ? 0 : data.discountAmount
-    data.amountPaid     = isNaN(data.amountPaid)     ? 0 : data.amountPaid
+    data.amountPaid = isNaN(data.amountPaid) ? 0 : data.amountPaid
 
     if (!data.bloodTests || data.bloodTests.length === 0) {
-      alert("Please add at least one blood test before submitting.");
-      return;
+      alert("Please add at least one blood test before submitting.")
+      return
     }
     try {
       /* 1) No duplicate tests */
@@ -363,7 +383,7 @@ const handleRemoveAllTests = () => {
         alert("Please remove duplicate tests before submitting.")
         return
       }
-    
+
       /* 2) Always generate a new patient ID */
       data.patientId = await generatePatientId()
 
@@ -371,31 +391,40 @@ const handleRemoveAllTests = () => {
       const mult = data.dayType === "year" ? 360 : data.dayType === "month" ? 30 : 1
       const total_day = data.age * mult
 
-   
       /* 4) Store in Firebase */
       const userEmail = currentUser?.email || "Unknown User"
 
-  // 4.a) Parse registrationTime ("hh:mm AM/PM")
-  const [timePart, ampm] = data.registrationTime.split(" ")
-  const [hoursStr, minutesStr] = timePart.split(":")
-  let hours = Number(hoursStr)
-  const minutes = Number(minutesStr)
-  
-  if (ampm === "PM" && hours < 12) hours += 12
-  if (ampm === "AM" && hours === 12) hours = 0
+      // 4.a) Parse registrationTime ("hh:mm AM/PM")
+      const [timePart, ampm] = data.registrationTime.split(" ")
+      const [hoursStr, minutesStr] = timePart.split(":")
+      let hours = Number(hoursStr)
+      const minutes = Number(minutesStr)
 
-  // 4.b) Parse registrationDate ("YYYY-MM-DD")
-  const [year, month, day] = data.registrationDate.split("-").map((v) => Number(v))
+      if (ampm === "PM" && hours < 12) hours += 12
+      if (ampm === "AM" && hours === 12) hours = 0
 
-  // 4.c) Build a Date in local time
-  const createdAtDate = new Date(year, month - 1, day, hours, minutes)
+      // 4.b) Parse registrationDate ("YYYY-MM-DD")
+      const [year, month, day] = data.registrationDate.split("-").map((v) => Number(v))
 
-  await set(push(ref(database, "patients")), {
-    ...data,
-    total_day,
-    enteredBy: userEmail,
-    createdAt: createdAtDate.toISOString(),
-  })
+      let createdAtDate
+
+      // Try to get the current time from WorldTimeAPI again to ensure accuracy
+      try {
+        const response = await fetch("https://worldtimeapi.org/api/timezone/Asia/Kolkata")
+        const timeData = await response.json()
+        createdAtDate = new Date(timeData.datetime)
+      } catch (error) {
+        console.error("Error fetching time for submission:", error)
+        // Fallback to parsed form values if API fails
+        createdAtDate = new Date(year, month - 1, day, hours, minutes)
+      }
+
+      await set(push(ref(database, "patients")), {
+        ...data,
+        total_day,
+        enteredBy: userEmail,
+        createdAt: createdAtDate.toISOString(),
+      })
 
       /* 5) Send WhatsApp confirmation */
       const totalAmount = data.bloodTests.reduce((s, t) => s + t.price, 0)
@@ -503,14 +532,13 @@ const handleRemoveAllTests = () => {
                             key={p.patientId}
                             className="px-2 py-1 hover:bg-gray-100 cursor-pointer"
                             onClick={() => {
-                              setValue("name",    p.name.toUpperCase())
+                              setValue("name", p.name.toUpperCase())
                               setValue("contact", p.contact)
-                              setValue("age",     p.age)
+                              setValue("age", p.age)
                               setValue("dayType", p.dayType)
-                              setValue("gender",  p.gender)
+                              setValue("gender", p.gender)
                               setShowPatientSuggestions(false)
                             }}
-                            
                           >
                             {p.name.toUpperCase()} – {p.contact}
                           </li>
@@ -542,17 +570,17 @@ const handleRemoveAllTests = () => {
                 {/* Age, Age Unit, Gender in flex */}
                 <div className="flex gap-2 mb-2">
                   <div className="w-1/4">
-                  <Label className="text-xs">Age</Label>
-<Input
-  type="number"
-  {...register("age", {
-    required: "Age is required",
-    min: { value: 1, message: "Age must be positive" },
-  })}
-  onWheel={e => e.currentTarget.blur()}
-  className="h-8 text-xs"
-  placeholder=""
-/>
+                    <Label className="text-xs">Age</Label>
+                    <Input
+                      type="number"
+                      {...register("age", {
+                        required: "Age is required",
+                        min: { value: 1, message: "Age must be positive" },
+                      })}
+                      onWheel={(e) => e.currentTarget.blur()}
+                      className="h-8 text-xs"
+                      placeholder=""
+                    />
                     {errors.age && <p className="text-red-500 text-[10px] mt-0.5">{errors.age.message}</p>}
                   </div>
 
@@ -599,7 +627,10 @@ const handleRemoveAllTests = () => {
                   <div className="w-1/3">
                     <Label className="text-xs">Hospital</Label>
                     <div className="relative">
-                      <Select defaultValue="MEDFORD HOSPITAL" onValueChange={(value) => setValue("hospitalName", value)}>
+                      <Select
+                        defaultValue="MEDFORD HOSPITAL"
+                        onValueChange={(value) => setValue("hospitalName", value)}
+                      >
                         <SelectTrigger className="h-8 text-xs pl-7">
                           <SelectValue placeholder="Select hospital" />
                         </SelectTrigger>
@@ -667,17 +698,15 @@ const handleRemoveAllTests = () => {
                   <div className="w-1/2 relative">
                     <Label className="text-xs">Doctor Name</Label>
                     <div className="relative">
-                    <Input
-  {...register("doctorName", {
-    required: "Referring doctor is required",
-    onChange: () => setShowDoctorSuggestions(true),
-  })}
-/>
-{errors.doctorName && (
-  <p className="text-red-500 text-[10px] mt-0.5">
-    {errors.doctorName.message}
-  </p>
-)}
+                      <Input
+                        {...register("doctorName", {
+                          required: "Referring doctor is required",
+                          onChange: () => setShowDoctorSuggestions(true),
+                        })}
+                      />
+                      {errors.doctorName && (
+                        <p className="text-red-500 text-[10px] mt-0.5">{errors.doctorName.message}</p>
+                      )}
 
                       <UserIcon className="h-3.5 w-3.5 absolute left-2 top-[7px] text-gray-400" />
                     </div>
@@ -729,56 +758,48 @@ const handleRemoveAllTests = () => {
 
               {/* Blood Tests Section */}
               <div className="bg-gray-50 p-2 rounded-md">
-              <div className="flex items-center justify-between mb-2">
-  <h3 className="text-sm font-semibold text-gray-700">Blood Tests</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-semibold text-gray-700">Blood Tests</h3>
 
-  <div className="flex items-center space-x-1">
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-7 text-xs"
-      onClick={handleAddAllTests}
-    >
-      Add All
-    </Button>
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-7 text-xs"
-      onClick={handleRemoveAllTests}
-    >
-      Remove All
-    </Button>
+                  <div className="flex items-center space-x-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleAddAllTests}
+                    >
+                      Add All
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleRemoveAllTests}
+                    >
+                      Remove All
+                    </Button>
 
-    <Select value={selectedTest} onValueChange={setSelectedTest}>
-      <SelectTrigger className="h-7 text-xs w-40">
-        <SelectValue placeholder="Select a test" />
-      </SelectTrigger>
-      <SelectContent>
-        {unselectedBloodTests.map((t) => (
-          <SelectItem key={t.id} value={t.id}>
-            {t.testName}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+                    <Select value={selectedTest} onValueChange={setSelectedTest}>
+                      <SelectTrigger className="h-7 text-xs w-40">
+                        <SelectValue placeholder="Select a test" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {unselectedBloodTests.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.testName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-7 text-xs"
-      onClick={handleAddTest}
-    >
-      <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
-      Add
-    </Button>
-  </div>
-</div>
-
-
+                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={handleAddTest}>
+                      <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
+                      Add
+                    </Button>
+                  </div>
+                </div>
 
                 {/* Blood Tests Table */}
                 <div className="border rounded-md overflow-hidden">
@@ -803,15 +824,15 @@ const handleRemoveAllTests = () => {
                           <TableRow key={field.id}>
                             <TableCell className="text-xs py-1 px-2">{watch(`bloodTests.${idx}.testName`)}</TableCell>
                             <TableCell className="text-xs py-1 px-2">
-  <Input
-    type="number"
-    {...register(`bloodTests.${idx}.price` as const, {
-      valueAsNumber: true,
-    })}
-    disabled
-    className="h-6 text-xs p-1 bg-gray-100 cursor-not-allowed"
-  />
-</TableCell>
+                              <Input
+                                type="number"
+                                {...register(`bloodTests.${idx}.price` as const, {
+                                  valueAsNumber: true,
+                                })}
+                                disabled
+                                className="h-6 text-xs p-1 bg-gray-100 cursor-not-allowed"
+                              />
+                            </TableCell>
 
                             <TableCell className="text-xs py-1 px-2">
                               <Select
@@ -858,7 +879,7 @@ const handleRemoveAllTests = () => {
                         type="number"
                         step="0.01"
                         {...register("discountAmount", { valueAsNumber: true })}
-                        onWheel={e => e.currentTarget.blur()}
+                        onWheel={(e) => e.currentTarget.blur()}
                         placeholder="0"
                         className="h-8 text-xs"
                       />
@@ -869,7 +890,7 @@ const handleRemoveAllTests = () => {
                         type="number"
                         step="0.01"
                         {...register("amountPaid", { valueAsNumber: true })}
-                        onWheel={e => e.currentTarget.blur()}
+                        onWheel={(e) => e.currentTarget.blur()}
                         placeholder="0"
                         className="h-8 text-xs"
                       />

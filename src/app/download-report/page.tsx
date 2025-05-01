@@ -401,8 +401,12 @@ function DownloadReport() {
 
         // LEFT VALUE: wrap only row 0 (Patient Name), else single-line
         if (i === 0) {
+          // Set bold font for patient name
+          doc.setFont("helvetica", "bold")
           const nameLines = doc.splitTextToSize(leftRows[i].value, leftValueWidth)
           doc.text(nameLines, xLV, y)
+          // Reset to normal font after patient name
+          doc.setFont("helvetica", "normal")
           y += nameLines.length * (gap - 2)
         } else {
           doc.text(leftRows[i].value, xLV, y)
