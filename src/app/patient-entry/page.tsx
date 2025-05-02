@@ -532,15 +532,15 @@ const PatientEntryForm: React.FC = () => {
                       <SelectContent>
                         
                         <SelectItem value="MRS">MRS</SelectItem>
-                        <SelectItem value="MRS">MAST</SelectItem>
-                        <SelectItem value="MRS">BABA</SelectItem>
+                        <SelectItem value="MAST">MAST</SelectItem>
+                        <SelectItem value="BABA">BABA</SelectItem>
                         <SelectItem value="MISS">MISS</SelectItem>
                         <SelectItem value="MS">MS</SelectItem>
                         <SelectItem value="MRS">MRS</SelectItem>
-                        <SelectItem value="MRS">BABY</SelectItem>
-                        <SelectItem value="MRS">SMT</SelectItem>
-                        <SelectItem value="DR">BABY OF</SelectItem>
-                        <SelectItem value="PROF">DR</SelectItem>
+                        <SelectItem value="BABY">BABY</SelectItem>
+                        <SelectItem value="SMT">SMT</SelectItem>
+                        <SelectItem value="BABY OF">BABY OF</SelectItem>
+                        <SelectItem value="DR">DR</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
