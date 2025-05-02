@@ -38,6 +38,7 @@ interface BloodTestSelection {
 interface IFormInput {
   hospitalName: string
   visitType: "opd" | "ipd"
+  title: string
   name: string
   contact: string
   age: number
@@ -68,6 +69,7 @@ interface PatientSuggestion {
   name: string
   contact: string
   patientId: string
+  title?: string
   age: number
   dayType: "year" | "month" | "day"
   gender: string
@@ -130,6 +132,7 @@ const PatientEntryForm: React.FC = () => {
     defaultValues: {
       hospitalName: "MEDFORD HOSPITAL",
       visitType: "opd",
+      title: "",
       name: "",
       contact: "",
       dayType: "year",
@@ -283,6 +286,7 @@ const PatientEntryForm: React.FC = () => {
               age: Number(d.age) || 0,
               dayType: (d.dayType as any) || "year",
               gender: (d.gender as string) || "",
+              title: (d.title as string) || "",
             }
           }
         })
@@ -419,11 +423,22 @@ const PatientEntryForm: React.FC = () => {
         createdAtDate = new Date(year, month - 1, day, hours, minutes)
       }
 
+      /* Create payment history entry for the initial payment */
+      const paymentHistory = []
+      if (Number(data.amountPaid) > 0) {
+        paymentHistory.push({
+          amount: Number(data.amountPaid),
+          paymentMode: data.paymentMode,
+          time: createdAtDate.toISOString(),
+        })
+      }
+
       await set(push(ref(database, "patients")), {
         ...data,
         total_day,
         enteredBy: userEmail,
         createdAt: createdAtDate.toISOString(),
+        paymentHistory: paymentHistory,
       })
 
       /* 5) Send WhatsApp confirmation */
@@ -508,7 +523,24 @@ const PatientEntryForm: React.FC = () => {
 
                 {/* Name and Contact in flex */}
                 <div className="flex gap-2 mb-2">
-                  <div className="w-1/2 relative">
+                  <div className="w-1/4">
+                    <Label className="text-xs">Title</Label>
+                    <Select onValueChange={(value) => setValue("title", value)}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MR">MR</SelectItem>
+                        <SelectItem value="MRS">MRS</SelectItem>
+                        <SelectItem value="MISS">MISS</SelectItem>
+                        <SelectItem value="MS">MS</SelectItem>
+                        <SelectItem value="DR">DR</SelectItem>
+                        <SelectItem value="PROF">PROF</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="w-3/4 relative">
                     <Label className="text-xs">Full Name</Label>
                     <div className="relative">
                       <Input
@@ -537,6 +569,7 @@ const PatientEntryForm: React.FC = () => {
                               setValue("age", p.age)
                               setValue("dayType", p.dayType)
                               setValue("gender", p.gender)
+                              if (p.title) setValue("title", p.title)
                               setShowPatientSuggestions(false)
                             }}
                           >
@@ -546,8 +579,10 @@ const PatientEntryForm: React.FC = () => {
                       </ul>
                     )}
                   </div>
+                </div>
 
-                  <div className="w-1/2">
+                <div className="flex gap-2 mb-2">
+                  <div className="w-full">
                     <Label className="text-xs">Contact Number</Label>
                     <div className="relative">
                       <Input

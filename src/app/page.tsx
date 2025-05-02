@@ -87,6 +87,17 @@ const calculateTotalsForSelected = (selectedIds: string[], patients: Patient[]) 
   return { totalAmount, totalPaid, totalDiscount, remaining: totalAmount - totalPaid - totalDiscount }
 }
 
+// New utility to format current local time for datetime-local input
+const formatLocalDateTime = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0"); // Months are 0-based
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
 /* --------------------  Component  -------------------- */
 export default function Dashboard() {
   /* --- state --- */
@@ -100,7 +111,6 @@ export default function Dashboard() {
   const [newAmountPaid, setNewAmountPaid] = useState<string>("")
   const [paymentMode, setPaymentMode] = useState<string>("online")
   const [searchTerm, setSearchTerm] = useState<string>("")
-  // const [selectedDate, setSelectedDate] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null)
   const [fakeBillPatient, setFakeBillPatient] = useState<Patient | null>(null) // <-- NEW
@@ -108,14 +118,14 @@ export default function Dashboard() {
   const [selectAll, setSelectAll] = useState(false)
   const [showCheckboxes, setShowCheckboxes] = useState<boolean>(false)
 
-  // ─────────────── add at top ───────────────
+  // ─────────────── date range for filtering ───────────────
   const todayStr = new Date().toISOString().slice(0, 10) // "YYYY‑MM‑DD"
   const [startDate, setStartDate] = useState<string>(todayStr)
   const [endDate, setEndDate] = useState<string>(todayStr)
   // ─────────────────────────────────────────────
 
   const [sampleModalPatient, setSampleModalPatient] = useState<Patient | null>(null)
-  const [sampleDateTime, setSampleDateTime] = useState<string>(() => new Date().toISOString().slice(0, 16))
+  const [sampleDateTime, setSampleDateTime] = useState<string>(formatLocalDateTime)
 
   const [deleteRequestPatients, setDeleteRequestPatients] = useState<
     Record<string, { reason: string; requestedBy: string }>
@@ -200,11 +210,11 @@ export default function Dashboard() {
       const term = searchTerm.trim().toLowerCase()
       const matchesSearch = !term || p.name.toLowerCase().includes(term) || (p.contact ?? "").includes(term)
 
-      // ← new: only include patients created between startDate and endDate
+      // Filter by date range
       const created = p.createdAt.slice(0, 10) // "YYYY‑MM‑DD"
       const inRange = (!startDate || created >= startDate) && (!endDate || created <= endDate)
 
-      // your existing status logic...
+      // Status logic
       const sampleCollected = !!p.sampleCollectedAt
       const complete = isAllTestsComplete(p)
       let matchesStatus = true
@@ -598,7 +608,7 @@ export default function Dashboard() {
         },
       }))
 
-      // You could also save this to your database
+      // Save to database
       await update(ref(database, `patients/${deleteRequestModalPatient.id}`), {
         deleteRequest: {
           reason: deleteReason,
@@ -695,7 +705,6 @@ export default function Dashboard() {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="p-2 border rounded-md"
           />
-          {/* ───────────── date range inputs ───────────── */}
           <input
             type="date"
             value={startDate}
@@ -708,8 +717,6 @@ export default function Dashboard() {
             onChange={(e) => setEndDate(e.target.value)}
             className="p-2 border rounded-md"
           />
-          {/* ────────────────────────────────────────────── */}
-
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -818,7 +825,7 @@ export default function Dashboard() {
                       />
                     </th>
                   )}
-                  {["." ,"Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map((h) => (
+                  {[".", "Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map((h) => (
                     <th key={h} className="px-3 py-2 text-left font-medium text-gray-500">
                       {h}
                     </th>
@@ -843,7 +850,7 @@ export default function Dashboard() {
                           </div>
                         )}
                         <td
-                          className={`px-3 py-2 relative ${deleteRequestPatients[p.id] ? "bg-red-100" : ""} ${deletedPatients.includes(p.id) ? "bg-red-200" : ""}`}
+                          className={`px-3 py-2 relative ${deleteRequestPatients[p.id] ? "bg-red-100 wzmoc:2px; border:1px solid black; padding:5px; margin:5px; border-radius:5px;" : ""} ${deletedPatients.includes(p.id) ? "bg-red-200" : ""}`}
                         >
                           {showCheckboxes && (
                             <input
@@ -914,7 +921,7 @@ export default function Dashboard() {
 
                       {expandedPatientId === p.id && (
                         <tr>
-                          <td colSpan={showCheckboxes ? 8 : 7} className="bg-gray-50 p-2">
+                          <td colSpan={showCheckboxes ? 9 : 8} className="bg-gray-50 p-2">
                             <div className="flex flex-wrap gap-1 text-xs">
                               {deleteRequestPatients[p.id] && (
                                 <div className="w-full mb-2 p-2 bg-red-100 rounded text-sm">
@@ -938,12 +945,13 @@ export default function Dashboard() {
                                       Set Sample Collected Time for {sampleModalPatient.name}
                                     </h3>
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                                      Date &amp; Time
+                                      Date & Time
                                     </label>
                                     <input
                                       type="datetime-local"
                                       value={sampleDateTime}
                                       onChange={(e) => setSampleDateTime(e.target.value)}
+                                      max={formatLocalDateTime()} // Prevent future times
                                       className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
                                     />
                                     <p className="mt-2 text-sm text-gray-600">
@@ -993,7 +1001,7 @@ export default function Dashboard() {
                                     <button
                                       onClick={() => {
                                         setSampleModalPatient(p)
-                                        setSampleDateTime(new Date().toISOString().slice(0, 16))
+                                        setSampleDateTime(formatLocalDateTime()) // Set current local time
                                       }}
                                       className="px-3 py-1 bg-red-600 text-white rounded-md text-xs hover:bg-red-700"
                                       disabled={!!deleteRequestPatients[p.id]}
@@ -1196,11 +1204,10 @@ export default function Dashboard() {
                 <input
                   type="number"
                   step="0.01"
-                  // now a string, so you can clear it
                   value={newAmountPaid}
                   onChange={(e) => setNewAmountPaid(e.target.value)}
                   className="mt-1 w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  placeholder="Enter amount" // removes the forced 0
+                  placeholder="Enter amount"
                   required
                 />
               </div>

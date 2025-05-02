@@ -4,19 +4,15 @@ import { Suspense, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { jsPDF } from "jspdf"
 import { ref as dbRef, get, update } from "firebase/database"
-import { database } from "../../firebase" // ← adjust if needed
+import { database } from "../../firebase"
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage"
-
-// Import the graph report generator
-import { generateGraphPDF } from "./graphrerport" // ← Import the new function
-
-// local images
+import { generateGraphPDF } from "./graphrerport"
 import letterhead from "../../../public/letterhead.png"
 import firstpage from "../../../public/first.png"
 import stamp from "../../../public/stamp.png"
 
 // -----------------------------
-// Type Definitions (keep as is)
+// Type Definitions
 // -----------------------------
 export interface AgeRangeItem {
   rangeKey: string
@@ -34,7 +30,7 @@ export interface Parameter {
 export interface BloodTestData {
   parameters: Parameter[]
   subheadings?: { title: string; parameterNames: string[] }[]
-  type?: string // e.g. "in‑house" | "outsource"
+  type?: string
   reportedOn?: string
   enteredBy?: string
 }
@@ -51,13 +47,14 @@ export interface PatientData {
   hospitalName?: string
   bloodtest?: Record<string, BloodTestData>
   dayType?: string
+  title?: string
 }
 
 // -----------------------------
-// Helper: Compress image as JPEG (keep as is)
+// Helper Functions
 // -----------------------------
+// Compress image as JPEG
 const loadImageAsCompressedJPEG = async (url: string, quality = 0.5) => {
-  // ... (keep existing implementation)
   const res = await fetch(url)
   const blob = await res.blob()
   return new Promise<string>((resolve, reject) => {
@@ -76,11 +73,8 @@ const loadImageAsCompressedJPEG = async (url: string, quality = 0.5) => {
   })
 }
 
-// -----------------------------
-// Helper functions (parseRangeKey, parseNumericRangeString) (keep as is)
-// -----------------------------
+// Parse range key
 const parseRangeKey = (key: string) => {
-  // ... (keep existing implementation)
   key = key.trim()
   const suf = key.slice(-1)
   let mul = 1
@@ -91,16 +85,13 @@ const parseRangeKey = (key: string) => {
   return { lower: Number(lo) * mul || 0, upper: Number(hi) * mul || Number.POSITIVE_INFINITY }
 }
 
+// Parse numeric range string
 const parseNumericRangeString = (str: string) => {
-  // ... (keep existing implementation)
-  // ▸ "up to 12.5"  →  { lower: 0, upper: 12.5 }
   const up = /^\s*up\s*(?:to\s*)?([\d.]+)\s*$/i.exec(str)
   if (up) {
     const upper = Number.parseFloat(up[1])
-    return isNaN(upper) ? null : { lower: 0, upper } // ← changed 1 → 0
+    return isNaN(upper) ? null : { lower: 0, upper }
   }
-
-  // ▸ "4‑7" or "4 to 7"  →  { lower: 4, upper: 7 }
   const m = /^\s*([\d.]+)\s*(?:-|to)\s*([\d.]+)\s*$/i.exec(str)
   if (!m) return null
   const lower = Number.parseFloat(m[1]),
@@ -108,14 +99,22 @@ const parseNumericRangeString = (str: string) => {
   return isNaN(lower) || isNaN(upper) ? null : { lower, upper }
 }
 
-// Move format12Hour function to component level so it can be used everywhere
+// Convert date to local YYYY-MM-DDTHH:mm format for datetime-local
+const toLocalDateTimeString = (dateInput?: string | Date) => {
+  const date = dateInput ? new Date(dateInput) : new Date()
+  const offset = date.getTimezoneOffset()
+  const adjustedDate = new Date(date.getTime() - offset * 60 * 1000)
+  return adjustedDate.toISOString().slice(0, 16)
+}
+
+// Format ISO date to 12-hour format
 const format12Hour = (isoString: string) => {
   const date = new Date(isoString)
   let hours = date.getHours()
   const minutes = date.getMinutes()
   const ampm = hours >= 12 ? "PM" : "AM"
   hours = hours % 12
-  hours = hours ? hours : 12 // the hour '0' should be '12'
+  hours = hours ? hours : 12
   const minutesStr = minutes < 10 ? "0" + minutes : minutes
   return `${date.toLocaleDateString()} ${hours}:${minutesStr} ${ampm}`
 }
@@ -138,8 +137,10 @@ function DownloadReport() {
 
   const [patientData, setPatientData] = useState<PatientData | null>(null)
   const [isSending, setIsSending] = useState(false)
+  const [isGeneratingGraph, setIsGeneratingGraph] = useState(false)
+  const [selectedTests, setSelectedTests] = useState<string[]>([])
 
-  // ─── insert here ───
+  // State for updating reportedOn time
   const [updateTimeModal, setUpdateTimeModal] = useState<{
     isOpen: boolean
     testKey: string
@@ -150,14 +151,79 @@ function DownloadReport() {
     currentTime: "",
   })
 
-  // Function to open the update time modal
+  // State for updating sampleCollectedAt time
+  const [updateSampleTimeModal, setUpdateSampleTimeModal] = useState<{
+    isOpen: boolean
+    currentTime: string
+  }>({
+    isOpen: false,
+    currentTime: "",
+  })
+
+  // Fetch patient data
+  useEffect(() => {
+    if (!patientId) return
+    ;(async () => {
+      try {
+        const snap = await get(dbRef(database, `patients/${patientId}`))
+        if (!snap.exists()) return alert("Patient not found")
+
+        const data = snap.val() as PatientData
+        if (!data.bloodtest) return alert("No report found.")
+        data.bloodtest = hideInvisible(data)
+        setPatientData(data)
+      } catch (e) {
+        console.error(e)
+        alert("Error fetching patient.")
+      }
+    })()
+  }, [patientId])
+
+  // Initialize selected tests
+  useEffect(() => {
+    if (patientData?.bloodtest) {
+      setSelectedTests(Object.keys(patientData.bloodtest))
+    }
+  }, [patientData])
+
+  // Hide invisible parameters
+  const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
+    const out: Record<string, BloodTestData> = {}
+    if (!d.bloodtest) return out
+
+    for (const k in d.bloodtest) {
+      const t = d.bloodtest[k]
+      if (t.type === "outsource") continue
+
+      const keptParams = Array.isArray(t.parameters)
+        ? t.parameters
+            .filter((p) => p.visibility !== "hidden")
+            .map((p) => ({
+              ...p,
+              subparameters: Array.isArray(p.subparameters)
+                ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
+                : [],
+            }))
+        : []
+
+      out[k] = {
+        ...t,
+        parameters: keptParams,
+        subheadings: t.subheadings,
+        reportedOn: t.reportedOn,
+      }
+    }
+    return out
+  }
+
+  // Update reportedOn time for a test
   const updateReportedOnTime = (testKey: string) => {
     const test = patientData?.bloodtest?.[testKey]
     if (!test) return
 
     const currentTime = test.reportedOn
-      ? new Date(test.reportedOn).toISOString().slice(0, 16)
-      : new Date().toISOString().slice(0, 16)
+      ? toLocalDateTimeString(test.reportedOn)
+      : toLocalDateTimeString()
 
     setUpdateTimeModal({
       isOpen: true,
@@ -166,17 +232,7 @@ function DownloadReport() {
     })
   }
 
-  function toLocalDateTimeInputValue(dateInput: string | Date) {
-    const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput
-    // offset in ms
-    const tzOffset = d.getTimezoneOffset() * 60000
-    // subtract the offset so the ISO string will be in local time
-    const localISO = new Date(d.getTime() - tzOffset).toISOString()
-    // drop the seconds and milliseconds, leaving "YYYY-MM-DDTHH:mm"
-    return localISO.slice(0, 16)
-  }
-
-  // Function to save the updated time
+  // Save updated reportedOn time
   const saveUpdatedTime = async () => {
     if (!patientData || !updateTimeModal.testKey) return
 
@@ -186,10 +242,8 @@ function DownloadReport() {
 
       await update(testRef, { reportedOn: newReportedOn })
 
-      // Update local state to reflect the change
       setPatientData((prev) => {
         if (!prev || !prev.bloodtest) return prev
-
         return {
           ...prev,
           bloodtest: {
@@ -209,103 +263,62 @@ function DownloadReport() {
       alert("Failed to update report time.")
     }
   }
-  const [selectedTests, setSelectedTests] = useState<string[]>([])
-  // --- NEW STATE for Graph Report Button ---
 
-  const [isGeneratingGraph, setIsGeneratingGraph] = useState(false)
+  // Open modal to update sampleCollectedAt time
+  const updateSampleCollectedTime = () => {
+    const currentTime = patientData?.sampleCollectedAt
+      ? toLocalDateTimeString(patientData.sampleCollectedAt)
+      : toLocalDateTimeString()
 
-  // -----------------------------
-  // Fetch patient (keep as is, including hideInvisible logic)
-  // -----------------------------
-  useEffect(() => {
-    if (!patientId) return
-    ;(async () => {
-      try {
-        const snap = await get(dbRef(database, `patients/${patientId}`))
-        if (!snap.exists()) return alert("Patient not found")
-
-        const data = snap.val() as PatientData
-        if (!data.bloodtest) return alert("No report found.")
-        data.bloodtest = hideInvisible(data) // Apply hiding logic
-        setPatientData(data)
-      } catch (e) {
-        console.error(e)
-        alert("Error fetching patient.")
-      }
-    })()
-  }, [patientId, router]) // Removed hideInvisible from dependency array
-
-  useEffect(() => {
-    if (patientData?.bloodtest) {
-      setSelectedTests(Object.keys(patientData.bloodtest))
-    }
-  }, [patientData])
-
-  // Moved hideInvisible inside the component or define it outside if pure
-  const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
-    const out: Record<string, BloodTestData> = {}
-    if (!d.bloodtest) return out
-
-    for (const k in d.bloodtest) {
-      const t = d.bloodtest[k]
-
-      // ← skip any outsourced tests entirely
-      if (t.type === "outsource") continue
-
-      // ensure parameters is always an array
-      const keptParams = Array.isArray(t.parameters)
-        ? t.parameters
-            .filter((p) => p.visibility !== "hidden")
-            .map((p) => ({
-              ...p,
-              subparameters: Array.isArray(p.subparameters)
-                ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
-                : [],
-            }))
-        : []
-
-      out[k] = {
-        ...t,
-        parameters: keptParams,
-        // preserve subheadings if you want
-        subheadings: t.subheadings,
-        // make absolutely sure reportedOn stays through
-        reportedOn: t.reportedOn,
-      }
-    }
-    return out
+    setUpdateSampleTimeModal({
+      isOpen: true,
+      currentTime,
+    })
   }
 
-  // -----------------------------
-  // PDF builder (generatePDFReport - keep as is)
-  // -----------------------------
+  // Save updated sampleCollectedAt time
+  const saveUpdatedSampleTime = async () => {
+    if (!patientData) return
+
+    try {
+      const patientRef = dbRef(database, `patients/${patientId}`)
+      const newSampleCollectedAt = new Date(updateSampleTimeModal.currentTime).toISOString()
+
+      await update(patientRef, { sampleCollectedAt: newSampleCollectedAt })
+
+      setPatientData((prev) =>
+        prev ? { ...prev, sampleCollectedAt: newSampleCollectedAt } : prev,
+      )
+
+      setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }))
+      alert("Sample collected time updated successfully!")
+    } catch (error) {
+      console.error("Error updating sample collected time:", error)
+      alert("Failed to update sample collected time.")
+    }
+  }
+
+  // Generate PDF report
   const generatePDFReport = async (data: PatientData, includeLetterhead: boolean, skipCover: boolean) => {
-    // ... (keep existing extensive implementation for the main report)
     const doc = new jsPDF("p", "mm", "a4")
     let printedBy = "Unknown"
     const w = doc.internal.pageSize.getWidth()
     const h = doc.internal.pageSize.getHeight()
     const left = 23
-
-    // column widths
     const totalW = w - 2 * left
     const base = totalW / 4
-    // ↑ you can adjust these ratios however you like
-    const wParam = base * 1.4 // was 1.3 → now 1.4
-    const wValue = base * 0.6 // was 0.7 → now 0.6
-    const wRange = base * 1.2 // was 1.7 → now 1.6
-    // UNIT now automatically increases to fill the remaining space
+    const wParam = base * 1.4
+    const wValue = base * 0.6
+    const wRange = base * 1.2
     const wUnit = totalW - (wParam + wValue + wRange)
     const x1 = left
     const x2 = x1 + wParam
     const x3 = x2 + wValue + 15
     const x4 = x3 + wUnit
-
     const lineH = 5
     const ageDays = data.total_day ? Number(data.total_day) : Number(data.age) * 365
     const genderKey = data.gender?.toLowerCase() ?? ""
 
-    // helpers ------------------------------------------------------
     const addCover = async () => {
       if (skipCover) return
       try {
@@ -315,6 +328,7 @@ function DownloadReport() {
         console.error(e)
       }
     }
+
     const addLetter = async () => {
       if (!includeLetterhead) return
       try {
@@ -324,11 +338,11 @@ function DownloadReport() {
         console.error(e)
       }
     }
+
     const addStamp = async () => {
       const sw = 40,
         sh = 30,
         sx = w - left - sw,
-        // move stamp 15 mm from bottom (instead of 30)
         sy = h - sh - 23
       try {
         const img = await loadImageAsCompressedJPEG(stamp.src, 0.5)
@@ -340,33 +354,19 @@ function DownloadReport() {
       doc.text(`Printed by ${printedBy}`, left, sy + sh - 0)
     }
 
-    /** -------------------- HEADER (uniform – colon aligned) ------------------ */
-    // const getReportedOnDate = () => {
-    //   if (!patientData?.bloodtest || selectedTests.length === 0) return new Date().toLocaleString()
-
-    //   // Get the most recent reportedOn date from selected tests
-    //   const reportedOnDates = selectedTests
-    //     .map((testKey) => patientData.bloodtest?.[testKey]?.reportedOn)
-    //     .filter((date): date is string => Boolean(date))
-    //     .map((date) => new Date(date))
-
-    //   if (reportedOnDates.length === 0) return new Date().toLocaleString()
-
-    //   // Sort dates in descending order and take the most recent
-    //   reportedOnDates.sort((a, b) => b.getTime() - a.getTime())
-    //   return reportedOnDates[0].toLocaleString()
-    // }
     const headerY = (reportedOnRaw?: string) => {
       const gap = 7
       let y = 50
       doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(0, 0, 0)
 
-      // data rows
       const sampleDT = data.sampleCollectedAt ? new Date(data.sampleCollectedAt) : new Date(data.createdAt)
       const reportedOnStr = reportedOnRaw ? new Date(reportedOnRaw).toLocaleString() : "-"
 
       const leftRows = [
-        { label: "Patient Name", value: data.name.toUpperCase() },
+        {
+          label: "Patient Name",
+          value: data.title ? `${data.title} ${data.name.toUpperCase()}` : data.name.toUpperCase(),
+        },
         {
           label: "Age/Sex",
           value: `${data.age} ${
@@ -384,11 +384,9 @@ function DownloadReport() {
         { label: "Reported On", value: reportedOnStr },
       ]
 
-      // measure label widths
       const maxLeftLabel = Math.max(...leftRows.map((r) => doc.getTextWidth(r.label)))
       const maxRightLabel = Math.max(...rightRows.map((r) => doc.getTextWidth(r.label)))
 
-      // column X positions
       const xLL = left
       const xLC = xLL + maxLeftLabel + 2
       const xLV = xLC + 2
@@ -396,44 +394,30 @@ function DownloadReport() {
       const xRL = startR
       const xRC = xRL + maxRightLabel + 2
       const xRV = xRC + 2
-
-      // compute wrap width for name only
       const leftValueWidth = startR - xLV - 4
 
       for (let i = 0; i < leftRows.length; i++) {
-        // LEFT LABEL + COLON
         doc.text(leftRows[i].label, xLL, y)
         doc.text(":", xLC, y)
-
-        // LEFT VALUE: wrap only row 0 (Patient Name), else single-line
         if (i === 0) {
-          // Set bold font for patient name
           doc.setFont("helvetica", "bold")
           const nameLines = doc.splitTextToSize(leftRows[i].value, leftValueWidth)
           doc.text(nameLines, xLV, y)
-          // Reset to normal font after patient name
           doc.setFont("helvetica", "normal")
           y += nameLines.length * (gap - 2)
         } else {
           doc.text(leftRows[i].value, xLV, y)
           y += gap - 2
         }
-
-        // RIGHT SIDE: always single-line, keep in sync with left
-        doc.text(rightRows[i].label, xRL, y - (gap - 2)) // same y-start as left row
+        doc.text(rightRows[i].label, xRL, y - (gap - 2))
         doc.text(":", xRC, y - (gap - 2))
         doc.text(rightRows[i].value, xRV, y - (gap - 2))
       }
-
       return y
     }
 
-    /** ------------------------------------------------------------------------ */
-
-    // ----- core row printer (unchanged) -----------------------------
     let yPos = 0
     const printRow = (p: Parameter, indent = 0) => {
-      // build range string
       let rangeStr = ""
       if (typeof p.range === "string") {
         rangeStr = p.range
@@ -450,21 +434,6 @@ function DownloadReport() {
       }
       rangeStr = rangeStr.replaceAll("/n", "\n")
 
-      // ── normalize "up to X" and "A to B" into "0 – X" or "A – B" ──
-      // {
-      //   // ▸ only normalize "up to X" when X is numeric
-      //   const upMatch = /^\s*up\s*(?:to)?\s*[-–]?\s*([\d.]+)\s*$/i.exec(rangeStr);
-      //   if (upMatch) {
-      //     rangeStr = `0 - ${upMatch[1]}`;
-      //   }
-      //   // ▸ only normalize "A to B" (or "A - B") when both A and B are numeric
-      //   else if (/^\s*[\d.]+\s*(?:to|-)\s*[\d.]+\s*$/i.test(rangeStr)) {
-      //     rangeStr = rangeStr.replace(/\bto\b/gi, "-");
-      //   }
-      //   // everything else (e.g. "Not detected", "<LOD", descriptive text) stays untouched
-      // }
-
-      // out‑of‑range flag
       let mark = ""
       const numRange = parseNumericRangeString(rangeStr)
       const numVal = Number.parseFloat(String(p.value))
@@ -474,66 +443,46 @@ function DownloadReport() {
       }
       const valStr = p.value !== "" ? `${p.value}${mark}` : "-"
 
-      // merge columns logic
       const rangeEmpty = rangeStr.trim() === ""
       const unitEmpty = p.unit.trim() === ""
-
-      // NEW: if only unit is missing (but range still present)
       const unitOnlyMerge = !rangeEmpty && unitEmpty
-      // merged still means neither unit *nor* range
       const fullyMerged = rangeEmpty && unitEmpty
 
-      // split text
       const nameLines = doc.splitTextToSize(" ".repeat(indent) + p.name, wParam - 4)
-
-      // if fullyMerged, span VALUE+UNIT+RANGE
-      // if unitOnlyMerge, span VALUE+UNIT
-      // otherwise just VALUE
       let valueSpan = wValue
       if (fullyMerged) valueSpan = wValue + wUnit + wRange
       else if (unitOnlyMerge) valueSpan = wValue + wUnit
 
       const valueLines = doc.splitTextToSize(valStr, valueSpan - 4)
-      // only render range when there's a range cell
       const rangeLines = fullyMerged ? [] : doc.splitTextToSize(rangeStr, wRange - 4)
-      // only render unit when there's a unit cell
       const unitLines = !unitEmpty && !fullyMerged ? doc.splitTextToSize(p.unit, wUnit - 4) : []
 
-      // ── render NAME column (always at x1) ──
       doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0, 0, 0)
       doc.text(nameLines, x1, yPos + 4)
-      const mergeMargin = 19
-      // ── now render VALUE / UNIT / RANGE by case ──
-      // ── now render VALUE / UNIT / RANGE by case ──
       if (fullyMerged) {
         doc.setFont("helvetica", mark ? "bold" : "normal")
         doc.text(valueLines, x2 + 2, yPos + 4)
       } else if (unitOnlyMerge) {
         doc.setFont("helvetica", mark ? "bold" : "normal")
         doc.text(valueLines, x2 + 2, yPos + 4)
-
         doc.setFont("helvetica", "normal")
         doc.text(rangeLines, x4 + 2, yPos + 4)
       } else {
-        // normal 4‑column layout, all left‑aligned
         doc.setFont("helvetica", mark ? "bold" : "normal")
         doc.text(valueLines, x2 + 2, yPos + 4)
-
         doc.setFont("helvetica", "normal")
         doc.text(unitLines, x3 + 2, yPos + 4)
         doc.text(rangeLines, x4 + 2, yPos + 4)
       }
 
-      // advance vertical
       const maxLines = Math.max(nameLines.length, valueLines.length, rangeLines.length, unitLines.length)
       yPos += maxLines * lineH
 
-      // ── sub‑parameters ──
       if (p.subparameters?.length) {
         p.subparameters.forEach((sp) => printRow({ ...sp }, indent + 2))
       }
     }
-    // ----------------------------- build PDF ----------------------
+
     await addCover()
     if (!data.bloodtest) return doc.output("blob")
 
@@ -542,24 +491,19 @@ function DownloadReport() {
       const tData = data.bloodtest[testKey]
       if (tData.type === "outsource" || !tData.parameters.length) continue
 
-      console.log("looking in /users for:", tData.enteredBy)
-
       let printerName = "Unknown"
       if (tData.enteredBy) {
         try {
-          // First try to get user from /users path
           const userSnap = await get(dbRef(database, `users/${tData.enteredBy}`))
           if (userSnap.exists()) {
             const usr = userSnap.val() as { name?: string }
             printerName = usr.name || tData.enteredBy
           } else {
-            // If no user found, use the enteredBy value directly
             console.log(`User not found in database, using enteredBy value: ${tData.enteredBy}`)
             printerName = tData.enteredBy
           }
         } catch (error) {
           console.error("Error fetching user data:", error)
-          // Fallback to using enteredBy value
           printerName = tData.enteredBy
         }
       }
@@ -575,27 +519,21 @@ function DownloadReport() {
       yPos = headerY(tData.reportedOn)
 
       doc.setDrawColor(0, 51, 102).setLineWidth(0.5)
-      doc.line(left, yPos, w - left, yPos) // horizontal divider
-
+      doc.line(left, yPos, w - left, yPos)
       doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(0, 51, 102)
       doc.text(testKey.replace(/_/g, " ").toUpperCase(), w / 2, yPos + 8, { align: "center" })
       yPos += 10
 
-      // table header
-      // table header (left‑aligned to match body cells)
       doc.setFontSize(10).setFillColor(0, 51, 102)
       const rowH = 7
       doc.rect(left, yPos, totalW, rowH, "F")
       doc.setTextColor(255, 255, 255)
-      // +2px padding inside each column
       doc.text("PARAMETER", x1 + 2, yPos + 5)
       doc.text("VALUE", x2 + 2, yPos + 5)
       doc.text("UNIT", x3 + 2, yPos + 5)
       doc.text("RANGE", x4 + 2, yPos + 5)
 
       yPos += rowH + 2
-
-      // global + subheading parameters
       const subheads = tData.subheadings ?? []
       const subNames = subheads.flatMap((s) => s.parameterNames)
       const globals = tData.parameters.filter((p) => !subNames.includes(p.name))
@@ -610,14 +548,11 @@ function DownloadReport() {
         rows.forEach((r) => printRow(r))
       })
       yPos += 3
-      doc.setFont("helvetica", "italic")
-      doc.setFontSize(7)
-      doc.setTextColor(0)
+      doc.setFont("helvetica", "italic").setFontSize(7).setTextColor(0)
       doc.text("--------------------- END OF REPORT ---------------------", w / 2, yPos + 4, { align: "center" })
       yPos += 10
     }
 
-    // footer stamp on every page (except cover if not skipped)
     const startPage = skipCover ? 1 : 2
     const pages = doc.getNumberOfPages()
     for (let i = startPage; i <= pages; i++) {
@@ -628,18 +563,15 @@ function DownloadReport() {
     return doc.output("blob")
   }
 
-  // ----------------------------- Action handlers -----------------
+  // Action handlers
   const downloadWithLetter = async () => {
     if (!patientData) return
-
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
         Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key)),
       ),
     }
-
-    // ✅ Use filteredData
     const blob = await generatePDFReport(filteredData, true, true)
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -651,14 +583,12 @@ function DownloadReport() {
 
   const downloadNoLetter = async () => {
     if (!patientData) return
-
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
         Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key)),
       ),
     }
-
     const blob = await generatePDFReport(filteredData, false, true)
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -670,24 +600,16 @@ function DownloadReport() {
 
   const preview = async (withLetter: boolean) => {
     if (!patientData) return
-
-    // Build a PatientData object containing only the checked tests
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
         Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key)),
       ),
     }
-
     try {
-      // Generate the PDF blob (skipCover=true so it doesn't add the first-page image)
       const blob = await generatePDFReport(filteredData, withLetter, true)
       const url = URL.createObjectURL(blob)
-
-      // Open in a new tab for preview
       window.open(url, "_blank")
-
-      // Revoke the URL after a bit (garbage‑collect)
       setTimeout(() => URL.revokeObjectURL(url), 10_000)
     } catch (err) {
       console.error("Preview error:", err)
@@ -697,36 +619,27 @@ function DownloadReport() {
 
   const sendWhatsApp = async () => {
     if (!patientData) return
-
     try {
       setIsSending(true)
-
-      // Build a PatientData object that only includes checked tests
       const filteredData: PatientData = {
         ...patientData,
         bloodtest: Object.fromEntries(
           Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key)),
         ),
       }
-
-      // Generate the PDF for only the selected tests
-      const blob = await generatePDFReport(filteredData, /* includeLetterhead */ true, /* skipCover */ false)
-
-      // Upload to Firebase Storage
+      const blob = await generatePDFReport(filteredData, true, false)
       const store = getStorage()
       const filename = `reports/${filteredData.name}.pdf`
       const snap = await uploadBytes(storageRef(store, filename), blob)
       const url = await getDownloadURL(snap.ref)
 
-      // Prepare WhatsApp payload
       const payload = {
-        token: "99583991573", // your API token
-        number: "91" + filteredData.contact, // patient's number
+        token: "99583991573",
+        number: "91" + filteredData.contact,
         imageUrl: url,
         caption: `Dear ${filteredData.name},\n\nYour blood test report is now available:\n${url}\n\nRegards,\nYour Lab Team`,
       }
 
-      // Send via your WhatsApp endpoint
       const res = await fetch("https://wa.medblisss.com/send-image-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -748,28 +661,26 @@ function DownloadReport() {
     }
   }
 
-  // --- NEW ACTION HANDLER for Graph Report ---
   const downloadGraphReport = async () => {
     if (!patientData) return
-    setIsGeneratingGraph(true) // Set loading state
+    setIsGeneratingGraph(true)
     try {
-      // Call the function from graphreport.tsx
       const blob = await generateGraphPDF(patientData)
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `${patientData.name}_graph_report.pdf` // Set filename
+      a.download = `${patientData.name}_graph_report.pdf`
       a.click()
       URL.revokeObjectURL(url)
     } catch (error) {
       console.error("Error generating graph report:", error)
       alert("Failed to generate graph report.")
     } finally {
-      setIsGeneratingGraph(false) // Clear loading state
+      setIsGeneratingGraph(false)
     }
   }
 
-  // ----------------------------- UI ------------------------------
+  // UI
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-4xl w-full space-y-4">
@@ -778,6 +689,40 @@ function DownloadReport() {
             {/* Report Actions Card */}
             <div className="bg-white rounded-xl shadow-lg p-8 space-y-4 col-span-1 md:col-span-2">
               <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">Report Ready</h2>
+
+              {/* Sample Collected On Display and Update Button */}
+              <div className="p-4 bg-gray-100 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">Sample Collected On:</p>
+                    <p className="text-sm text-gray-600">
+                      {patientData.sampleCollectedAt
+                        ? format12Hour(patientData.sampleCollectedAt)
+                        : "Not set"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={updateSampleCollectedTime}
+                    className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4 mr-1"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      />
+                    </svg>
+                    Update Time
+                  </button>
+                </div>
+              </div>
 
               {/* Existing Buttons */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1069,7 +1014,7 @@ function DownloadReport() {
           </div>
         )}
 
-        {/* Update Time Modal */}
+        {/* Update ReportedOn Time Modal */}
         {updateTimeModal.isOpen && (
           <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
             <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
@@ -1087,6 +1032,7 @@ function DownloadReport() {
                 type="datetime-local"
                 value={updateTimeModal.currentTime}
                 onChange={(e) => setUpdateTimeModal((prev) => ({ ...prev, currentTime: e.target.value }))}
+                max={toLocalDateTimeString()}
                 className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
               />
               <p className="mt-2 text-sm text-gray-600">
@@ -1101,6 +1047,46 @@ function DownloadReport() {
                 </button>
                 <button
                   onClick={saveUpdatedTime}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Update Sample Collected Time Modal */}
+        {updateSampleTimeModal.isOpen && (
+          <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
+              <button
+                onClick={() => setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }))}
+                className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+              <h3 className="text-lg font-semibold mb-4">Update Sample Collected Time for {patientData?.name}</h3>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Sample Collected Date & Time</label>
+              <input
+                type="datetime-local"
+                value={updateSampleTimeModal.currentTime}
+                onChange={(e) => setUpdateSampleTimeModal((prev) => ({ ...prev, currentTime: e.target.value }))}
+                max={toLocalDateTimeString()}
+                className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-2 text-sm text-gray-600">
+                Selected: {updateSampleTimeModal.currentTime ? format12Hour(updateSampleTimeModal.currentTime) : ""}
+              </p>
+              <div className="mt-6 flex justify-end space-x-2">
+                <button
+                  onClick={() => setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveUpdatedSampleTime}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
                 >
                   Save
