@@ -291,13 +291,13 @@ const BloodValuesForm: React.FC = () => {
     let dirty = false;
     clone.forEach((t, tIdx) => {
       t.parameters.forEach((p, pIdx) => {
-        if (p.valueType === "number" && p.value !== "") {
-          const vs = (+p.value).toFixed(2);
-          if (String(p.value) !== vs) {
-            clone[tIdx].parameters[pIdx].value = vs;
-            dirty = true;
-          }
-        }
+        if (String(p.value).includes(".")) {
+                   const vs = (+p.value).toFixed(2)
+                   if (String(p.value) !== vs) {
+                     clone[tIdx].parameters[pIdx].value = vs
+                     dirty = true
+                   }
+                 }
       });
 
       t.subheadings?.forEach((sh, shIdx) => {

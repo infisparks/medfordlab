@@ -151,51 +151,29 @@ const PatientEntryForm: React.FC = () => {
   })
 
   /* Fetch current time from online source */
-  useEffect(() => {
-    // Fetch current time from WorldTimeAPI for Mumbai timezone
-    fetch("https://worldtimeapi.org/api/timezone/Asia/Kolkata")
-      .then((response) => response.json())
-      .then((data) => {
-        const dateTime = new Date(data.datetime)
+// Initialize registrationDate / registrationTime from the PC’s local clock
+useEffect(() => {
+  const now = new Date()
 
-        // Format date as YYYY-MM-DD
-        const year = dateTime.getFullYear()
-        const month = String(dateTime.getMonth() + 1).padStart(2, "0")
-        const day = String(dateTime.getDate()).padStart(2, "0")
-        const formattedDate = `${year}-${month}-${day}`
+  // YYYY-MM-DD
+  const yyyy = now.getFullYear()
+  const mm = String(now.getMonth() + 1).padStart(2, "0")
+  const dd = String(now.getDate()).padStart(2, "0")
+  const formattedDate = `${yyyy}-${mm}-${dd}`
 
-        // Format time in 12-hour format
-        const hours = dateTime.getHours()
-        const minutes = dateTime.getMinutes()
-        const ampm = hours >= 12 ? "PM" : "AM"
-        const hours12 = hours % 12 || 12
-        const formattedTime = `${hours12.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")} ${ampm}`
+  // hh:mm AM/PM
+  let hours = now.getHours()
+  const minutes = now.getMinutes()
+  const ampm = hours >= 12 ? "PM" : "AM"
+  hours = hours % 12 || 12
+  const formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${ampm}`
 
-        setCurrentDate(formattedDate)
-        setCurrentTime(formattedTime)
-
-        // Update form values
-        setValue("registrationDate", formattedDate)
-        setValue("registrationTime", formattedTime)
-      })
-      .catch((error) => {
-        console.error("Error fetching time:", error)
-        // Fallback to local time if API fails
-        const now = new Date()
-        const localDate = now.toISOString().split("T")[0]
-
-        const hours = now.getHours()
-        const minutes = now.getMinutes()
-        const ampm = hours >= 12 ? "PM" : "AM"
-        const hours12 = hours % 12 || 12
-        const localTime = `${hours12.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")} ${ampm}`
-
-        setCurrentDate(localDate)
-        setCurrentTime(localTime)
-        setValue("registrationDate", localDate)
-        setValue("registrationTime", localTime)
-      })
-  }, []) // Remove setValue from dependency array
+  setCurrentDate(formattedDate)
+  setCurrentTime(formattedTime)
+  setValue("registrationDate", formattedDate)
+  setValue("registrationTime", formattedTime)
+}, [])
+// Remove setValue from dependency array
 
   /* 4) Local state */
   const [doctorList, setDoctorList] = useState<{ id: string; doctorName: string }[]>([])
