@@ -536,7 +536,7 @@ const PatientEntryForm: React.FC = () => {
                         <SelectItem value="BABA">BABA</SelectItem>
                         <SelectItem value="MISS">MISS</SelectItem>
                         <SelectItem value="MS">MS</SelectItem>
-                        <SelectItem value="MRS">MRS</SelectItem>
+                        {/* <SelectItem value="MRS">MRS</SelectItem> */}
                         <SelectItem value="BABY">BABY</SelectItem>
                         <SelectItem value="SMT">SMT</SelectItem>
                         <SelectItem value="BABY OF">BABY OF</SelectItem>
