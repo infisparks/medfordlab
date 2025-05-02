@@ -11,7 +11,6 @@ import {
 } from "react-hook-form";
 import { useSearchParams, useRouter } from "next/navigation";
 import { database ,auth  } from "../../../firebase";
-
 import { ref, get, set } from "firebase/database";
 import {
   FiDroplet,
@@ -37,7 +36,6 @@ interface TestParameterValue {
   value: string | number;
   range: string;
   formula?: string;
-  
   valueType: "number" | "text";
   visibility?: string;
   subparameters?: SubParameterValue[];
@@ -65,6 +63,36 @@ interface BloodValuesFormInputs {
 export type IndexedParam = TestParameterValue & { originalIndex: number };
 
 /* ───────────── Helpers ───────────── */
+const parseRange = (rangeStr: string): { min?: number; max?: number } => {
+  const range = rangeStr.trim();
+  if (range === "") return {};
+
+  const hyphenParts = range.split("-");
+  if (hyphenParts.length === 2) {
+    const min = parseFloat(hyphenParts[0]);
+    const max = parseFloat(hyphenParts[1]);
+    if (!isNaN(min) && !isNaN(max)) return { min, max };
+  }
+
+  if (range.startsWith("<")) {
+    const max = parseFloat(range.slice(1));
+    if (!isNaN(max)) return { max };
+  } else if (range.startsWith(">")) {
+    const min = parseFloat(range.slice(1));
+    if (!isNaN(min)) return { min };
+  }
+
+  if (range.startsWith("≤")) {
+    const max = parseFloat(range.slice(1));
+    if (!isNaN(max)) return { max };
+  } else if (range.startsWith("≥")) {
+    const min = parseFloat(range.slice(1));
+    if (!isNaN(min)) return { min };
+  }
+
+  return {};
+};
+
 const parseRangeKey = (key: string) => {
   const unit = key.trim().slice(-1);
   const [l, u] = key.slice(0, -1).split("-").map(Number);
@@ -83,7 +111,6 @@ interface SuggestPos {
   width: number;
 }
 
-
 /* ------------------------------------------------------------------ */
 const BloodValuesForm: React.FC = () => {
   const router = useRouter();
@@ -91,18 +118,11 @@ const BloodValuesForm: React.FC = () => {
   const patientId = sp.get("patientId");
 
   const [loading, setLoading] = useState(true);
-
-  /* autocomplete list fetched once */
   const [dbText, setDbText] = useState<string[]>([]);
-
-  /* dropdown state */
   const [suggest, setSuggest] = useState<string[]>([]);
   const [showSug, setShowSug] = useState<SuggestPos | null>(null);
-
-  /* 100 % warnings */
   const [warn100, setWarn100] = useState<Record<string, boolean>>({});
 
-  /* react‑hook‑form */
   const {
     handleSubmit,
     reset,
@@ -113,7 +133,6 @@ const BloodValuesForm: React.FC = () => {
     defaultValues: { patientId: patientId || "", tests: [] },
   });
 
-  /* ───────── Load autocomplete once ───────── */
   useEffect(() => {
     (async () => {
       try {
@@ -125,7 +144,6 @@ const BloodValuesForm: React.FC = () => {
     })();
   }, []);
 
-  /* ───────── Fetch patient + tests ───────── */
   useEffect(() => {
     if (!patientId) return;
     (async () => {
@@ -163,7 +181,6 @@ const BloodValuesForm: React.FC = () => {
               : allParams;
 
             const params: TestParameterValue[] = wanted.map((p: any) => {
-              /* normal range */
               const ranges = p.range?.[genderKey] || [];
               let normal = "";
               for (const r of ranges) {
@@ -235,7 +252,6 @@ const BloodValuesForm: React.FC = () => {
     })();
   }, [patientId, reset]);
 
-  /* ───────── SHIFT → recalc all formulas ───────── */
   useEffect(() => {
     const runAll = () => {
       const tArr = watch("tests");
@@ -268,7 +284,6 @@ const BloodValuesForm: React.FC = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [watch, setValue]);
 
-  /* ───────── Live rounding & warn flags ───────── */
   const testsWatch = watch("tests");
   useEffect(() => {
     const clone = JSON.parse(JSON.stringify(testsWatch)) as TestValueEntry[];
@@ -303,7 +318,6 @@ const BloodValuesForm: React.FC = () => {
     setWarn100(warn);
   }, [testsWatch, setValue]);
 
-  /* ───────── Handlers ───────── */
   const numericChange = (v: string, t: number, p: number, sp?: number) => {
     if (v !== "" && !isNumeric(v)) return;
     const path =
@@ -313,14 +327,11 @@ const BloodValuesForm: React.FC = () => {
     setValue(path as Path<BloodValuesFormInputs>, v, { shouldValidate: false });
   };
 
-  /* suggestion helpers */
   const buildMatches = (param: TestParameterValue, q: string): string[] => {
-      // Show test‑specific suggestions only when the array is **not empty**
-  if (Array.isArray(param.suggestions) && param.suggestions.length > 0) {
-    const pool = param.suggestions.map((s) => s.description);
-    return q ? pool.filter((d) => d.toLowerCase().includes(q)) : pool;
-  }
-
+    if (Array.isArray(param.suggestions) && param.suggestions.length > 0) {
+      const pool = param.suggestions.map((s) => s.description);
+      return q ? pool.filter((d) => d.toLowerCase().includes(q)) : pool;
+    }
     return q ? dbText.filter((s) => s.toLowerCase().includes(q)) : dbText;
   };
 
@@ -374,7 +385,6 @@ const BloodValuesForm: React.FC = () => {
     } catch {}
   };
 
-  /* manual "Calculate" 100% */
   const fillRemaining = (tIdx: number, sh: SubHeading, lastIdx: number) => {
     const test = watch("tests")[tIdx];
     const idxs = sh.parameterNames
@@ -391,68 +401,51 @@ const BloodValuesForm: React.FC = () => {
       { shouldValidate: false }
     );
   };
-  const reportDate = new Date().toISOString();  // keeps both date & time
 
-
-  /* ───────── Submit ───────── */
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
-    
     try {
-
       const fullEmail = auth.currentUser?.email ?? "";
-// ── strip off everything from the "@"
-const enteredBy = fullEmail.split("@")[0];
+      const enteredBy = fullEmail.split("@")[0];
       for (const t of data.tests) {
         const key = t.testName.toLowerCase().replace(/\s+/g, "_").replace(/[.#$[\]]/g, "");
-
-
-     // ── 1) compute “now” once per submission
-           const now = new Date().toISOString();
-    
-            // ── 2) point at the existing record
-          const testRef = ref(database, `patients/${data.patientId}/bloodtest/${key}`);
-             const existingSnap = await get(testRef);
-             const existing = existingSnap.exists() ? existingSnap.val() : {};
-    
-             // ── 3) preserve old dates if present, else use now
-             const createdAt  = existing.createdAt  ?? now;
-             const reportedOn = existing.reportedOn ?? now;
-      
+        const now = new Date().toISOString();
+        const testRef = ref(database, `patients/${data.patientId}/bloodtest/${key}`);
+        const existingSnap = await get(testRef);
+        const existing = existingSnap.exists() ? existingSnap.val() : {};
+        const createdAt = existing.createdAt ?? now;
+        const reportedOn = existing.reportedOn ?? now;
 
         const params = t.parameters
-  .map((p) => {
-    const subs = p.subparameters?.filter((sp) => sp.value !== "") ?? [];
-    if (p.value !== "" || subs.length) {
-      const obj: any = { ...p, subparameters: subs };
-      if (p.valueType === "number" && p.value !== "") {
-        // Store as string if it has trailing zeros, otherwise as number
-        const strValue = String(p.value);
-        const numValue = +p.value;
-        obj.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
-      }
-      subs.forEach((sp) => {
-        if (sp.valueType === "number" && sp.value !== "") {
-          // Same for subparameters
-          const strValue = String(sp.value);
-          const numValue = +sp.value;
-          sp.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
-        }
-      });
-      return obj;
-    }
-    return null;
-  })
-  .filter(Boolean) as TestParameterValue[];
+          .map((p) => {
+            const subs = p.subparameters?.filter((sp) => sp.value !== "") ?? [];
+            if (p.value !== "" || subs.length) {
+              const obj: any = { ...p, subparameters: subs };
+              if (p.valueType === "number" && p.value !== "") {
+                const strValue = String(p.value);
+                const numValue = +p.value;
+                obj.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
+              }
+              subs.forEach((sp) => {
+                if (sp.valueType === "number" && sp.value !== "") {
+                  const strValue = String(sp.value);
+                  const numValue = +sp.value;
+                  sp.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
+                }
+              });
+              return obj;
+            }
+            return null;
+          })
+          .filter(Boolean) as TestParameterValue[];
 
-          await set(testRef, {
-                     parameters:  params,
-                     subheadings: t.subheadings || [],
-                     createdAt,            // old or now
-                      reportedOn,          
-                      enteredBy,     // old or now
-                    });
+        await set(testRef, {
+          parameters: params,
+          subheadings: t.subheadings || [],
+          createdAt,
+          reportedOn,
+          enteredBy,
+        });
       }
-
       alert("Saved!");
       router.push(`/download-report?patientId=${data.patientId}`);
     } catch (e) {
@@ -461,7 +454,6 @@ const enteredBy = fullEmail.split("@")[0];
     }
   };
 
-  /* ───────── Render helpers ───────── */
   if (!patientId)
     return (
       <CenterCard icon={FiUser} title="Patient Not Found">
@@ -482,7 +474,6 @@ const enteredBy = fullEmail.split("@")[0];
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-2">
       <div className="w-full max-w-3xl bg-white p-4 rounded-xl shadow relative">
-        {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 bg-blue-100 rounded-full">
             <FiDroplet className="w-6 h-6 text-blue-600" />
@@ -528,7 +519,6 @@ const enteredBy = fullEmail.split("@")[0];
                   <h3 className="font-semibold">{test.testName}</h3>
                 </div>
 
-                {/* Globals */}
                 {sh.length > 0 && globals.length > 0 && (
                   <>
                     <h4 className="font-bold text-sm mb-1">Global Parameters</h4>
@@ -551,7 +541,6 @@ const enteredBy = fullEmail.split("@")[0];
                   </>
                 )}
 
-                {/* Sub‑headings */}
                 {sh.length ? (
                   sh.map((s, shIdx) => {
                     const tag = `${tIdx}-${shIdx}`;
@@ -638,40 +627,37 @@ const enteredBy = fullEmail.split("@")[0];
           </div>
         </form>
 
-        {/* dropdown */}
         {showSug && suggest.length > 0 && (
-  <div
-    className="fixed z-50 bg-white border rounded shadow max-h-40 overflow-auto py-1"
-    style={{
-      top: "50%",
-      left: "50%",
-      transform: "translate(-50%, -50%)",
-      width: `${showSug.width}px`,
-      maxWidth: "90vw",       // never wider than 90% of viewport
-      maxHeight: "80vh",      // never taller than 80% of viewport
-    }}
-  >
-    {suggest.map((s, i) => (
-      <div
-        key={i}
-        className="px-2 py-1 hover:bg-gray-100 cursor-pointer text-sm"
-        onMouseDown={(e) => {
-          e.preventDefault();
-          pickSug(s, showSug.t, showSug.p);
-        }}
-      >
-        {s}
-      </div>
-    ))}
-  </div>
-)}
-
+          <div
+            className="fixed z-50 bg-white border rounded shadow max-h-40 overflow-auto py-1"
+            style={{
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: `${showSug.width}px`,
+              maxWidth: "90vw",
+              maxHeight: "80vh",
+            }}
+          >
+            {suggest.map((s, i) => (
+              <div
+                key={i}
+                className="px-2 py-1 hover:bg-gray-100 cursor-pointer text-sm"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pickSug(s, showSug.t, showSug.p);
+                }}
+              >
+                {s}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-/* ---------- sub‑row component ---------- */
 interface RowProps {
   tIdx: number;
   pIdx: number;
@@ -687,6 +673,8 @@ interface RowProps {
   setShowSug: (p: SuggestPos | null) => void;
   pickSug: (val: string, t: number, p: number) => void;
 }
+
+
 const ParamRow: React.FC<RowProps> = ({
   tIdx,
   pIdx,
@@ -700,9 +688,29 @@ const ParamRow: React.FC<RowProps> = ({
   fillRemaining,
   setSuggest,
   setShowSug,
- 
+  pickSug,
 }) => {
-  const common = { className: "input", placeholder: param.valueType === "number" ? "Value" : "Text" };
+  const currentParam = tests[tIdx].parameters[pIdx];
+  const value = currentParam.value;
+  const numValue = parseFloat(value as string);
+  const parsedRange = parseRange(currentParam.range);
+  
+  let isOutOfRange = false;
+  if (!isNaN(numValue)) {
+    const { min, max } = parsedRange;
+    if (min !== undefined && max !== undefined) {
+      isOutOfRange = numValue < min || numValue > max;
+    } else if (min !== undefined) {
+      isOutOfRange = numValue < min;
+    } else if (max !== undefined) {
+      isOutOfRange = numValue > max;
+    }
+  }
+
+  const common = { 
+    className: `input ${isOutOfRange ? "bg-red-100 border-red-300" : ""}`,
+    placeholder: param.valueType === "number" ? "Value" : "Text" 
+  };
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
     const rect = e.target.getBoundingClientRect();
@@ -715,18 +723,17 @@ const ParamRow: React.FC<RowProps> = ({
   };
 
   const handleBlur = () => {
-    /* hide dropdown AFTER click selection (50 ms delay) */
     setTimeout(() => {
       setSuggest([]);
       setShowSug(null);
     }, 50);
   };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const form = e.currentTarget.form;
       if (!form) return;
-      // collect only the INPUTs in document order
       const inputs = Array.from(form.elements)
         .filter((el): el is HTMLInputElement => el.tagName === 'INPUT');
       const idx = inputs.indexOf(e.currentTarget);
@@ -734,6 +741,7 @@ const ParamRow: React.FC<RowProps> = ({
       if (next) next.focus();
     }
   };
+
   return (
     <div className="pl-2 mb-1">
       <div className="flex items-center text-sm border rounded px-2 py-1">
@@ -770,7 +778,7 @@ const ParamRow: React.FC<RowProps> = ({
               {...common}
               onKeyDown={handleKeyDown}    
               type="text"
-              value={String(tests[tIdx].parameters[pIdx].value ?? "")}
+              value={String(currentParam.value ?? "")}
               onChange={(e) => numericChange(e.target.value, tIdx, pIdx)}
             />
             {errors.tests?.[tIdx]?.parameters?.[pIdx]?.value && (
@@ -782,7 +790,7 @@ const ParamRow: React.FC<RowProps> = ({
             <input
               {...common}
               type="text"
-              value={String(tests[tIdx].parameters[pIdx].value ?? "")}
+              value={String(currentParam.value ?? "")}
               onFocus={handleFocus}
               onChange={handleChange}
               onBlur={handleBlur}
@@ -791,14 +799,13 @@ const ParamRow: React.FC<RowProps> = ({
         )}
 
         <div className="flex-1 text-right text-gray-600">
-          Normal Range: <span className="font-medium text-green-600">{param.range}</span>
+          Normal Range: <span className="font-medium text-green-600">{currentParam.range}</span>
         </div>
       </div>
     </div>
   );
 };
 
-/* ---------- CenterCard helper ---------- */
 const CenterCard: React.FC<{
   icon: any;
   title?: string;
@@ -814,11 +821,4 @@ const CenterCard: React.FC<{
   </div>
 );
 
-/* ---------- tiny Tailwind helpers ---------- */
-// const input = "w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200";
-// const btn = "px-6 py-2 rounded-lg font-medium transition-colors focus:outline-none";
-/* in globals.css:
-.input   { @apply w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-200; }
-.btn-blue{ @apply bg-blue-600 text-white hover:bg-blue-700; }
-*/
 export default BloodValuesForm;
