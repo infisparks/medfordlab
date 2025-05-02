@@ -530,12 +530,17 @@ const PatientEntryForm: React.FC = () => {
                         <SelectValue placeholder="Select" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="MR">MR</SelectItem>
+                        
                         <SelectItem value="MRS">MRS</SelectItem>
+                        <SelectItem value="MRS">MAST</SelectItem>
+                        <SelectItem value="MRS">BABA</SelectItem>
                         <SelectItem value="MISS">MISS</SelectItem>
                         <SelectItem value="MS">MS</SelectItem>
-                        <SelectItem value="DR">DR</SelectItem>
-                        <SelectItem value="PROF">PROF</SelectItem>
+                        <SelectItem value="MRS">MRS</SelectItem>
+                        <SelectItem value="MRS">BABY</SelectItem>
+                        <SelectItem value="MRS">SMT</SelectItem>
+                        <SelectItem value="DR">BABY OF</SelectItem>
+                        <SelectItem value="PROF">DR</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
