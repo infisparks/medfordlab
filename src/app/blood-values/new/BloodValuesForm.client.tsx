@@ -319,7 +319,8 @@ const BloodValuesForm: React.FC = () => {
   }, [testsWatch, setValue]);
 
   const numericChange = (v: string, t: number, p: number, sp?: number) => {
-    if (v !== "" && !isNumeric(v)) return;
+    if (v !== "" && v !== "-" && !isNumeric(v)) return;
+
     const path =
       sp == null
         ? `tests.${t}.parameters.${p}.value`
@@ -395,9 +396,12 @@ const BloodValuesForm: React.FC = () => {
       const v = +test.parameters[i].value;
       if (!isNaN(v)) total += v;
     });
+
+    const remainder = 100 - total;
+    const integerValue = Math.round(remainder);
     setValue(
       `tests.${tIdx}.parameters.${lastIdx}.value`,
-      round2(100 - total).toFixed(2),
+      integerValue.toString(),        // no “.00”
       { shouldValidate: false }
     );
   };

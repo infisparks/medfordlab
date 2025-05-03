@@ -149,31 +149,48 @@ const PatientEntryForm: React.FC = () => {
       // age, discountAmount, amountPaid are now undefined → show as blank
     },
   })
+  const title = watch("title")
+const gender = watch("gender")
 
-  /* Fetch current time from online source */
-// Initialize registrationDate / registrationTime from the PC’s local clock
+// auto‐select gender when title changes
 useEffect(() => {
-  const now = new Date()
+  const maleTitles   = new Set(["MR", "MAST", "BABA"])
+  const femaleTitles = new Set(["MS", "MISS", "MRS", "BABY", "SMT"])
+  // leave blank for these
+  const noGender     = new Set(["BABY OF", "DR", "", "."])
 
-  // YYYY-MM-DD
-  const yyyy = now.getFullYear()
-  const mm = String(now.getMonth() + 1).padStart(2, "0")
-  const dd = String(now.getDate()).padStart(2, "0")
-  const formattedDate = `${yyyy}-${mm}-${dd}`
+  if (maleTitles.has(title)) {
+    setValue("gender", "Male")
+  } else if (femaleTitles.has(title)) {
+    setValue("gender", "Female")
+  } else if (noGender.has(title)) {
+    setValue("gender", "")
+  }
+}, [title, setValue])
+  /* Fetch current time from online source */
+  // Initialize registrationDate / registrationTime from the PC’s local clock
+  useEffect(() => {
+    const now = new Date()
 
-  // hh:mm AM/PM
-  let hours = now.getHours()
-  const minutes = now.getMinutes()
-  const ampm = hours >= 12 ? "PM" : "AM"
-  hours = hours % 12 || 12
-  const formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${ampm}`
+    // YYYY-MM-DD
+    const yyyy = now.getFullYear()
+    const mm = String(now.getMonth() + 1).padStart(2, "0")
+    const dd = String(now.getDate()).padStart(2, "0")
+    const formattedDate = `${yyyy}-${mm}-${dd}`
 
-  setCurrentDate(formattedDate)
-  setCurrentTime(formattedTime)
-  setValue("registrationDate", formattedDate)
-  setValue("registrationTime", formattedTime)
-}, [])
-// Remove setValue from dependency array
+    // hh:mm AM/PM
+    let hours = now.getHours()
+    const minutes = now.getMinutes()
+    const ampm = hours >= 12 ? "PM" : "AM"
+    hours = hours % 12 || 12
+    const formattedTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${ampm}`
+
+    setCurrentDate(formattedDate)
+    setCurrentTime(formattedTime)
+    setValue("registrationDate", formattedDate)
+    setValue("registrationTime", formattedTime)
+  }, [])
+  // Remove setValue from dependency array
 
   /* 4) Local state */
   const [doctorList, setDoctorList] = useState<{ id: string; doctorName: string }[]>([])
@@ -185,6 +202,9 @@ useEffect(() => {
   const [showPatientSuggestions, setShowPatientSuggestions] = useState(false)
   const [showDoctorSuggestions, setShowDoctorSuggestions] = useState(false)
   const [selectedTest, setSelectedTest] = useState("")
+  const [showTestSuggestions, setShowTestSuggestions] = useState(false)
+  // Add a new state variable for the search text
+  const [searchText, setSearchText] = useState("")
 
   /* 5) Fetch doctors */
   useEffect(() => {
@@ -313,6 +333,7 @@ useEffect(() => {
     return availableBloodTests.filter((t) => !bloodTests.some((bt) => bt.testId === t.id))
   }, [availableBloodTests, bloodTests])
   /* 12) Add selected test */
+  // Update the handleAddTest function to also clear the search text
   const handleAddTest = () => {
     if (!selectedTest) return
 
@@ -326,6 +347,8 @@ useEffect(() => {
         testType: test.type,
       })
       setSelectedTest("")
+      setSearchText("")
+      setShowTestSuggestions(false)
     }
   }
   /* 13) Submit handler */
@@ -501,14 +524,18 @@ useEffect(() => {
 
                 {/* Name and Contact in flex */}
                 <div className="flex gap-2 mb-2">
-                  <div className="w-1/4">
-                    <Label className="text-xs">Title</Label>
-                    <Select onValueChange={(value) => setValue("title", value)}>
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue placeholder="Select" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        
+                <div className="w-1/4">
+  <Label className="text-xs">Title</Label>
+  <Select
+    value={title}
+    onValueChange={(v) => setValue("title", v)}
+  >
+    <SelectTrigger className="h-8 text-xs">
+      <SelectValue placeholder="Select" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value=".">NoTitle</SelectItem>
+      <SelectItem value="MR">MR</SelectItem>
                         <SelectItem value="MRS">MRS</SelectItem>
                         <SelectItem value="MAST">MAST</SelectItem>
                         <SelectItem value="BABA">BABA</SelectItem>
@@ -620,19 +647,22 @@ useEffect(() => {
                   </div>
 
                   <div className="w-1/2">
-                    <Label className="text-xs">Gender</Label>
-                    <Select onValueChange={(value) => setValue("gender", value)}>
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue placeholder="Select gender" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Male">Male</SelectItem>
-                        <SelectItem value="Female">Female</SelectItem>
-                        <SelectItem value="Other">Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {errors.gender && <p className="text-red-500 text-[10px] mt-0.5">{errors.gender.message}</p>}
-                  </div>
+  <Label className="text-xs">Gender</Label>
+  <Select
+    value={gender}
+    onValueChange={(v) => setValue("gender", v)}
+  >
+    <SelectTrigger className="h-8 text-xs">
+      <SelectValue placeholder="Select gender" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="Male">Male</SelectItem>
+      <SelectItem value="Female">Female</SelectItem>
+      <SelectItem value="Other">Other</SelectItem>
+    </SelectContent>
+  </Select>
+  {errors.gender && <p className="text-red-500 text-[10px] mt-0.5">{errors.gender.message}</p>}
+</div>
                 </div>
               </div>
 
@@ -799,18 +829,42 @@ useEffect(() => {
                       Remove All
                     </Button>
 
-                    <Select value={selectedTest} onValueChange={setSelectedTest}>
-                      <SelectTrigger className="h-7 text-xs w-40">
-                        <SelectValue placeholder="Select a test" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {unselectedBloodTests.map((t) => (
-                          <SelectItem key={t.id} value={t.id}>
-                            {t.testName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {/* Replace the Input component in the Blood Tests Section with this updated version */}
+                    <div className="relative">
+                      <Input
+                        type="text"
+                        placeholder="Search tests..."
+                        className="h-7 text-xs"
+                        value={searchText}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          setSearchText(value)
+                          // Clear the selected test when typing
+                          setSelectedTest("")
+                          // Show dropdown with filtered tests if there's text
+                          setShowTestSuggestions(value.trim().length > 0)
+                        }}
+                      />
+                      {showTestSuggestions && (
+                        <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-0.5 rounded-md max-h-32 overflow-y-auto text-xs">
+                          {unselectedBloodTests
+                            .filter((t) => t.testName.toLowerCase().includes(searchText.toLowerCase()))
+                            .map((t) => (
+                              <li
+                                key={t.id}
+                                className="px-2 py-1 hover:bg-gray-100 cursor-pointer"
+                                onClick={() => {
+                                  setSelectedTest(t.id)
+                                  setSearchText(t.testName)
+                                  setShowTestSuggestions(false)
+                                }}
+                              >
+                                {t.testName}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
 
                     <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={handleAddTest}>
                       <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />

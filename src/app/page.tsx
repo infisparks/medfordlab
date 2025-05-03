@@ -201,39 +201,57 @@ export default function Dashboard() {
 
   /* --- filters --- */
   const filteredPatients = useMemo(() => {
+    // Pre-parse the start/end once per render
+    const start = startDate ? new Date(`${startDate}T00:00:00`) : null;
+    const end = endDate ? new Date(`${endDate}T23:59:59`) : null;
+  
     return patients.filter((p) => {
-      // Filter out deleted patients for non-admin users
+      // 1. Deleted filter
       if (deletedPatients.includes(p.id) && role !== "admin") {
-        return false
+        return false;
       }
-
-      const term = searchTerm.trim().toLowerCase()
-      const matchesSearch = !term || p.name.toLowerCase().includes(term) || (p.contact ?? "").includes(term)
-
-      // Filter by date range
-      const created = p.createdAt.slice(0, 10) // "YYYY‑MM‑DD"
-      const inRange = (!startDate || created >= startDate) && (!endDate || created <= endDate)
-
-      // Status logic
-      const sampleCollected = !!p.sampleCollectedAt
-      const complete = isAllTestsComplete(p)
-      let matchesStatus = true
+  
+      // 2. Search filter
+      const term = searchTerm.trim().toLowerCase();
+      const matchesSearch =
+        !term ||
+        p.name.toLowerCase().includes(term) ||
+        (p.contact ?? "").includes(term);
+      if (!matchesSearch) return false;
+  
+      // 3. Date-range filter (registration date)
+      // Use `createdAt` (or `registrationDate` if that's your field)
+      const regDate = new Date(p.createdAt); 
+      if (start && regDate < start) return false;
+      if (end && regDate > end) return false;
+  
+      // 4. Status filter
+      const sampleCollected = !!p.sampleCollectedAt;
+      const complete = isAllTestsComplete(p);
       switch (statusFilter) {
         case "notCollected":
-          matchesStatus = !sampleCollected
-          break
+          if (sampleCollected) return false;
+          break;
         case "sampleCollected":
-          matchesStatus = sampleCollected && !complete
-          break
+          if (!sampleCollected || complete) return false;
+          break;
         case "completed":
-          matchesStatus = sampleCollected && complete
-          break
+          if (!sampleCollected || !complete) return false;
+          break;
       }
-
-      return matchesSearch && inRange && matchesStatus
-    })
-  }, [patients, searchTerm, startDate, endDate, statusFilter, deletedPatients, role])
-
+  
+      return true;
+    });
+  }, [
+    patients,
+    searchTerm,
+    startDate,
+    endDate,
+    statusFilter,
+    deletedPatients,
+    role,
+  ]);
+  
   useEffect(() => {
     const total = filteredPatients.length
     const completed = filteredPatients.filter((p) => p.sampleCollectedAt && isAllTestsComplete(p)).length

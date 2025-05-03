@@ -37,6 +37,7 @@ interface BloodTestSelection {
 }
 
 interface IFormInput {
+  title: string 
   hospitalName: string
   visitType: "opd" | "ipd"
   name: string
@@ -345,6 +346,32 @@ const PatientEditForm: React.FC = () => {
               {/* Patient Information Section */}
               <div className="bg-gray-50 p-2 rounded-md">
                 <h3 className="text-sm font-semibold text-gray-700 mb-2">Patient Information</h3>
+
+   {/* ← TITLE dropdown */}
+                 <div className="mb-2 w-1/4">
+                <Label className="text-xs">Title</Label>
+                <Select
+                  value={watch("title")}
+                  onValueChange={(v) => setValue("title", v)}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Select title" />
+                  </SelectTrigger>
+                  <SelectContent>
+                  <SelectItem value=".">NoTitle</SelectItem>
+                  <SelectItem value="MR">MR</SelectItem>
+                    <SelectItem value="MRS">MRS</SelectItem>
+                    <SelectItem value="MAST">MAST</SelectItem>
+                    <SelectItem value="BABA">BABA</SelectItem>
+                    <SelectItem value="MISS">MISS</SelectItem>
+                    <SelectItem value="MS">MS</SelectItem>
+                    <SelectItem value="BABY">BABY</SelectItem>
+                    <SelectItem value="SMT">SMT</SelectItem>
+                    <SelectItem value="BABY OF">BABY OF</SelectItem>
+                    <SelectItem value="DR">DR</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
                 {/* Name and Contact in flex */}
                 <div className="flex gap-2 mb-2">
