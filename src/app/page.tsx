@@ -5,7 +5,7 @@ import Link from "next/link"
 import { database, auth } from "../firebase"
 import { toWords } from "number-to-words"
 
-import { ref, onValue, update, remove } from "firebase/database"
+import { ref, onValue, update } from "firebase/database"
 import { ref as dbRef, onValue as onValueDb } from "firebase/database" // ← to fetch role
 
 import {
@@ -89,14 +89,14 @@ const calculateTotalsForSelected = (selectedIds: string[], patients: Patient[]) 
 
 // New utility to format current local time for datetime-local input
 const formatLocalDateTime = () => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0"); // Months are 0-based
-  const day = String(now.getDate()).padStart(2, "0");
-  const hours = String(now.getHours()).padStart(2, "0");
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
-};
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, "0") // Months are 0-based
+  const day = String(now.getDate()).padStart(2, "0")
+  const hours = String(now.getHours()).padStart(2, "0")
+  const minutes = String(now.getMinutes()).padStart(2, "0")
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
 
 /* --------------------  Component  -------------------- */
 export default function Dashboard() {
@@ -202,56 +202,45 @@ export default function Dashboard() {
   /* --- filters --- */
   const filteredPatients = useMemo(() => {
     // Pre-parse the start/end once per render
-    const start = startDate ? new Date(`${startDate}T00:00:00`) : null;
-    const end = endDate ? new Date(`${endDate}T23:59:59`) : null;
-  
+    const start = startDate ? new Date(`${startDate}T00:00:00`) : null
+    const end = endDate ? new Date(`${endDate}T23:59:59`) : null
+
     return patients.filter((p) => {
-      // 1. Deleted filter
+      // 1. Deleted filter - only admins can see deleted patients
       if (deletedPatients.includes(p.id) && role !== "admin") {
-        return false;
+        return false
       }
-  
+
       // 2. Search filter
-      const term = searchTerm.trim().toLowerCase();
-      const matchesSearch =
-        !term ||
-        p.name.toLowerCase().includes(term) ||
-        (p.contact ?? "").includes(term);
-      if (!matchesSearch) return false;
-  
+      const term = searchTerm.trim().toLowerCase()
+      const matchesSearch = !term || p.name.toLowerCase().includes(term) || (p.contact ?? "").includes(term)
+      if (!matchesSearch) return false
+
       // 3. Date-range filter (registration date)
       // Use `createdAt` (or `registrationDate` if that's your field)
-      const regDate = new Date(p.createdAt); 
-      if (start && regDate < start) return false;
-      if (end && regDate > end) return false;
-  
+      const regDate = new Date(p.createdAt)
+      if (start && regDate < start) return false
+      if (end && regDate > end) return false
+
       // 4. Status filter
-      const sampleCollected = !!p.sampleCollectedAt;
-      const complete = isAllTestsComplete(p);
+      const sampleCollected = !!p.sampleCollectedAt
+      const complete = isAllTestsComplete(p)
       switch (statusFilter) {
         case "notCollected":
-          if (sampleCollected) return false;
-          break;
+          if (sampleCollected) return false
+          break
         case "sampleCollected":
-          if (!sampleCollected || complete) return false;
-          break;
+          if (!sampleCollected || complete) return false
+          break
         case "completed":
-          if (!sampleCollected || !complete) return false;
-          break;
+          if (!sampleCollected || !complete) return false
+          break
       }
-  
-      return true;
-    });
-  }, [
-    patients,
-    searchTerm,
-    startDate,
-    endDate,
-    statusFilter,
-    deletedPatients,
-    role,
-  ]);
-  
+
+      return true
+    })
+  }, [patients, searchTerm, startDate, endDate, statusFilter, deletedPatients, role])
+
   useEffect(() => {
     const total = filteredPatients.length
     const completed = filteredPatients.filter((p) => p.sampleCollectedAt && isAllTestsComplete(p)).length
@@ -291,11 +280,19 @@ export default function Dashboard() {
   }
 
   const handleDeletePatient = async (p: Patient) => {
-    if (!confirm(`Delete ${p.name}?`)) return
+    if (!confirm(`Mark ${p.name} as deleted?`)) return
     try {
-      await remove(ref(database, `patients/${p.id}`))
+      // Mark as deleted in the database instead of removing
+      await update(ref(database, `patients/${p.id}`), {
+        deleted: true,
+        deletedAt: new Date().toISOString(),
+      })
+
+      // Update local state
+      setDeletedPatients((prev) => [...prev, p.id])
+
       if (expandedPatientId === p.id) setExpandedPatientId(null)
-      alert("Deleted!")
+      alert("Patient marked as deleted!")
     } catch (e) {
       console.error(e)
       alert("Error deleting.")
@@ -645,23 +642,19 @@ export default function Dashboard() {
   }
 
   const handleApproveDelete = async (patient: Patient) => {
-    if (!confirm(`Permanently delete ${patient.name}?`)) return
+    if (!confirm(`Mark ${patient.name} as deleted?`)) return
 
     try {
-      // Mark as deleted in the database
+      // Mark as deleted in the database but keep the delete request for reference
       await update(ref(database, `patients/${patient.id}`), {
         deleted: true,
         deletedAt: new Date().toISOString(),
-        deleteRequest: null, // Clear the request
+        deleteRequestApproved: true,
+        deleteRequestApprovedAt: new Date().toISOString(),
       })
 
       // Update local state
       setDeletedPatients((prev) => [...prev, patient.id])
-      setDeleteRequestPatients((prev) => {
-        const newState = { ...prev }
-        delete newState[patient.id]
-        return newState
-      })
 
       if (expandedPatientId === patient.id) setExpandedPatientId(null)
       alert("Patient marked as deleted")
@@ -843,11 +836,13 @@ export default function Dashboard() {
                       />
                     </th>
                   )}
-                  {[".", "Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map((h) => (
-                    <th key={h} className="px-3 py-2 text-left font-medium text-gray-500">
-                      {h}
-                    </th>
-                  ))}
+                  {[".", "Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map(
+                    (h) => (
+                      <th key={h} className="px-3 py-2 text-left font-medium text-gray-500">
+                        {h}
+                      </th>
+                    ),
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -860,7 +855,7 @@ export default function Dashboard() {
                   return (
                     <React.Fragment key={p.id}>
                       <tr
-                        className={`hover:bg-gray-50 ${deleteRequestPatients[p.id] ? "bg-red-100" : ""} ${deletedPatients.includes(p.id) ? "bg-red-200" : ""}`}
+                        className={`hover:bg-gray-50 ${deleteRequestPatients[p.id] ? "bg-red-100" : ""} ${deletedPatients.includes(p.id) ? (role === "admin" ? "bg-red-300" : "bg-red-200") : ""}`}
                       >
                         {deleteRequestPatients[p.id] && role === "admin" && (
                           <div className="absolute right-0 top-0 bg-red-100 text-xs p-1 rounded-bl-md max-w-xs overflow-hidden">
@@ -962,9 +957,7 @@ export default function Dashboard() {
                                     <h3 className="text-lg font-semibold mb-4">
                                       Set Sample Collected Time for {sampleModalPatient.name}
                                     </h3>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                      Date & Time
-                                    </label>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">Date & Time</label>
                                     <input
                                       type="datetime-local"
                                       value={sampleDateTime}
@@ -1135,15 +1128,15 @@ export default function Dashboard() {
                                       ) : (
                                         <button
                                           onClick={() => handleDeletePatient(p)}
-                                          className="px-3 py-1 bg-gray-600 text-white rounded-md text-xs hover:bg-gray-700"
+                                          className="px-3 py-1 bg-red-600 text-white rounded-md text-xs hover:bg-red-700"
                                         >
-                                          Delete
+                                          Mark as Deleted
                                         </button>
                                       )}
                                     </>
                                   ) : (
                                     <>
-                                      {!deleteRequestPatients[p.id] && (
+                                      {!deleteRequestPatients[p.id] && !deletedPatients.includes(p.id) && (
                                         <button
                                           onClick={() => handleDeleteRequest(p)}
                                           className="px-3 py-1 bg-yellow-600 text-white rounded-md text-xs hover:bg-yellow-700"

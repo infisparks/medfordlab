@@ -4,6 +4,7 @@ import type React from "react"
 import { useEffect, useState, useMemo } from "react"
 import { ref, get } from "firebase/database"
 import { database } from "../../firebase"
+import Link from "next/link"
 import {
   CalendarIcon,
   MagnifyingGlassIcon,
@@ -14,6 +15,7 @@ import {
   ReceiptRefundIcon,
   ClipboardDocumentListIcon,
   FunnelIcon,
+  TrashIcon,
 } from "@heroicons/react/24/outline"
 
 /* ─────────────────── Types ─────────────────── */
@@ -44,6 +46,13 @@ interface Patient {
   registrationDate: string
   createdAt: string
   paymentHistory?: Payment[]
+  deleted?: boolean
+  deletedAt?: string
+  deleteRequest?: {
+    reason: string
+    requestedBy: string
+    requestedAt: string
+  }
 }
 
 type PaymentStatus = "all" | "paid" | "unpaid" | "partial"
@@ -77,6 +86,9 @@ const AdminPanel: React.FC = () => {
   /* ─────────────────── Derived ─────────────────── */
   const filteredPatients = useMemo(() => {
     return patients.filter((patient) => {
+      // Exclude deleted patients
+      if (patient.deleted) return false
+
       // Search filter
       const matchesSearch = patient.name.toLowerCase().includes(searchTerm.toLowerCase())
 
@@ -122,6 +134,9 @@ const AdminPanel: React.FC = () => {
     let totalCash = 0
 
     filteredPatients.forEach((patient) => {
+      // Skip deleted patients in calculations
+      if (patient.deleted) return
+
       const testTotal = patient.bloodTests.reduce((acc, bt) => acc + (Number(bt.price) || 0), 0)
       const discountValue = Number(patient.discountAmount) || 0
       const remaining = testTotal - discountValue - (patient.amountPaid || 0)
@@ -185,6 +200,13 @@ const AdminPanel: React.FC = () => {
               </div>
             </div>
             <div className="flex items-center space-x-4">
+              <Link
+                href="/deleted-appointments"
+                className="flex items-center space-x-2 text-red-600 hover:text-red-700"
+              >
+                <TrashIcon className="h-5 w-5" />
+                <span>View Deleted Appointments</span>
+              </Link>
               <div className="h-10 w-10 bg-blue-50 rounded-full flex items-center justify-center">
                 <ClipboardDocumentListIcon className="h-5 w-5 text-blue-600" />
               </div>

@@ -198,7 +198,14 @@ const PatientEditForm: React.FC = () => {
           data.discountAmount = (total * pct) / 100
         }
 
-        reset(data)
+       // parse existing createdAt into form fields
+if (data.createdAt) {
+  const dt = new Date(data.createdAt)
+  data.registrationDate = dt.toISOString().slice(0, 10)      // "YYYY-MM-DD"
+  data.registrationTime = dt.toTimeString().slice(0, 5)      // "HH:MM"
+}
+reset(data)
+
       } catch (e) {
         console.error(e)
         alert("Error fetching patient details")
@@ -291,11 +298,18 @@ const PatientEditForm: React.FC = () => {
       const total_day = data.age * mult
 
       /* 3) Update in Firebase */
-      await update(ref(database, `patients/${patientIdQuery}`), {
-        ...data,
-        total_day,
-        updatedAt: new Date().toISOString(),
-      })
+      // recombine date + time into ISO
+const createdAtIso = new Date(
+  `${data.registrationDate}T${data.registrationTime}`
+).toISOString()
+
+await update(ref(database, `patients/${patientIdQuery}`), {
+  ...data,
+  total_day,
+  updatedAt: new Date().toISOString(),
+  createdAt: createdAtIso,    // ← overwrite the old createdAt
+})
+
 
       /* 4) Update in MedfordFamily database */
       await update(ref(medfordFamilyDatabase, `patients/${patientIdQuery}`), {
@@ -332,11 +346,11 @@ const PatientEditForm: React.FC = () => {
                 <div className="flex items-center text-xs">
                   <ClockIcon className="h-3.5 w-3.5 text-gray-500 mr-1" />
                   <input
-                    type="text"
-                    {...register("registrationTime")}
-                    className="p-1 border rounded text-xs w-24"
-                    placeholder="12:00 PM"
-                  />
+  type="time"
+  {...register("registrationTime")}
+  className="p-1 border rounded text-xs w-24"
+/>
+
                 </div>
               </div>
             </div>

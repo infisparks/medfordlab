@@ -95,6 +95,12 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
           allowed: ["admin"],
         },
         {
+          href: "/deletehistroy", // Assuming this is the billing page path
+          label: "Delete History",
+          icon: "M16 21v-2a4 4 0 00-8 0v2", // Briefcase icon (example)
+          allowed: ["admin"],
+        },
+        {
           href: "/doctorregistration",
           label: "ADD Doctor %",
           icon: "M12 4v16", // Plus icon (example)

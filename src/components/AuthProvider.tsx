@@ -29,6 +29,7 @@ const allowedRoutes: Record<string, string[]> = {
     "/register",
     "/uidlogin",
     "/updatetest",
+    "/deletehistroy"
   ],
   technician: [
     "/", 
