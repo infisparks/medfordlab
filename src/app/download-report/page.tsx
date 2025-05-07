@@ -6,7 +6,7 @@ import { jsPDF } from "jspdf"
 import { ref as dbRef, get, update } from "firebase/database"
 import { database } from "../../firebase"
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage"
-import { generateGraphPDF } from "./graphrerport"
+import { generateGraphPDF, generateAndSendGraphReport } from "./graphrerport"
 import letterhead from "../../../public/letterhead.png"
 import firstpage from "../../../public/first.png"
 import stamp from "../../../public/stamp.png"
@@ -118,21 +118,21 @@ const format12Hour = (isoString: string) => {
   const minutesStr = minutes < 10 ? "0" + minutes : minutes
 
   // Format as day/month/year
-  const day = date.getDate().toString().padStart(2, '0')
-  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, "0")
+  const month = (date.getMonth() + 1).toString().padStart(2, "0")
   const year = date.getFullYear()
 
   return `${day}/${month}/${year}, ${hours}:${minutesStr} ${ampm}`
 }
 const formatDMY = (date: Date | string) => {
   const d = typeof date === "string" ? new Date(date) : date
-  const day    = d.getDate().toString().padStart(2, "0")
-  const month  = (d.getMonth() + 1).toString().padStart(2, "0") // months are 0-based
-  const year   = d.getFullYear()
-  let hours    = d.getHours()
-  const mins   = d.getMinutes().toString().padStart(2, "0")
-  const ampm   = hours >= 12 ? "PM" : "AM"
-  hours        = (hours % 12) || 12                                     // 12-hour clock
+  const day = d.getDate().toString().padStart(2, "0")
+  const month = (d.getMonth() + 1).toString().padStart(2, "0") // months are 0-based
+  const year = d.getFullYear()
+  let hours = d.getHours()
+  const mins = d.getMinutes().toString().padStart(2, "0")
+  const ampm = hours >= 12 ? "PM" : "AM"
+  hours = hours % 12 || 12 // 12-hour clock
   const hrsStr = hours.toString().padStart(2, "0")
   return `${day}/${month}/${year}, ${hrsStr}:${mins} ${ampm}`
 }
@@ -156,6 +156,7 @@ function DownloadReport() {
   const [patientData, setPatientData] = useState<PatientData | null>(null)
   const [isSending, setIsSending] = useState(false)
   const [isGeneratingGraph, setIsGeneratingGraph] = useState(false)
+  const [isSendingGraphReport, setIsSendingGraphReport] = useState(false)
   const [selectedTests, setSelectedTests] = useState<string[]>([])
 
   // State for updating reportedOn time
@@ -374,10 +375,9 @@ function DownloadReport() {
       doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(0, 0, 0)
 
       const sampleDT = data.sampleCollectedAt ? new Date(data.sampleCollectedAt) : new Date(data.createdAt)
-      const sampleDTStr     = formatDMY(sampleDT)                 // was sampleDT.toLocaleString()
-      const registrationStr = formatDMY(data.createdAt)           // was new Date(...).toLocaleString()
-      const reportedOnStr   = reportedOnRaw ? formatDMY(reportedOnRaw) : "-"
-      
+      const sampleDTStr = formatDMY(sampleDT) // was sampleDT.toLocaleString()
+      const registrationStr = formatDMY(data.createdAt) // was new Date(...).toLocaleString()
+      const reportedOnStr = reportedOnRaw ? formatDMY(reportedOnRaw) : "-"
 
       const leftRows = [
         {
@@ -395,10 +395,10 @@ function DownloadReport() {
       ]
 
       const rightRows = [
-        { label: "Patient ID",          value: data.patientId },
+        { label: "Patient ID", value: data.patientId },
         { label: "Sample Collected on", value: sampleDTStr },
-        { label: "Registration On",     value: registrationStr },
-        { label: "Reported On",         value: reportedOnStr },
+        { label: "Registration On", value: registrationStr },
+        { label: "Reported On", value: reportedOnStr },
       ]
       const maxLeftLabel = Math.max(...leftRows.map((r) => doc.getTextWidth(r.label)))
       const maxRightLabel = Math.max(...rightRows.map((r) => doc.getTextWidth(r.label)))
@@ -685,14 +685,32 @@ function DownloadReport() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `${patientData.name}_graph_report.pdf`
+      a.download = `${patientData.name}_report.pdf`
       a.click()
       URL.revokeObjectURL(url)
     } catch (error) {
-      console.error("Error generating graph report:", error)
-      alert("Failed to generate graph report.")
+      console.error("Error generating report:", error)
+      alert("Failed to generate report.")
     } finally {
       setIsGeneratingGraph(false)
+    }
+  }
+
+  const sendGraphReportWhatsApp = async () => {
+    if (!patientData) return
+    setIsSendingGraphReport(true)
+    try {
+      const result = await generateAndSendGraphReport(patientData)
+      if (result.success) {
+        alert(result.message)
+      } else {
+        alert(result.message)
+      }
+    } catch (error) {
+      console.error("Error sending report via WhatsApp:", error)
+      alert("Failed to send report via WhatsApp.")
+    } finally {
+      setIsSendingGraphReport(false)
     }
   }
 
@@ -783,58 +801,109 @@ function DownloadReport() {
                 </button>
               </div>
 
-              {/* Graph Report Button */}
-              <button
-                onClick={downloadGraphReport}
-                disabled={isGeneratingGraph}
-                className={`w-full flex items-center justify-center space-x-3 px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out ${
-                  isGeneratingGraph ? "bg-gray-400 cursor-not-allowed" : "bg-teal-600 hover:bg-teal-700 text-white"
-                }`}
-              >
-                {isGeneratingGraph ? (
-                  <>
-                    <svg
-                      className="animate-spin h-5 w-5 mr-3 text-white"
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
+              {/* Report Buttons */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button
+                  onClick={downloadGraphReport}
+                  disabled={isGeneratingGraph}
+                  className={`w-full flex items-center justify-center space-x-3 px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out ${
+                    isGeneratingGraph ? "bg-gray-400 cursor-not-allowed" : "bg-teal-600 hover:bg-teal-700 text-white"
+                  }`}
+                >
+                  {isGeneratingGraph ? (
+                    <>
+                      <svg
+                        className="animate-spin h-5 w-5 mr-3 text-white"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        ></circle>
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        ></path>
+                      </svg>
+                      <span>Generating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-5 w-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
                         stroke="currentColor"
-                        strokeWidth="4"
-                      ></circle>
-                      <path
-                        className="opacity-75"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                        />
+                      </svg>
+                      <span>Download Report</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={sendGraphReportWhatsApp}
+                  disabled={isSendingGraphReport}
+                  className={`w-full flex items-center justify-center space-x-3 px-6 py-3 rounded-xl font-medium transition duration-150 ease-in-out ${
+                    isSendingGraphReport
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-[#25D366] hover:bg-[#128C7E] text-white"
+                  }`}
+                >
+                  {isSendingGraphReport ? (
+                    <>
+                      <svg
+                        className="animate-spin h-5 w-5 mr-3 text-white"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        ></circle>
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        ></path>
+                      </svg>
+                      <span>Sending Report…</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
                         fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                      ></path>
-                    </svg>
-                    <span>Generating...</span>
-                  </>
-                ) : (
-                  <>
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                      />
-                    </svg>
-                    <span>Download Graph Report</span>
-                  </>
-                )}
-              </button>
+                      >
+                        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884" />
+                      </svg>
+                      <span>Send Graph Report via WhatsApp under Maintenance</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
               {/* Preview Buttons */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -934,7 +1003,7 @@ function DownloadReport() {
                       viewBox="0 0 24 24"
                       fill="currentColor"
                     >
-                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916 hacking attempt detected-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884" />
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c0-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884" />
                     </svg>
                     <span>Send via WhatsApp</span>
                   </>
