@@ -3,7 +3,7 @@
 import { jsPDF } from "jspdf"
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage"
 import { getStorage } from "firebase/storage"
-import type { PatientData, Parameter } from "./download-report-page"
+import type { PatientData, Parameter } from "../download-report/page"
 import letterhead from "../../../public/letterhead.png"
 import firstpage from "../../../public/first.png"
 
@@ -443,7 +443,7 @@ const sendReportToWhatsApp = async (patientData: PatientData, pdfBlob: Blob): Pr
 }
 
 // Improved parameter graph function for more professional and eye-catching visualization
-let doc: jsPDF
+let doc!: jsPDF;
 
 const drawParameterGraph = (
   param: Parameter,
