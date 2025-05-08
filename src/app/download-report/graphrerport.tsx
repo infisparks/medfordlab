@@ -78,6 +78,19 @@ const loadImageAsCompressedJPEG = async (url: string, quality = 0.5) => {
   })
 }
 
+// Helper function to load service image
+const loadServiceImage = async (serviceName: string, quality = 0.7) => {
+  try {
+    // Convert service name to filename format
+    const filename = `/service/${serviceName}.png`
+    return await loadImageAsCompressedJPEG(filename, quality)
+  } catch (error) {
+    console.error(`Error loading service image for ${serviceName}:`, error)
+    // Return a placeholder or default image in case of error
+    return null
+  }
+}
+
 // Parse range key
 const parseRangeKey = (key: string) => {
   key = key.trim()
@@ -230,7 +243,7 @@ const getDeviationLevel = (
 }
 
 // Generate coupon code
-const generateCouponCode = (length = 10) => {
+const generateCouponCode = (length = 6) => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
   let result = ""
   for (let i = 0; i < length; i++) {
@@ -267,11 +280,6 @@ const generateRecommendations = async (
         reason:
           "This specialized therapy can improve oxygen circulation and cardiovascular health, potentially addressing some of the blood parameters that are currently outside optimal ranges.",
       },
-      {
-        name: "Massage Therapy",
-        reason:
-          "Therapeutic massage can enhance circulation, reduce inflammation, and promote relaxation, which may help normalize certain blood parameters while improving your overall quality of life.",
-      },
     ],
     couponCodes: [
       {
@@ -291,12 +299,6 @@ const generateRecommendations = async (
         service: "Yoga",
         discount: "30%",
         reason: "To improve overall health and wellness",
-      },
-      {
-        code: generateCouponCode(),
-        service: "Cardiorespiratory Physiotherapy",
-        discount: "30%",
-        reason: "For personalized health recommendations",
       },
     ],
   }
@@ -325,18 +327,19 @@ const generateRecommendations = async (
           parts: [
             {
               text: `Based on these out-of-range test parameters: ${JSON.stringify(paramData)}, 
-              and considering these available services at MedZeal: ${JSON.stringify(services)},
-              please provide:
-              1. A reason why the patient should get a free consultation (consultationReason) - between 20-40 words
-              2. 4 DIFFERENT recommended services from the list that would benefit the patient based on their test results (recommendedServices)
-              3. Detailed reasons for each recommended service (20-40 words each) explaining specifically how each service would help with their test results
-              Format your response as JSON with this structure:
-              {
-                "consultationReason": "string (20-40 words)",
-                "recommendedServices": [
-                  { "name": "service name from the list", "reason": "why this service is recommended (20-40 words)" }
-                ]
-              }`,
+          and considering these available services at MedZeal: ${JSON.stringify(services)},
+          please provide:
+          1. A reason why the patient should get a free consultation (consultationReason) - between 20-40 words
+          2. 3 DIFFERENT recommended services from the list that would benefit the patient based on their test results (recommendedServices)
+          3. Detailed reasons for each recommended service (20-40 words each) explaining specifically how each service would help with their test results
+          IMPORTANT: The service names MUST EXACTLY match one of the services in the provided list, as we need to match them with existing service images.
+          Format your response as JSON with this structure:
+          {
+            "consultationReason": "string (20-40 words)",
+            "recommendedServices": [
+              { "name": "service name from the list", "reason": "why this service is recommended (20-40 words)" }
+            ]
+          }`,
             },
           ],
         },
@@ -360,22 +363,22 @@ const generateRecommendations = async (
     const result = await response.json()
     const recommendations = JSON.parse(result.candidates[0].content.parts[0].text)
 
-    // Ensure we have 4 unique services
+    // Ensure we have 3 unique services
     let uniqueServices = Array.from(new Set(recommendations.recommendedServices.map((s: { name: string }) => s.name)))
       .map((name) => recommendations.recommendedServices.find((s: { name: string }) => s.name === name))
-      .slice(0, 4)
+      .slice(0, 3)
 
-    // If we don't have 4 unique services, add from our default list
-    if (uniqueServices.length < 4) {
+    // If we don't have 3 unique services, add from our default list
+    if (uniqueServices.length < 3) {
       const existingNames = uniqueServices.map((s: { name: string }) => s.name)
       const additionalServices = defaultResponse.recommendedServices
         .filter((s) => !existingNames.includes(s.name))
-        .slice(0, 4 - uniqueServices.length)
+        .slice(0, 3 - uniqueServices.length)
 
       uniqueServices = [...uniqueServices, ...additionalServices]
     }
 
-    // Generate coupon codes - always return 4 coupons (1 free, 3 at 30% off)
+    // Generate coupon codes - always return 3 coupons (1 free, 2 at 30% off)
     const couponCodes = [
       {
         code: generateCouponCode(),
@@ -385,8 +388,8 @@ const generateRecommendations = async (
       },
     ]
 
-    // Add service coupons - ensure we have 3 coupons at 30% off for different services
-    for (let i = 0; i < 3; i++) {
+    // Add service coupons - ensure we have 2 coupons at 30% off for different services
+    for (let i = 0; i < 2; i++) {
       const service = uniqueServices[i]
       couponCodes.push({
         code: generateCouponCode(),
@@ -443,7 +446,7 @@ const sendReportToWhatsApp = async (patientData: PatientData, pdfBlob: Blob): Pr
 }
 
 // Improved parameter graph function for more professional and eye-catching visualization
-let doc!: jsPDF;
+let doc!: jsPDF
 
 const drawParameterGraph = (
   param: Parameter,
@@ -754,29 +757,17 @@ export const generateGraphPDF = async (data: PatientData): Promise<Blob> => {
   doc.addPage()
   currentPage++
   await addLetter()
-  let yPos = headerY()
+  let yPos = headerY() - 5
 
-  doc.setDrawColor(0, 51, 102).setLineWidth(0.5)
-  doc.line(left, yPos, w - left, yPos)
+  // doc.setDrawColor(0, 51, 102).setLineWidth(0.5)
+  // doc.line(left, yPos, w - left, yPos)
   doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(0, 51, 102)
   doc.text("SPECIAL OFFERS", w / 2, yPos + 8, { align: "center" })
   yPos += 15
 
-  // MedZeal Physiotherapy & Wellness Center
-  doc.setFont("helvetica", "bold").setFontSize(12).setTextColor(0, 51, 102)
-  doc.text("MEDZEAL PHYSIOTHERAPY & WELLNESS CENTER", left, yPos)
-  yPos += 8
-
-  doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(0, 0, 0)
-  const centerText =
-    "MedZeal Physiotherapy & Wellness Center offers comprehensive healthcare services tailored to your specific needs. Our expert team uses evidence-based techniques to help you recover faster and improve your quality of life."
-  const centerLines = doc.splitTextToSize(centerText, totalW)
-  doc.text(centerLines, left, yPos)
-  yPos += centerLines.length * lineH + 5
-
   // Personalized recommendations
   doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(0, 51, 102)
-  doc.text("PERSONALIZED RECOMMENDATIONS", left, yPos)
+  doc.text("RECOMMENDATIONS", left, yPos)
   yPos += 6
 
   doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(0, 0, 0)
@@ -785,108 +776,92 @@ export const generateGraphPDF = async (data: PatientData): Promise<Blob> => {
   doc.text(consultationLines, left, yPos)
   yPos += consultationLines.length * lineH + 3
 
-  // Recommended services
-  if (recommendations.recommendedServices.length > 0) {
-    doc.setFont("helvetica", "bold").setFontSize(10)
-    doc.text("Recommended Services:", left, yPos)
-    yPos += lineH
-
-    doc.setFont("helvetica", "normal").setFontSize(9)
-
-    for (const service of recommendations.recommendedServices) {
-      const serviceText = `• ${service.name}: ${service.reason}`
-      const serviceLines = doc.splitTextToSize(serviceText, totalW - 5)
-      doc.text(serviceLines, left + 5, yPos)
-      yPos += serviceLines.length * lineH + 1
-    }
-  }
-
-  yPos += 5
-
   // Coupon section
   doc.setFont("helvetica", "bold").setFontSize(12).setTextColor(0, 51, 102)
   doc.text("EXCLUSIVE OFFERS FOR YOU", left, yPos)
-  yPos += 6
+  yPos += 8
 
-  // Draw coupon boxes
+  // Draw coupon boxes - full width, one per row
   doc.setDrawColor(0, 51, 102)
   doc.setLineWidth(0.5)
 
-  // Calculate coupon dimensions for 2x2 grid
-  const couponWidth = totalW / 2 - 5
-  const couponHeight = 30
+  // Calculate coupon dimensions for full-width cards
+  const couponWidth = totalW
+  const couponHeight = 45
   const couponGap = 10
+  const imageSize = 25 // Square image size for 1:1 ratio
 
-  // Prepare all coupons - ensure we have 4 unique coupons (1 free, 3 at 30% off)
-  const allCoupons = recommendations.couponCodes.slice(0, 4)
+  // Prepare coupons - ensure we have exactly 3 coupons
+  const allCoupons = recommendations.couponCodes.slice(0, 3)
+  const services = recommendations.recommendedServices.slice(0, 3)
 
-  // First row of coupons (2 coupons)
-  if (allCoupons.length >= 1) {
-    // Left coupon - Free consultation
-    const leftCoupon = allCoupons[0]
-    doc.roundedRect(left, yPos, couponWidth, couponHeight, 2, 2)
+  // Draw 3 coupons, one per row
+  for (let i = 0; i < 3; i++) {
+    const coupon = allCoupons[i]
+    const service = services[i] || { name: coupon.service, reason: coupon.reason }
+
+    // Draw coupon background with rounded corners
+    doc.setDrawColor(0, 51, 102)
+    doc.roundedRect(left, yPos, couponWidth, couponHeight, 3, 3, "S")
+
+    // Draw header
     doc.setFillColor(0, 51, 102)
-    doc.rect(left, yPos, couponWidth, 8, "F")
-    doc.setFont("helvetica", "bold").setFontSize(9).setTextColor(255, 255, 255)
-    doc.text("FREE CONSULTATION", left + couponWidth / 2, yPos + 5.5, { align: "center" })
-    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(0, 51, 102)
-    doc.text(leftCoupon.code, left + couponWidth / 2, yPos + 16, { align: "center" })
-    doc.setFont("helvetica", "normal").setFontSize(7).setTextColor(0, 0, 0)
-    const leftText = `Use this coupon for a FREE consultation`
-    doc.text(leftText, left + couponWidth / 2, yPos + 23, { align: "center" })
+    doc.rect(left, yPos, couponWidth, 10, "F")
 
-    // Right coupon (if available)
-    if (allCoupons.length >= 2) {
-      const rightCoupon = allCoupons[1]
-      const rightX = left + couponWidth + couponGap
-      doc.roundedRect(rightX, yPos, couponWidth, couponHeight, 2, 2)
-      doc.setFillColor(0, 51, 102)
-      doc.rect(rightX, yPos, couponWidth, 8, "F")
-      doc.setFont("helvetica", "bold").setFontSize(9).setTextColor(255, 255, 255)
-      doc.text("30% OFF", rightX + couponWidth / 2, yPos + 5.5, { align: "center" })
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(0, 51, 102)
-      doc.text(rightCoupon.code, rightX + couponWidth / 2, yPos + 16, { align: "center" })
-      doc.setFont("helvetica", "normal").setFontSize(7).setTextColor(0, 0, 0)
-      const rightText = `Use this coupon for 30% OFF on ${rightCoupon.service}`
-      doc.text(rightText, rightX + couponWidth / 2, yPos + 23, { align: "center" })
+    // Draw header text
+    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(255, 255, 255)
+    const headerText = i === 0 ? "FREE CONSULTATION" : "30% OFF"
+    doc.text(headerText, left + 10, yPos + 6.5)
+
+    // Calculate image position - right side of coupon
+    const imageX = left + couponWidth - imageSize - 10
+    const imageY = yPos + 15
+
+    // Draw vertical divider line to separate content from image
+    doc.setDrawColor(200, 200, 200)
+    doc.setLineWidth(0.3)
+    doc.line(imageX - 10, yPos + 10, imageX - 10, yPos + couponHeight)
+
+    // Content area - limit width to prevent text overflow into image area
+    const contentWidth = imageX - left - 20 // Extra margin to prevent text overflow
+
+    // Draw coupon code
+  // Draw “Coupon Code:” label + code, all in bold
+doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(0, 51, 102)
+doc.text(`Coupon Code: ${coupon.code}`, left + 10, yPos + 22)
+
+
+    // Draw service name
+    doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(0, 0, 0)
+    doc.text(service.name, left + 10, yPos + 30)
+
+    // Draw service description with limited width
+    doc.setFont("helvetica", "normal").setFontSize(8).setTextColor(0, 0, 0)
+    const descriptionLines = doc.splitTextToSize(service.reason, contentWidth)
+    doc.text(descriptionLines, left + 10, yPos + 35)
+
+    // Try to load the service image
+    try {
+      // Get the service name without any parentheses content
+      const cleanServiceName = service.name.replace(/\s*$$[^)]*$$/g, "").trim()
+      const serviceImg = await loadServiceImage(cleanServiceName)
+
+      if (serviceImg) {
+        // Add service image on the right side
+        doc.addImage(serviceImg, "JPEG", imageX, imageY, imageSize, imageSize)
+      } else {
+        // Fallback to offer image if service image not found
+        const offerImg = await loadImageAsCompressedJPEG("/offer.png", 0.7)
+        doc.addImage(offerImg, "JPEG", imageX, imageY, imageSize, imageSize)
+      }
+    } catch (e) {
+      console.error("Error loading service image:", e)
+      // No fallback image if both fail
     }
+
+    // Move to next coupon position
+    yPos += couponHeight + couponGap - 4
   }
-
-  yPos += couponHeight + 5
-
-  // Second row of coupons (2 more coupons if available)
-  if (allCoupons.length >= 3) {
-    // Left coupon
-    const leftCoupon = allCoupons[2]
-    doc.roundedRect(left, yPos, couponWidth, couponHeight, 2, 2)
-    doc.setFillColor(0, 51, 102)
-    doc.rect(left, yPos, couponWidth, 8, "F")
-    doc.setFont("helvetica", "bold").setFontSize(9).setTextColor(255, 255, 255)
-    doc.text("30% OFF", left + couponWidth / 2, yPos + 5.5, { align: "center" })
-    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(0, 51, 102)
-    doc.text(leftCoupon.code, left + couponWidth / 2, yPos + 16, { align: "center" })
-    doc.setFont("helvetica", "normal").setFontSize(7).setTextColor(0, 0, 0)
-    const leftText2 = `Use this coupon for 30% OFF on ${leftCoupon.service}`
-    doc.text(leftText2, left + couponWidth / 2, yPos + 23, { align: "center" })
-
-    // Right coupon (if available)
-    if (allCoupons.length >= 4) {
-      const rightCoupon = allCoupons[3]
-      const rightX = left + couponWidth + couponGap
-      doc.roundedRect(rightX, yPos, couponWidth, couponHeight, 2, 2)
-      doc.setFillColor(0, 51, 102)
-      doc.rect(rightX, yPos, couponWidth, 8, "F")
-      doc.setFont("helvetica", "bold").setFontSize(9).setTextColor(255, 255, 255)
-      doc.text("30% OFF", rightX + couponWidth / 2, yPos + 5.5, { align: "center" })
-      doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(0, 51, 102)
-      doc.text(rightCoupon.code, rightX + couponWidth / 2, yPos + 16, { align: "center" })
-      doc.setFont("helvetica", "normal").setFontSize(7).setTextColor(0, 0, 0)
-      const rightText2 = `Use this coupon for 30% OFF on ${rightCoupon.service}`
-      doc.text(rightText2, rightX + couponWidth / 2, yPos + 23, { align: "center" })
-    }
-  }
-
-  yPos += couponHeight + 5
 
   // Validity with updated expiry date
   doc.setFont("helvetica", "italic").setFontSize(8).setTextColor(0, 0, 0)
@@ -899,6 +874,10 @@ export const generateGraphPDF = async (data: PatientData): Promise<Blob> => {
   yPos += 5
   doc.setFont("helvetica", "normal").setFontSize(9)
   doc.text("Call: +91 7044178786 | Email: medzealpcw@gmail.com", w / 2, yPos, { align: "center" })
+  yPos += 5
+  doc.text("Shop No, 10 BlueBells, Noori Bluebells, below MedFord Hospital, near Bypass Y Junction, Kausa, Mumbra, Maharashtra 400612", w / 2, yPos, { align: "center" })
+  yPos += 3
+  doc.text("near Bypass Y Junction, Kausa, Mumbra, Maharashtra 400612", w / 2, yPos, { align: "center" })
 
   // PAGE 3: PARAMETERS REQUIRING ATTENTION
   doc.addPage()
@@ -924,7 +903,7 @@ export const generateGraphPDF = async (data: PatientData): Promise<Blob> => {
 
       for (const param of test.parameters) {
         // Check if we need a page break
-        yPos = checkPageBreak(yPos, 100)
+        yPos = checkPageBreak(yPos, 20)
 
         // Parameter row with name and value (no graph as requested)
         doc.setFont("helvetica", "bold").setFontSize(9).setTextColor(0, 0, 0)
