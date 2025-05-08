@@ -875,7 +875,7 @@ doc.text(`Coupon Code: ${coupon.code}`, left + 10, yPos + 22)
   doc.setFont("helvetica", "normal").setFontSize(9)
   doc.text("Call: +91 7044178786 | Email: medzealpcw@gmail.com", w / 2, yPos, { align: "center" })
   yPos += 5
-  doc.text("Shop No, 10 BlueBells, Noori Bluebells, below MedFord Hospital, near Bypass Y Junction, Kausa, Mumbra, Maharashtra 400612", w / 2, yPos, { align: "center" })
+  doc.text("Shop No, 10 BlueBells, Noori Bluebells, below MedFord Hospital", w / 2, yPos, { align: "center" })
   yPos += 3
   doc.text("near Bypass Y Junction, Kausa, Mumbra, Maharashtra 400612", w / 2, yPos, { align: "center" })
 
