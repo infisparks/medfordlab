@@ -192,7 +192,11 @@ const BloodValuesForm: React.FC = () => {
               }
               if (!normal && ranges.length) normal = ranges[ranges.length - 1].rangeValue;
 
-              const testKey = def.testName.toLowerCase().replace(/\s+/g, "_");
+               const testKey = def.testName
+                 .toLowerCase()
+                 .replace(/\s+/g, "_")
+                 .replace(/[.#$[\]]/g, "");
+                 
               const saved = stored?.[testKey]?.parameters?.find((q: any) => q.name === p.name);
 
               let subps;
