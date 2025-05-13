@@ -4,10 +4,13 @@ import React, { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import { database, auth } from "../firebase"
 import { toWords } from "number-to-words"
-
+import { motion, AnimatePresence } from "framer-motion"
 import { ref, onValue, update } from "firebase/database"
-import { ref as dbRef, onValue as onValueDb } from "firebase/database" // ← to fetch role
-
+import { ref as dbRef, onValue as onValueDb } from "firebase/database"
+import { onAuthStateChanged } from "firebase/auth"
+import { jsPDF } from "jspdf"
+import autoTable from "jspdf-autotable"
+import FakeBill from "./component/FakeBill"
 import {
   UserIcon,
   ChartBarIcon,
@@ -15,14 +18,22 @@ import {
   UserGroupIcon,
   DocumentPlusIcon,
   ArrowDownTrayIcon,
+  MagnifyingGlassIcon,
+  CalendarIcon,
+  AdjustmentsHorizontalIcon,
+  BanknotesIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ArrowPathIcon,
+  TrashIcon,
+  ExclamationCircleIcon,
+  PencilIcon,
+  DocumentTextIcon,
+  CreditCardIcon,
 } from "@heroicons/react/24/outline"
 import letterhead from "../../public/bill.png"
-import { jsPDF } from "jspdf"
-import autoTable from "jspdf-autotable"
-import FakeBill from "./component/FakeBill" // <-- Fake bill component
-import { onAuthStateChanged } from "firebase/auth"
-
-// ← adjust path if needed
 
 /* --------------------  Types  -------------------- */
 interface BloodTest {
@@ -41,7 +52,7 @@ interface Patient {
   contact?: string
   createdAt: string
   doctorName: string
-  discountAmount: number // ₹ flat discount
+  discountAmount: number
   amountPaid: number
   bloodTests?: BloodTest[]
   bloodtest?: Record<string, any>
@@ -87,15 +98,23 @@ const calculateTotalsForSelected = (selectedIds: string[], patients: Patient[]) 
   return { totalAmount, totalPaid, totalDiscount, remaining: totalAmount - totalPaid - totalDiscount }
 }
 
-// New utility to format current local time for datetime-local input
 const formatLocalDateTime = () => {
   const now = new Date()
   const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, "0") // Months are 0-based
+  const month = String(now.getMonth() + 1).padStart(2, "0")
   const day = String(now.getDate()).padStart(2, "0")
   const hours = String(now.getHours()).padStart(2, "0")
   const minutes = String(now.getMinutes()).padStart(2, "0")
   return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+const formatCurrency = (amount: number) => {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)
 }
 
 /* --------------------  Component  -------------------- */
@@ -113,16 +132,16 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState<string>("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [expandedPatientId, setExpandedPatientId] = useState<string | null>(null)
-  const [fakeBillPatient, setFakeBillPatient] = useState<Patient | null>(null) // <-- NEW
+  const [fakeBillPatient, setFakeBillPatient] = useState<Patient | null>(null)
   const [selectedPatients, setSelectedPatients] = useState<string[]>([])
   const [selectAll, setSelectAll] = useState(false)
   const [showCheckboxes, setShowCheckboxes] = useState<boolean>(false)
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false)
 
-  // ─────────────── date range for filtering ───────────────
-  const todayStr = new Date().toISOString().slice(0, 10) // "YYYY‑MM‑DD"
+  // Date range for filtering
+  const todayStr = new Date().toISOString().slice(0, 10)
   const [startDate, setStartDate] = useState<string>(todayStr)
   const [endDate, setEndDate] = useState<string>(todayStr)
-  // ─────────────────────────────────────────────
 
   const [sampleModalPatient, setSampleModalPatient] = useState<Patient | null>(null)
   const [sampleDateTime, setSampleDateTime] = useState<string>(formatLocalDateTime)
@@ -217,7 +236,6 @@ export default function Dashboard() {
       if (!matchesSearch) return false
 
       // 3. Date-range filter (registration date)
-      // Use `createdAt` (or `registrationDate` if that's your field)
       const regDate = new Date(p.createdAt)
       if (start && regDate < start) return false
       if (end && regDate > end) return false
@@ -252,8 +270,8 @@ export default function Dashboard() {
       pendingReports: pending,
     })
   }, [filteredPatients])
-  /* --- actions --- */
 
+  /* --- actions --- */
   const handleSaveSampleDate = async () => {
     if (!sampleModalPatient) return
     try {
@@ -282,13 +300,11 @@ export default function Dashboard() {
   const handleDeletePatient = async (p: Patient) => {
     if (!confirm(`Mark ${p.name} as deleted?`)) return
     try {
-      // Mark as deleted in the database instead of removing
       await update(ref(database, `patients/${p.id}`), {
         deleted: true,
         deletedAt: new Date().toISOString(),
       })
 
-      // Update local state
       setDeletedPatients((prev) => [...prev, p.id])
 
       if (expandedPatientId === p.id) setExpandedPatientId(null)
@@ -302,7 +318,6 @@ export default function Dashboard() {
   const handleUpdateAmount = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedPatient) return
-    // parse the string, default to 0 if empty or invalid
     const added = Number.parseFloat(newAmountPaid) || 0
     const updatedAmountPaid = selectedPatient.amountPaid + added
 
@@ -313,7 +328,6 @@ export default function Dashboard() {
         { amount: added, paymentMode, time: new Date().toISOString() },
       ],
     })
-    // reset the field back to empty string
     setNewAmountPaid("")
     setSelectedPatient(null)
     setPaymentMode("online")
@@ -351,6 +365,7 @@ export default function Dashboard() {
 
     const img = new Image()
     img.src = (letterhead as any).src ?? (letterhead as any)
+    img.crossOrigin = "anonymous"
     img.onload = () => {
       // Draw letterhead into a canvas to get a data URL
       const canvas = document.createElement("canvas")
@@ -482,6 +497,7 @@ export default function Dashboard() {
 
     const img = new Image()
     img.src = (letterhead as any).src ?? (letterhead as any)
+    img.crossOrigin = "anonymous"
     img.onload = () => {
       // Draw letterhead into a canvas to get a data URL
       const canvas = document.createElement("canvas")
@@ -687,607 +703,817 @@ export default function Dashboard() {
 
   /* --------------------  RENDER  -------------------- */
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm flex items-center justify-between p-4 md:px-8">
-        <p className="text-3xl font-medium text-blue-600">InfiCare</p>
+    <div className="min-h-screen bg-gray-50 font-sans">
+      <header className="bg-gradient-to-r from-teal-600 to-teal-500 shadow-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.5 }}
+              className="flex items-center"
+            >
+              <p className="text-2xl font-bold text-white tracking-tight">InfiCare</p>
+            </motion.div>
+          </div>
+        </div>
       </header>
 
-      <main className="p-4 md:p-6">
-        {/* Download Bills button */}
-        <div className="mb-4 flex justify-between items-center">
-          <h1 className="text-2xl font-semibold">Patient Dashboard</h1>
-          <button
-            onClick={() => {
-              // Show checkboxes when button is clicked
-              setShowCheckboxes((prev) => !prev)
-            }}
-            className="px-6 py-2 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700 flex items-center"
-          >
-            <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
-            {showCheckboxes ? "Cancel Selection" : "Download Bills"}
-          </button>
-        </div>
-        {/* filters */}
-        <div className="mb-4 flex flex-col md:flex-row gap-4">
-          <input
-            type="text"
-            placeholder="Search name or phone..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="p-2 border rounded-md"
-          />
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="p-2 border rounded-md"
-          />
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="p-2 border rounded-md"
-          />
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="p-2 border rounded-md"
-          >
-            <option value="all">All</option>
-            <option value="notCollected">Not Collected</option>
-            <option value="sampleCollected">Pending</option>
-            <option value="completed">Completed</option>
-          </select>
-        </div>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+          {/* Header and Download Bills button */}
+          <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <h1 className="text-2xl font-bold text-gray-800">Patient Dashboard</h1>
+            <button
+              onClick={() => setShowCheckboxes((prev) => !prev)}
+              className="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm flex items-center"
+            >
+              <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+              {showCheckboxes ? "Cancel Selection" : "Download Bills"}
+            </button>
+          </div>
 
-        {selectedPatients.length > 0 && (
-          <div className="mb-4 p-4 bg-white rounded-xl shadow-sm border">
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-              <div>
-                <h3 className="font-medium">Selected: {selectedPatients.length} patients</h3>
-                {(() => {
-                  const { totalAmount, totalPaid, totalDiscount, remaining } = calculateTotalsForSelected(
-                    selectedPatients,
-                    patients,
-                  )
-                  return (
-                    <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div>
-                        <p className="text-sm text-gray-500">Total Amount</p>
-                        <p className="font-semibold">₹{totalAmount.toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-500">Total Paid</p>
-                        <p className="font-semibold">₹{totalPaid.toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-500">Total Discount</p>
-                        <p className="font-semibold">₹{totalDiscount.toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-500">Remaining</p>
-                        <p className="font-semibold">₹{remaining.toFixed(2)}</p>
-                      </div>
-                    </div>
-                  )
-                })()}
-              </div>
-              <button
-                onClick={handleDownloadMultipleBills}
-                className="inline-flex items-center px-6 py-3 bg-teal-600 text-white rounded-md text-sm hover:bg-teal-700"
+          {/* Metrics */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            {[
+              {
+                icon: ChartBarIcon,
+                label: "Total Tests",
+                val: metrics.totalTests,
+                color: "from-blue-500 to-blue-600",
+                textColor: "text-blue-600",
+              },
+              {
+                icon: ClockIcon,
+                label: "Pending Reports",
+                val: metrics.pendingReports,
+                color: "from-amber-500 to-amber-600",
+                textColor: "text-amber-600",
+              },
+              {
+                icon: UserGroupIcon,
+                label: "Completed Tests",
+                val: metrics.completedTests,
+                color: "from-emerald-500 to-emerald-600",
+                textColor: "text-emerald-600",
+              },
+            ].map((m, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: i * 0.1 }}
+                className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
               >
-                <ArrowDownTrayIcon className="h-5 w-5 mr-2" />
-                Download Selected Bills
-              </button>
-            </div>
+                <div className="flex items-center p-4">
+                  <div className={`p-3 rounded-lg bg-gradient-to-br ${m.color} mr-4`}>
+                    {React.createElement(m.icon, { className: "h-5 w-5 text-white" })}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-1">{m.label}</p>
+                    <p className={`text-2xl font-bold ${m.textColor}`}>{m.val}</p>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
           </div>
-        )}
 
-        {/* metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-          {[
-            { icon: ChartBarIcon, label: "Total Tests", val: metrics.totalTests, bg: "blue" },
-            {
-              icon: ClockIcon,
-              label: "Pending Reports",
-              val: metrics.pendingReports,
-              bg: "yellow",
-            },
-            {
-              icon: UserGroupIcon,
-              label: "Completed Tests",
-              val: metrics.completedTests,
-              bg: "green",
-            },
-          ].map((m, i) => (
-            <div key={i} className="bg-white p-3 rounded-lg shadow-sm border">
-              <div className="flex items-center space-x-3">
-                <div className={`p-2 bg-${m.bg}-50 rounded-lg`}>
-                  {React.createElement(m.icon, { className: `h-5 w-5 text-${m.bg}-600` })}
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-0.5">{m.label}</p>
-                  <p className="text-xl font-semibold">{m.val}</p>
-                </div>
+          {/* Filters */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+            className="mb-6"
+          >
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+              <div
+                className="p-4 border-b border-gray-100 flex justify-between items-center cursor-pointer"
+                onClick={() => setIsFiltersExpanded(!isFiltersExpanded)}
+              >
+                <h2 className="text-base font-semibold flex items-center text-gray-800">
+                  <AdjustmentsHorizontalIcon className="h-4 w-4 mr-2 text-teal-600" />
+                  Filters & Search
+                </h2>
+                {isFiltersExpanded ? (
+                  <ChevronUpIcon className="h-4 w-4 text-gray-500" />
+                ) : (
+                  <ChevronDownIcon className="h-4 w-4 text-gray-500" />
+                )}
               </div>
-            </div>
-          ))}
-        </div>
 
-        <div className="bg-white rounded-lg shadow-sm border">
-          <div className="p-3 border-b">
-            <h2 className="text-base font-semibold flex items-center">
-              <UserIcon className="h-4 w-4 mr-2 text-gray-600" />
-              Recent Patients
-            </h2>
-          </div>
+              <AnimatePresence>
+                {isFiltersExpanded && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <MagnifyingGlassIcon className="h-4 w-4 text-gray-400" />
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Search name or phone..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                        />
+                      </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 text-xs">
-                <tr>
-                  {showCheckboxes && (
-                    <th className="px-3 py-2 text-left font-medium text-gray-500">
-                      <input
-                        type="checkbox"
-                        checked={selectAll}
-                        onChange={handleToggleSelectAll}
-                        className="h-3 w-3 text-indigo-600 border-gray-300 rounded"
-                      />
-                    </th>
-                  )}
-                  {[".", "Patient", "Tests", "Entry Date", "Status", "Remaining", "Total Amount", "Actions"].map(
-                    (h) => (
-                      <th key={h} className="px-3 py-2 text-left font-medium text-gray-500">
-                        {h}
-                      </th>
-                    ),
-                  )}
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {filteredPatients.map((p) => {
-                  const sampleCollected = !!p.sampleCollectedAt
-                  const complete = isAllTestsComplete(p)
-                  const status = !sampleCollected ? "Not Collected" : complete ? "Completed" : "Pending"
-                  const { remaining } = calculateAmounts(p)
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <CalendarIcon className="h-4 w-4 text-gray-400" />
+                        </div>
+                        <input
+                          type="date"
+                          value={startDate}
+                          onChange={(e) => setStartDate(e.target.value)}
+                          className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                        />
+                      </div>
 
-                  return (
-                    <React.Fragment key={p.id}>
-                      <tr
-                        className={`hover:bg-gray-50 ${deleteRequestPatients[p.id] ? "bg-red-100" : ""} ${deletedPatients.includes(p.id) ? (role === "admin" ? "bg-red-300" : "bg-red-200") : ""}`}
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <CalendarIcon className="h-4 w-4 text-gray-400" />
+                        </div>
+                        <input
+                          type="date"
+                          value={endDate}
+                          onChange={(e) => setEndDate(e.target.value)}
+                          className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                        />
+                      </div>
+
+                      <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
                       >
-                        {deleteRequestPatients[p.id] && role === "admin" && (
-                          <div className="absolute right-0 top-0 bg-red-100 text-xs p-1 rounded-bl-md max-w-xs overflow-hidden">
-                            <span className="font-bold">Delete reason:</span> {deleteRequestPatients[p.id].reason}
+                        <option value="all">All Statuses</option>
+                        <option value="notCollected">Not Collected</option>
+                        <option value="sampleCollected">Pending</option>
+                        <option value="completed">Completed</option>
+                      </select>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </motion.div>
+
+          {/* Selected Patients Summary */}
+          <AnimatePresence>
+            {selectedPatients.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.3 }}
+                className="mb-6"
+              >
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden p-4">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div>
+                      <h3 className="font-medium text-gray-800">Selected: {selectedPatients.length} patients</h3>
+                      {(() => {
+                        const { totalAmount, totalPaid, totalDiscount, remaining } = calculateTotalsForSelected(
+                          selectedPatients,
+                          patients,
+                        )
+                        return (
+                          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-6">
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 mb-1">Total Amount</p>
+                              <p className="text-lg font-bold text-gray-800">{formatCurrency(totalAmount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 mb-1">Total Paid</p>
+                              <p className="text-lg font-bold text-teal-600">{formatCurrency(totalPaid)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 mb-1">Total Discount</p>
+                              <p className="text-lg font-bold text-amber-600">{formatCurrency(totalDiscount)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 mb-1">Remaining</p>
+                              <p className="text-lg font-bold text-red-600">{formatCurrency(remaining)}</p>
+                            </div>
                           </div>
-                        )}
-                        <td
-                          className={`px-3 py-2 relative ${deleteRequestPatients[p.id] ? "bg-red-100 wzmoc:2px; border:1px solid black; padding:5px; margin:5px; border-radius:5px;" : ""} ${deletedPatients.includes(p.id) ? "bg-red-200" : ""}`}
+                        )
+                      })()}
+                    </div>
+                    <button
+                      onClick={handleDownloadMultipleBills}
+                      className="inline-flex items-center px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm"
+                    >
+                      <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                      Download Selected Bills
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Patients Table */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.4 }}
+            className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"
+          >
+            <div className="p-4 border-b border-gray-100">
+              <h2 className="text-base font-semibold flex items-center text-gray-800">
+                <UserIcon className="h-4 w-4 mr-2 text-teal-600" />
+                Patients
+              </h2>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50 text-xs text-gray-500 border-b border-gray-100">
+                    {showCheckboxes && (
+                      <th className="px-4 py-3 text-left font-medium">
+                        <input
+                          type="checkbox"
+                          checked={selectAll}
+                          onChange={handleToggleSelectAll}
+                          className="h-4 w-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                        />
+                      </th>
+                    )}
+                    <th className="px-4 py-3 text-left font-medium">Patient</th>
+                    <th className="px-4 py-3 text-left font-medium">Tests</th>
+                    <th className="px-4 py-3 text-left font-medium">Entry Date</th>
+                    <th className="px-4 py-3 text-left font-medium">Status</th>
+                    <th className="px-4 py-3 text-left font-medium">Remaining</th>
+                    <th className="px-4 py-3 text-left font-medium">Total Amount</th>
+                    <th className="px-4 py-3 text-left font-medium">Paid Amount</th>
+                    <th className="px-4 py-3 text-left font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredPatients.map((p) => {
+                    const sampleCollected = !!p.sampleCollectedAt
+                    const complete = isAllTestsComplete(p)
+                    const status = !sampleCollected ? "Not Collected" : complete ? "Completed" : "Pending"
+                    const { testTotal, remaining } = calculateAmounts(p)
+                    const isDeleted = deletedPatients.includes(p.id)
+                    const hasDeleteRequest = deleteRequestPatients[p.id]
+
+                    return (
+                      <React.Fragment key={p.id}>
+                        <motion.tr
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ duration: 0.3 }}
+                          className={`hover:bg-gray-50 transition-colors duration-150 ${
+                            hasDeleteRequest ? "bg-red-50" : ""
+                          } ${isDeleted ? (role === "admin" ? "bg-red-100" : "bg-red-50") : ""}`}
                         >
                           {showCheckboxes && (
-                            <input
-                              type="checkbox"
-                              checked={selectedPatients.includes(p.id)}
-                              onChange={() => handleToggleSelect(p.id)}
-                              className="h-3 w-3 text-indigo-600 border-gray-300 rounded"
-                            />
+                            <td className="px-4 py-3 relative">
+                              <input
+                                type="checkbox"
+                                checked={selectedPatients.includes(p.id)}
+                                onChange={() => handleToggleSelect(p.id)}
+                                className="h-4 w-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                              />
+                            </td>
                           )}
-                        </td>
-                        <td className="px-3 py-2">
-                          <p className="font-medium text-sm">{p.name}</p>
-                          <p className="text-xs text-gray-500">
-                            {p.age}y • {p.gender}
-                          </p>
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {p.bloodTests?.length ? (
-                            <ul className="list-disc pl-3">
-                              {p.bloodTests.map((t) => {
-                                const done = t.testType?.toLowerCase() === "outsource" || isTestFullyEntered(p, t)
-                                return (
-                                  <li key={t.testId} className={done ? "text-green-600" : "text-red-500"}>
-                                    {t.testName}
-                                  </li>
-                                )
-                              })}
-                            </ul>
-                          ) : (
-                            <span className="text-gray-400">No tests</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs">{new Date(p.createdAt).toLocaleDateString()}</td>
-                        <td className="px-3 py-2">
-                          {status === "Not Collected" && (
-                            <span className="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800">
-                              Not Collected
-                            </span>
-                          )}
-                          {status === "Pending" && (
-                            <span className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">Pending</span>
-                          )}
-                          {status === "Completed" && (
-                            <span className="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800">
-                              Completed
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {remaining > 0 ? (
-                            <span className="text-red-600 font-bold">₹{remaining.toFixed(2)}</span>
-                          ) : (
-                            "0"
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          <span className="text-blue-600 font-bold">₹{calculateAmounts(p).testTotal.toFixed(2)}</span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <button
-                            onClick={() => setExpandedPatientId(expandedPatientId === p.id ? null : p.id)}
-                            className="px-3 py-1 bg-indigo-600 text-white rounded-md text-xs hover:bg-indigo-700"
-                          >
-                            Actions
-                          </button>
-                        </td>
-                      </tr>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col">
+                              <span className="font-medium text-gray-800">{p.name}</span>
+                              <span className="text-xs text-gray-500">
+                                {p.age}y • {p.gender} • {p.contact || "No contact"}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            {p.bloodTests?.length ? (
+                              <div className="max-h-20 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+                                <ul className="space-y-1">
+                                  {p.bloodTests.map((t) => {
+                                    const done = t.testType?.toLowerCase() === "outsource" || isTestFullyEntered(p, t)
+                                    return (
+                                      <li key={t.testId} className="flex items-center text-xs">
+                                        {done ? (
+                                          <CheckCircleIcon className="h-3 w-3 text-emerald-500 mr-1 flex-shrink-0" />
+                                        ) : (
+                                          <XCircleIcon className="h-3 w-3 text-red-500 mr-1 flex-shrink-0" />
+                                        )}
+                                        <span className={done ? "text-emerald-700" : "text-red-700"}>{t.testName}</span>
+                                      </li>
+                                    )
+                                  })}
+                                </ul>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-400">No tests</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-600">
+                            {new Date(p.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3">
+                            {status === "Not Collected" && (
+                              <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-800 font-medium">
+                                Not Collected
+                              </span>
+                            )}
+                            {status === "Pending" && (
+                              <span className="px-2 py-1 text-xs rounded-full bg-amber-100 text-amber-800 font-medium">
+                                Pending
+                              </span>
+                            )}
+                            {status === "Completed" && (
+                              <span className="px-2 py-1 text-xs rounded-full bg-emerald-100 text-emerald-800 font-medium">
+                                Completed
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {remaining > 0 ? (
+                              <span className="text-sm font-bold text-red-600">{formatCurrency(remaining)}</span>
+                            ) : (
+                              <span className="text-sm font-medium text-gray-500">₹0.00</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm font-bold text-gray-800">{formatCurrency(testTotal)}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-sm font-bold text-teal-600">{formatCurrency(p.amountPaid)}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => setExpandedPatientId(expandedPatientId === p.id ? null : p.id)}
+                              className="px-3 py-1.5 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm"
+                            >
+                              {expandedPatientId === p.id ? "Hide" : "Actions"}
+                            </button>
+                          </td>
+                        </motion.tr>
 
-                      {expandedPatientId === p.id && (
-                        <tr>
-                          <td colSpan={showCheckboxes ? 9 : 8} className="bg-gray-50 p-2">
-                            <div className="flex flex-wrap gap-1 text-xs">
-                              {deleteRequestPatients[p.id] && (
-                                <div className="w-full mb-2 p-2 bg-red-100 rounded text-sm">
-                                  <p className="font-bold">
-                                    Delete request by: {deleteRequestPatients[p.id].requestedBy}
-                                  </p>
-                                  <p>Reason: {deleteRequestPatients[p.id].reason}</p>
-                                </div>
-                              )}
-
-                              {sampleModalPatient && (
-                                <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-                                  <div className="bg-white rounded-xl shadow-lg max-w-sm w-full p-6 relative">
-                                    <button
-                                      onClick={() => setSampleModalPatient(null)}
-                                      className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
-                                    >
-                                      ✕
-                                    </button>
-                                    <h3 className="text-lg font-semibold mb-4">
-                                      Set Sample Collected Time for {sampleModalPatient.name}
-                                    </h3>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">Date & Time</label>
-                                    <input
-                                      type="datetime-local"
-                                      value={sampleDateTime}
-                                      onChange={(e) => setSampleDateTime(e.target.value)}
-                                      max={formatLocalDateTime()} // Prevent future times
-                                      className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
-                                    />
-                                    <p className="mt-2 text-sm text-gray-600">
-                                      Selected: {format12Hour(sampleDateTime)}
-                                    </p>
-
-                                    <div className="mt-6 flex justify-end space-x-2">
-                                      <button
-                                        onClick={() => setSampleModalPatient(null)}
-                                        className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
-                                      >
-                                        Cancel
-                                      </button>
-                                      <button
-                                        onClick={handleSaveSampleDate}
-                                        className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
-                                      >
-                                        Save
-                                      </button>
+                        <AnimatePresence>
+                          {expandedPatientId === p.id && (
+                            <motion.tr
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.3 }}
+                            >
+                              <td colSpan={showCheckboxes ? 9 : 8} className="bg-gray-50 p-4">
+                                {hasDeleteRequest && (
+                                  <div className="w-full mb-4 p-3 bg-red-100 rounded-lg text-sm border border-red-200">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <ExclamationCircleIcon className="h-4 w-4 text-red-600" />
+                                      <p className="font-bold text-red-800">
+                                        Delete request by: {deleteRequestPatients[p.id].requestedBy}
+                                      </p>
                                     </div>
+                                    <p className="text-red-700 ml-6">Reason: {deleteRequestPatients[p.id].reason}</p>
                                   </div>
-                                </div>
-                              )}
+                                )}
 
-                              {/* Show only Download Report button for phlebotomist role */}
-                              {role === "phlebotomist" ? (
-                                <>
-                                  {sampleCollected && (
-                                    <Link
-                                      href={`/download-report?patientId=${p.id}`}
-                                      className={`inline-flex items-center px-3 py-1 bg-green-600 text-white rounded-md text-xs ${
-                                        deleteRequestPatients[p.id]
-                                          ? "opacity-50 pointer-events-none"
-                                          : "hover:bg-green-700"
-                                      }`}
-                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
-                                    >
-                                      <ArrowDownTrayIcon className="h-3 w-3 mr-1" />
-                                      Download Report
-                                    </Link>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  {/* Original buttons for other roles */}
-                                  {!sampleCollected && (
-                                    <button
-                                      onClick={() => {
-                                        setSampleModalPatient(p)
-                                        setSampleDateTime(formatLocalDateTime()) // Set current local time
-                                      }}
-                                      className="px-3 py-1 bg-red-600 text-white rounded-md text-xs hover:bg-red-700"
-                                      disabled={!!deleteRequestPatients[p.id]}
-                                    >
-                                      Collect Sample
-                                    </button>
-                                  )}
-
-                                  {sampleCollected && (
-                                    <Link
-                                      href={`/download-report?patientId=${p.id}`}
-                                      className={`inline-flex items-center px-3 py-1 bg-green-600 text-white rounded-md text-xs ${
-                                        deleteRequestPatients[p.id]
-                                          ? "opacity-50 pointer-events-none"
-                                          : "hover:bg-green-700"
-                                      }`}
-                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
-                                    >
-                                      <ArrowDownTrayIcon className="h-3 w-3 mr-1" />
-                                      Download Report
-                                    </Link>
-                                  )}
-
-                                  {sampleCollected && !complete && (
-                                    <Link
-                                      href={`/blood-values/new?patientId=${p.id}`}
-                                      className={`inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded-md text-xs ${
-                                        deleteRequestPatients[p.id]
-                                          ? "opacity-50 pointer-events-none"
-                                          : "hover:bg-blue-700"
-                                      }`}
-                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
-                                    >
-                                      <DocumentPlusIcon className="h-3 w-3 mr-1" />
-                                      Add/Edit Values
-                                    </Link>
-                                  )}
-
-                                  {sampleCollected && complete && (
-                                    <Link
-                                      href={`/blood-values/new?patientId=${p.id}`}
-                                      className={`inline-flex items-center px-3 py-1 bg-blue-500 text-white rounded-md text-xs ${
-                                        deleteRequestPatients[p.id]
-                                          ? "opacity-50 pointer-events-none"
-                                          : "hover:bg-blue-600"
-                                      }`}
-                                      onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
-                                    >
-                                      Edit Test
-                                    </Link>
-                                  )}
-
-                                  <button
-                                    onClick={() => {
-                                      setSelectedPatient(p)
-                                      setNewAmountPaid("")
-                                    }}
-                                    className="px-3 py-1 bg-indigo-600 text-white rounded-md text-xs hover:bg-indigo-700"
-                                    disabled={!!deleteRequestPatients[p.id]}
-                                  >
-                                    Update Payment
-                                  </button>
-
-                                  {selectedPatient?.id === p.id && (
-                                    <button
-                                      onClick={handleDownloadBill}
-                                      className="inline-flex items-center px-3 py-1 bg-teal-600 text-white rounded-md text-xs hover:bg-teal-700"
-                                      disabled={!!deleteRequestPatients[p.id]}
-                                    >
-                                      <ArrowDownTrayIcon className="h-3 w-3 mr-1" />
-                                      Download Bill
-                                    </button>
-                                  )}
-
-                                  {/* ---- Generate Fake Bill button ---- */}
-                                  <button
-                                    onClick={() => setFakeBillPatient(p)}
-                                    className="px-3 py-1 bg-purple-600 text-white rounded-md text-xs hover:bg-purple-700"
-                                    disabled={!!deleteRequestPatients[p.id]}
-                                  >
-                                    Generate Bill
-                                  </button>
-
-                                  <Link
-                                    href={`/patient-detail?patientId=${p.id}`}
-                                    className={`px-3 py-1 bg-orange-600 text-white rounded-md text-xs ${
-                                      deleteRequestPatients[p.id]
-                                        ? "opacity-50 pointer-events-none"
-                                        : "hover:bg-orange-700"
-                                    }`}
-                                    onClick={(e) => deleteRequestPatients[p.id] && e.preventDefault()}
-                                  >
-                                    Edit Details
-                                  </Link>
-
-                                  {role === "admin" ? (
+                                <div className="flex flex-wrap gap-2">
+                                  {/* Show only Download Report button for phlebotomist role */}
+                                  {role === "phlebotomist" ? (
                                     <>
-                                      {deleteRequestPatients[p.id] ? (
-                                        <>
-                                          <button
-                                            onClick={() => handleApproveDelete(p)}
-                                            className="px-3 py-1 bg-red-600 text-white rounded-md text-xs hover:bg-red-700"
-                                          >
-                                            Approve Delete
-                                          </button>
-                                          <button
-                                            onClick={() => handleUndoDeleteRequest(p)}
-                                            className="px-3 py-1 bg-gray-600 text-white rounded-md text-xs hover:bg-gray-700"
-                                          >
-                                            Undo Request
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <button
-                                          onClick={() => handleDeletePatient(p)}
-                                          className="px-3 py-1 bg-red-600 text-white rounded-md text-xs hover:bg-red-700"
+                                      {sampleCollected && (
+                                        <Link
+                                          href={`/download-report?patientId=${p.id}`}
+                                          className={`inline-flex items-center px-3 py-2 bg-emerald-600 text-white rounded-lg text-xs font-medium ${
+                                            hasDeleteRequest
+                                              ? "opacity-50 pointer-events-none"
+                                              : "hover:bg-emerald-700 transition-colors duration-200"
+                                          }`}
+                                          onClick={(e) => hasDeleteRequest && e.preventDefault()}
                                         >
-                                          Mark as Deleted
-                                        </button>
+                                          <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-1.5" />
+                                          Download Report
+                                        </Link>
                                       )}
                                     </>
                                   ) : (
                                     <>
-                                      {!deleteRequestPatients[p.id] && !deletedPatients.includes(p.id) && (
+                                      {/* Original buttons for other roles */}
+                                      {!sampleCollected && (
                                         <button
-                                          onClick={() => handleDeleteRequest(p)}
-                                          className="px-3 py-1 bg-yellow-600 text-white rounded-md text-xs hover:bg-yellow-700"
+                                          onClick={() => {
+                                            setSampleModalPatient(p)
+                                            setSampleDateTime(formatLocalDateTime()) // Set current local time
+                                          }}
+                                          className="inline-flex items-center px-3 py-2 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors duration-200 shadow-sm"
+                                          disabled={!!hasDeleteRequest}
                                         >
-                                          Request Delete
+                                          <DocumentTextIcon className="h-3.5 w-3.5 mr-1.5" />
+                                          Collect Sample
                                         </button>
+                                      )}
+
+                                      {sampleCollected && (
+                                        <Link
+                                          href={`/download-report?patientId=${p.id}`}
+                                          className={`inline-flex items-center px-3 py-2 bg-emerald-600 text-white rounded-lg text-xs font-medium ${
+                                            hasDeleteRequest
+                                              ? "opacity-50 pointer-events-none"
+                                              : "hover:bg-emerald-700 transition-colors duration-200 shadow-sm"
+                                          }`}
+                                          onClick={(e) => hasDeleteRequest && e.preventDefault()}
+                                        >
+                                          <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-1.5" />
+                                          Download Report
+                                        </Link>
+                                      )}
+
+                                      {sampleCollected && !complete && (
+                                        <Link
+                                          href={`/blood-values/new?patientId=${p.id}`}
+                                          className={`inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium ${
+                                            hasDeleteRequest
+                                              ? "opacity-50 pointer-events-none"
+                                              : "hover:bg-blue-700 transition-colors duration-200 shadow-sm"
+                                          }`}
+                                          onClick={(e) => hasDeleteRequest && e.preventDefault()}
+                                        >
+                                          <DocumentPlusIcon className="h-3.5 w-3.5 mr-1.5" />
+                                          Add/Edit Values
+                                        </Link>
+                                      )}
+
+                                      {sampleCollected && complete && (
+                                        <Link
+                                          href={`/blood-values/new?patientId=${p.id}`}
+                                          className={`inline-flex items-center px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-medium ${
+                                            hasDeleteRequest
+                                              ? "opacity-50 pointer-events-none"
+                                              : "hover:bg-blue-600 transition-colors duration-200 shadow-sm"
+                                          }`}
+                                          onClick={(e) => hasDeleteRequest && e.preventDefault()}
+                                        >
+                                          <PencilIcon className="h-3.5 w-3.5 mr-1.5" />
+                                          Edit Test
+                                        </Link>
+                                      )}
+
+                                      <button
+                                        onClick={() => {
+                                          setSelectedPatient(p)
+                                          setNewAmountPaid("")
+                                        }}
+                                        className="inline-flex items-center px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 transition-colors duration-200 shadow-sm"
+                                        disabled={!!hasDeleteRequest}
+                                      >
+                                        <BanknotesIcon className="h-3.5 w-3.5 mr-1.5" />
+                                        Update Payment
+                                      </button>
+
+                                      {selectedPatient?.id === p.id && (
+                                        <button
+                                          onClick={handleDownloadBill}
+                                          className="inline-flex items-center px-3 py-2 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm"
+                                          disabled={!!hasDeleteRequest}
+                                        >
+                                          <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-1.5" />
+                                          Download Bill
+                                        </button>
+                                      )}
+
+                                      <button
+                                        onClick={() => setFakeBillPatient(p)}
+                                        className="inline-flex items-center px-3 py-2 bg-purple-600 text-white rounded-lg text-xs font-medium hover:bg-purple-700 transition-colors duration-200 shadow-sm"
+                                        disabled={!!hasDeleteRequest}
+                                      >
+                                        <DocumentTextIcon className="h-3.5 w-3.5 mr-1.5" />
+                                        Generate Bill
+                                      </button>
+
+                                      <Link
+                                        href={`/patient-detail?patientId=${p.id}`}
+                                        className={`inline-flex items-center px-3 py-2 bg-amber-600 text-white rounded-lg text-xs font-medium ${
+                                          hasDeleteRequest
+                                            ? "opacity-50 pointer-events-none"
+                                            : "hover:bg-amber-700 transition-colors duration-200 shadow-sm"
+                                        }`}
+                                        onClick={(e) => hasDeleteRequest && e.preventDefault()}
+                                      >
+                                        <PencilIcon className="h-3.5 w-3.5 mr-1.5" />
+                                        Edit Details
+                                      </Link>
+
+                                      {role === "admin" ? (
+                                        <>
+                                          {hasDeleteRequest ? (
+                                            <>
+                                              <button
+                                                onClick={() => handleApproveDelete(p)}
+                                                className="inline-flex items-center px-3 py-2 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors duration-200 shadow-sm"
+                                              >
+                                                <TrashIcon className="h-3.5 w-3.5 mr-1.5" />
+                                                Approve Delete
+                                              </button>
+                                              <button
+                                                onClick={() => handleUndoDeleteRequest(p)}
+                                                className="inline-flex items-center px-3 py-2 bg-gray-600 text-white rounded-lg text-xs font-medium hover:bg-gray-700 transition-colors duration-200 shadow-sm"
+                                              >
+                                                <ArrowPathIcon className="h-3.5 w-3.5 mr-1.5" />
+                                                Undo Request
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <button
+                                              onClick={() => handleDeletePatient(p)}
+                                              className="inline-flex items-center px-3 py-2 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors duration-200 shadow-sm"
+                                            >
+                                              <TrashIcon className="h-3.5 w-3.5 mr-1.5" />
+                                              Mark as Deleted
+                                            </button>
+                                          )}
+                                        </>
+                                      ) : (
+                                        <>
+                                          {!hasDeleteRequest && !isDeleted && (
+                                            <button
+                                              onClick={() => handleDeleteRequest(p)}
+                                              className="inline-flex items-center px-3 py-2 bg-yellow-600 text-white rounded-lg text-xs font-medium hover:bg-yellow-700 transition-colors duration-200 shadow-sm"
+                                            >
+                                              <ExclamationCircleIcon className="h-3.5 w-3.5 mr-1.5" />
+                                              Request Delete
+                                            </button>
+                                          )}
+                                        </>
                                       )}
                                     </>
                                   )}
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
-            {filteredPatients.length === 0 && (
-              <div className="p-6 text-center text-gray-500">No recent patients found</div>
-            )}
-          </div>
-        </div>
+                                </div>
+                              </td>
+                            </motion.tr>
+                          )}
+                        </AnimatePresence>
+                      </React.Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {filteredPatients.length === 0 && (
+                <div className="p-8 text-center">
+                  <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-100 mb-4">
+                    <UserIcon className="h-8 w-8 text-gray-400" />
+                  </div>
+                  <p className="text-gray-500 font-medium">No patients found</p>
+                  <p className="text-gray-400 text-sm mt-1">Try adjusting your search or filters</p>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </motion.div>
       </main>
 
       {/* Payment modal */}
-      {selectedPatient && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
-            <button
-              onClick={() => setSelectedPatient(null)}
-              className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+      <AnimatePresence>
+        {selectedPatient && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 relative"
             >
-              ✕
-            </button>
-            <h3 className="text-xl font-semibold mb-4">Update Payment for {selectedPatient.name}</h3>
+              <button
+                onClick={() => setSelectedPatient(null)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <XCircleIcon className="h-6 w-6" />
+              </button>
 
-            {(() => {
-              const { testTotal, remaining } = calculateAmounts(selectedPatient)
-              return (
-                <div className="mb-4 space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span>Test Total:</span>
-                    <span>₹{testTotal.toFixed(2)}</span>
+              <div className="mb-6">
+                <h3 className="text-xl font-bold text-gray-800 mb-1">Update Payment</h3>
+                <p className="text-gray-500 text-sm">{selectedPatient.name}</p>
+              </div>
+
+              {(() => {
+                const { testTotal, remaining } = calculateAmounts(selectedPatient)
+                return (
+                  <div className="mb-6 bg-gray-50 rounded-xl p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-600">Test Total:</span>
+                      <span className="font-medium">{formatCurrency(testTotal)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-600">Discount:</span>
+                      <span className="font-medium text-amber-600">
+                        {formatCurrency(selectedPatient.discountAmount)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-600">Current Paid:</span>
+                      <span className="font-medium text-teal-600">{formatCurrency(selectedPatient.amountPaid)}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                      <span className="text-sm font-medium text-gray-800">Remaining:</span>
+                      <span className="font-bold text-red-600">{formatCurrency(remaining)}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Discount:</span>
-                    <span>₹{selectedPatient.discountAmount.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Current Paid:</span>
-                    <span>₹{selectedPatient.amountPaid.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Remaining:</span>
-                    <span>₹{remaining.toFixed(2)}</span>
+                )
+              })()}
+
+              <div className="mb-6">
+                <button
+                  onClick={handleDownloadBill}
+                  className="w-full bg-teal-600 text-white py-3 rounded-xl font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm flex items-center justify-center"
+                >
+                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                  Download Bill
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateAmount} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Additional Payment (₹)</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <BanknotesIcon className="h-4 w-4 text-gray-400" />
+                    </div>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={newAmountPaid}
+                      onChange={(e) => setNewAmountPaid(e.target.value)}
+                      className="pl-10 w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                      placeholder="Enter amount"
+                      required
+                    />
                   </div>
                 </div>
-              )
-            })()}
-
-            <div className="mb-4">
-              <button
-                onClick={handleDownloadBill}
-                className="w-full bg-teal-600 text-white py-3 rounded-lg font-medium hover:bg-teal-700"
-              >
-                Download Bill
-              </button>
-            </div>
-
-            <form onSubmit={handleUpdateAmount}>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700">Additional Payment (Rs)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={newAmountPaid}
-                  onChange={(e) => setNewAmountPaid(e.target.value)}
-                  className="mt-1 w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  placeholder="Enter amount"
-                  required
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700">Payment Mode</label>
-                <select
-                  value={paymentMode}
-                  onChange={(e) => setPaymentMode(e.target.value)}
-                  className="mt-1 w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Payment Mode</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <CreditCardIcon className="h-4 w-4 text-gray-400" />
+                    </div>
+                    <select
+                      value={paymentMode}
+                      onChange={(e) => setPaymentMode(e.target.value)}
+                      className="pl-10 w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="online">Online</option>
+                    </select>
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  className="w-full bg-violet-600 text-white py-3 rounded-xl font-medium hover:bg-violet-700 transition-colors duration-200 shadow-sm flex items-center justify-center"
                 >
-                  <option value="cash">Cash</option>
-                  <option value="online">Online</option>
-                </select>
-              </div>
+                  <BanknotesIcon className="h-4 w-4 mr-2" />
+                  Update Payment
+                </button>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Sample Collection Modal */}
+      <AnimatePresence>
+        {sampleModalPatient && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 relative"
+            >
               <button
-                type="submit"
-                className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700"
+                onClick={() => setSampleModalPatient(null)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
               >
-                Update Payment
+                <XCircleIcon className="h-6 w-6" />
               </button>
-            </form>
-          </div>
-        </div>
-      )}
+
+              <div className="mb-6">
+                <h3 className="text-xl font-bold text-gray-800 mb-1">Set Sample Collection Time</h3>
+                <p className="text-gray-500 text-sm">{sampleModalPatient.name}</p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Date & Time</label>
+                  <input
+                    type="datetime-local"
+                    value={sampleDateTime}
+                    onChange={(e) => setSampleDateTime(e.target.value)}
+                    max={formatLocalDateTime()}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                  />
+                </div>
+                <p className="text-sm text-gray-600">Selected: {format12Hour(sampleDateTime)}</p>
+
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    onClick={() => setSampleModalPatient(null)}
+                    className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors duration-200 text-gray-800 font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveSampleDate}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors duration-200 font-medium"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Delete Request Modal */}
-      {deleteRequestModalPatient && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
-            <button
-              onClick={() => setDeleteRequestModalPatient(null)}
-              className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+      <AnimatePresence>
+        {deleteRequestModalPatient && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 relative"
             >
-              ✕
-            </button>
-            <h3 className="text-xl font-semibold mb-4">Request Deletion for {deleteRequestModalPatient.name}</h3>
-
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Reason for Deletion (Required)</label>
-              <textarea
-                value={deleteReason}
-                onChange={(e) => setDeleteReason(e.target.value)}
-                className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
-                rows={4}
-                placeholder="Please provide a detailed reason for this deletion request"
-                required
-              />
-            </div>
-
-            <div className="flex justify-end space-x-2">
               <button
                 onClick={() => setDeleteRequestModalPatient(null)}
-                className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
               >
-                Cancel
+                <XCircleIcon className="h-6 w-6" />
               </button>
-              <button
-                onClick={submitDeleteRequest}
-                disabled={!deleteReason.trim()}
-                className={`px-4 py-2 rounded-md text-white ${
-                  deleteReason.trim() ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"
-                }`}
-              >
-                Submit Request
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
+              <div className="mb-6">
+                <h3 className="text-xl font-bold text-gray-800 mb-1">Request Deletion</h3>
+                <p className="text-gray-500 text-sm">{deleteRequestModalPatient.name}</p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Deletion (Required)</label>
+                  <textarea
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                    rows={4}
+                    placeholder="Please provide a detailed reason for this deletion request"
+                    required
+                  />
+                </div>
+
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    onClick={() => setDeleteRequestModalPatient(null)}
+                    className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors duration-200 text-gray-800 font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={submitDeleteRequest}
+                    disabled={!deleteReason.trim()}
+                    className={`px-4 py-2 rounded-lg text-white font-medium ${
+                      deleteReason.trim()
+                        ? "bg-red-600 hover:bg-red-700 transition-colors duration-200"
+                        : "bg-red-300 cursor-not-allowed"
+                    }`}
+                  >
+                    Submit Request
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Fake Bill modal */}
       {fakeBillPatient && <FakeBill patient={fakeBillPatient} onClose={() => setFakeBillPatient(null)} />}
