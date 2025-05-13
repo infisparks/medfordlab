@@ -206,6 +206,7 @@ useEffect(() => {
   // Add a new state variable for the search text
   const [searchText, setSearchText] = useState("")
 
+
   /* 5) Fetch doctors */
   useEffect(() => {
     ;(async () => {

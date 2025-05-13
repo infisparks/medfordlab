@@ -71,6 +71,10 @@ const PatientEditForm: React.FC = () => {
   const searchParams = useSearchParams()
   const patientIdQuery = searchParams.get("patientId") ?? ""
 
+  // 🔍 search box states
+const [searchText, setSearchText] = useState("");
+const [showTestSuggestions, setShowTestSuggestions] = useState(false);
+
   /* 1) Form */
   const {
     register,
@@ -241,21 +245,22 @@ reset(data)
 
   /* 11) Add selected test */
   const handleAddTest = () => {
-    if (!selectedTest) return
-
-    const test = unselectedBloodTests.find((t) => t.id === selectedTest)
-
+    if (!selectedTest) return;
+  
+    const test = unselectedBloodTests.find((t) => t.id === selectedTest);
     if (test) {
       append({
-        testId: test.id,
+        testId:   test.id,
         testName: test.testName,
-        price: test.price,
+        price:    test.price,
         testType: test.type,
-      })
-      setSelectedTest("")
+      });
+      setSelectedTest("");
+      setSearchText("");          // 🆕 clear input
+      setShowTestSuggestions(false);
     }
-  }
-
+  };
+  
   /* 12) Add/Remove all tests */
   const handleAddAllTests = () => {
     unselectedBloodTests.forEach((t) =>
@@ -639,23 +644,61 @@ await update(ref(database, `patients/${patientIdQuery}`), {
                       Remove All
                     </Button>
 
-                    <Select value={selectedTest} onValueChange={setSelectedTest}>
-                      <SelectTrigger className="h-7 text-xs w-40">
-                        <SelectValue placeholder="Select a test" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {unselectedBloodTests.map((t) => (
-                          <SelectItem key={t.id} value={t.id}>
-                            {t.testName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {/* 🔍 Search & add test */}
+<div className="relative">
+  <Input
+    type="text"
+    placeholder="Search tests..."
+    className="h-7 text-xs"
+    value={searchText}
+    onChange={(e) => {
+      const v = e.target.value;
+      setSearchText(v);
+      setSelectedTest("");             // clear previous selection
+      setShowTestSuggestions(v.trim().length > 0);
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleAddTest();
+      }
+    }}
+  />
 
-                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={handleAddTest}>
-                      <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
-                      Add
-                    </Button>
+  {showTestSuggestions && (
+    <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-0.5 rounded-md max-h-32 overflow-y-auto text-xs">
+      {unselectedBloodTests
+        .filter((t) =>
+          t.testName.toLowerCase().includes(searchText.toLowerCase())
+        )
+        .map((t) => (
+          <li
+            key={t.id}
+            className="px-2 py-1 hover:bg-gray-100 cursor-pointer"
+            onClick={() => {
+              setSelectedTest(t.id);
+              setSearchText(t.testName);
+              setShowTestSuggestions(false);
+            }}
+          >
+            {t.testName}
+          </li>
+        ))}
+    </ul>
+  )}
+</div>
+
+<Button
+  type="button"
+  variant="outline"
+  size="sm"
+  className="h-7 text-xs"
+  onClick={handleAddTest}
+>
+  <PlusCircleIcon className="h-3.5 w-3.5 mr-1" />
+  Add
+</Button>
+
                   </div>
                 </div>
 
