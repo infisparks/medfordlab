@@ -226,7 +226,11 @@ const BloodValuesForm: React.FC = () => {
               return {
                 name: p.name,
                 unit: p.unit,
-                value: saved ? saved.value : "",
+                value: saved
+     ? saved.value
+     : (p.defaultValue !== undefined
+         ? p.defaultValue
+                  : ""),
                 range: normal,
                 formula: p.formula || "",
                 valueType: p.valueType || "number",
@@ -448,6 +452,7 @@ const BloodValuesForm: React.FC = () => {
 
         await set(testRef, {
           parameters: params,
+          testId: t.testId,
           subheadings: t.subheadings || [],
           createdAt,
           reportedOn,

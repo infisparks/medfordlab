@@ -10,7 +10,7 @@ import { generateGraphPDF, generateAndSendGraphReport } from "./graphrerport"
 import letterhead from "../../../public/letterhead.png"
 import firstpage from "../../../public/first.png"
 import stamp from "../../../public/stamp.png"
-
+import stamp2 from "../../../public/stamp2.png"
 // -----------------------------
 // Type Definitions
 // -----------------------------
@@ -28,11 +28,13 @@ export interface Parameter {
   formula?: string
 }
 export interface BloodTestData {
+  testId: string
   parameters: Parameter[]
   subheadings?: { title: string; parameterNames: string[] }[]
   type?: string
   reportedOn?: string
   enteredBy?: string
+  descriptions?: { heading: string; content: string }[]
 }
 export interface PatientData {
   name: string
@@ -187,10 +189,34 @@ function DownloadReport() {
         const snap = await get(dbRef(database, `patients/${patientId}`))
         if (!snap.exists()) return alert("Patient not found")
 
-        const data = snap.val() as PatientData
-        if (!data.bloodtest) return alert("No report found.")
-        data.bloodtest = hideInvisible(data)
-        setPatientData(data)
+          const data = snap.val() as PatientData
+          if (!data.bloodtest) return alert("No report found.")
+          
+          // 1) fetch the shared descriptions for each test from /bloodTests/<testKey>/descriptions
+        // inside your useEffect, after you pull down `data`:
+        await Promise.all(
+               Object.keys(data.bloodtest).map(async (testKey) => {
+                 // read descriptions from /bloodTests/{testKey}/descriptions
+                 const rec = data.bloodtest![testKey]
+                
+                 const defSnap = await get(
+                  dbRef(database, `bloodTests/${rec.testId}/descriptions`)
+                )
+                if (defSnap.exists()) {
+                  const raw = defSnap.val()
+                  const arr = Array.isArray(raw) ? raw : Object.values(raw)
+                  rec.descriptions = arr as { heading: string; content: string }[]
+                }
+              })
+            )
+
+          
+          // 2) then filter out hidden parameters as before
+          data.bloodtest = hideInvisible(data)
+          
+          // 3) finally set into state
+          setPatientData(data)
+          
       } catch (e) {
         console.error(e)
         alert("Error fetching patient.")
@@ -206,34 +232,39 @@ function DownloadReport() {
   }, [patientData])
 
   // Hide invisible parameters
-  const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
-    const out: Record<string, BloodTestData> = {}
-    if (!d.bloodtest) return out
+ // Hide invisible parameters but preserve descriptions
+const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
+  const out: Record<string, BloodTestData> = {}
+  if (!d.bloodtest) return out
 
-    for (const k in d.bloodtest) {
-      const t = d.bloodtest[k]
-      if (t.type === "outsource") continue
+  for (const k in d.bloodtest) {
+    const t = d.bloodtest[k]
+    if (t.type === "outsource") continue
 
-      const keptParams = Array.isArray(t.parameters)
-        ? t.parameters
-            .filter((p) => p.visibility !== "hidden")
-            .map((p) => ({
-              ...p,
-              subparameters: Array.isArray(p.subparameters)
-                ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
-                : [],
-            }))
-        : []
+    const keptParams = Array.isArray(t.parameters)
+      ? t.parameters
+          .filter((p) => p.visibility !== "hidden")
+          .map((p) => ({
+            ...p,
+            subparameters: Array.isArray(p.subparameters)
+              ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
+              : [],
+          }))
+      : []
 
-      out[k] = {
-        ...t,
-        parameters: keptParams,
-        subheadings: t.subheadings,
-        reportedOn: t.reportedOn,
-      }
+    out[k] = {
+      ...t,
+      parameters: keptParams,
+      subheadings: t.subheadings,
+      reportedOn: t.reportedOn,
+      // 👇 make sure to carry your fetched descriptions through
+      descriptions: t.descriptions,
     }
-    return out
   }
+
+  return out
+}
+
 
   // Update reportedOn time for a test
   const updateReportedOnTime = (testKey: string) => {
@@ -355,18 +386,26 @@ function DownloadReport() {
     }
 
     const addStamp = async () => {
-      const sw = 40,
-        sh = 30,
-        sx = w - left - sw,
-        sy = h - sh - 23
+      const sw = 40, sh = 30
+      const sx = w - left - sw        // right-aligned
+      const cx = (w - sw) / 2        // centered
+      const sy = h - sh - 23
+    
       try {
-        const img = await loadImageAsCompressedJPEG(stamp.src, 0.5)
-        doc.addImage(img, "JPEG", sx, sy, sw, sh)
+        // load both as compressed JPEG
+        const img1 = await loadImageAsCompressedJPEG(stamp.src, 0.5)
+        const img2 = await loadImageAsCompressedJPEG(stamp2.src, 0.5)
+    
+        // bottom-right stamp
+        doc.addImage(img1, "JPEG", sx, sy, sw, sh)
+        // centered stamp
+        doc.addImage(img2, "JPEG", cx, sy, sw, sh)
       } catch (e) {
-        console.error(e)
+        console.error("Stamp load error:", e)
       }
+    
       doc.setFont("helvetica", "normal").setFontSize(10)
-      doc.text(`Printed by ${printedBy}`, left, sy + sh - 0)
+      doc.text(`Printed by ${printedBy}`, left, sy + sh)
     }
 
     const headerY = (reportedOnRaw?: string) => {
@@ -564,6 +603,31 @@ function DownloadReport() {
         rows.forEach((r) => printRow(r))
       })
       yPos += 3
+      if (Array.isArray(tData.descriptions) && tData.descriptions.length) {
+        // small gap before descriptions
+        yPos += 4
+      
+        tData.descriptions.forEach(({ heading, content }) => {
+          // 1) Print bold heading + colon
+          const label = heading + ""
+          doc.setFont("helvetica", "bold").setFontSize(10)
+          doc.text(label, x1, yPos + lineH)
+      
+          // 2) Print content in normal font, wrapping to remaining width
+          doc.setFont("helvetica", "normal").setFontSize(9)
+          // compute available width after label
+          const labelWidth = doc.getTextWidth(label + " ")
+          const contentWidth = totalW - labelWidth
+          const contentLines = doc.splitTextToSize(content, contentWidth)
+          // indent content so it starts just after the label
+          doc.text(contentLines, x1 + labelWidth + 2, yPos + lineH)
+      
+          // advance yPos by the taller of label‐line or content lines
+          const linesPrinted = Math.max(1, contentLines.length)
+          yPos += linesPrinted * lineH + 2
+        })
+      }
+      
       doc.setFont("helvetica", "italic").setFontSize(7).setTextColor(0)
       doc.text("--------------------- END OF REPORT ---------------------", w / 2, yPos + 4, { align: "center" })
       yPos += 10

@@ -150,23 +150,23 @@ const PatientEntryForm: React.FC = () => {
     },
   })
   const title = watch("title")
-const gender = watch("gender")
+  const gender = watch("gender")
 
-// auto‐select gender when title changes
-useEffect(() => {
-  const maleTitles   = new Set(["MR", "MAST", "BABA"])
-  const femaleTitles = new Set(["MS", "MISS", "MRS", "BABY", "SMT"])
-  // leave blank for these
-  const noGender     = new Set(["BABY OF", "DR", "", "."])
+  // auto‐select gender when title changes
+  useEffect(() => {
+    const maleTitles = new Set(["MR", "MAST", "BABA"])
+    const femaleTitles = new Set(["MS", "MISS", "MRS", "BABY", "SMT"])
+    // leave blank for these
+    const noGender = new Set(["BABY OF", "DR", "", "."])
 
-  if (maleTitles.has(title)) {
-    setValue("gender", "Male")
-  } else if (femaleTitles.has(title)) {
-    setValue("gender", "Female")
-  } else if (noGender.has(title)) {
-    setValue("gender", "")
-  }
-}, [title, setValue])
+    if (maleTitles.has(title)) {
+      setValue("gender", "Male")
+    } else if (femaleTitles.has(title)) {
+      setValue("gender", "Female")
+    } else if (noGender.has(title)) {
+      setValue("gender", "")
+    }
+  }, [title, setValue])
   /* Fetch current time from online source */
   // Initialize registrationDate / registrationTime from the PC’s local clock
   useEffect(() => {
@@ -205,7 +205,6 @@ useEffect(() => {
   const [showTestSuggestions, setShowTestSuggestions] = useState(false)
   // Add a new state variable for the search text
   const [searchText, setSearchText] = useState("")
-
 
   /* 5) Fetch doctors */
   useEffect(() => {
@@ -375,104 +374,117 @@ useEffect(() => {
   }
 
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
+    // Ensure numeric fields are numbers
     data.discountAmount = isNaN(data.discountAmount) ? 0 : data.discountAmount
     data.amountPaid = isNaN(data.amountPaid) ? 0 : data.amountPaid
 
+    // Must have at least one blood test
     if (!data.bloodTests || data.bloodTests.length === 0) {
       alert("Please add at least one blood test before submitting.")
       return
     }
+
     try {
-      /* 1) No duplicate tests */
+      // 1) Prevent duplicate tests
       const testIds = data.bloodTests.map((t) => t.testId)
       if (new Set(testIds).size !== testIds.length) {
         alert("Please remove duplicate tests before submitting.")
         return
       }
 
-      /* 2) Always generate a new patient ID */
+      // 2) Generate unique patient ID
       data.patientId = await generatePatientId()
 
-      /* 3) Total days for age */
+      // 3) Compute total days for age
       const mult = data.dayType === "year" ? 360 : data.dayType === "month" ? 30 : 1
       const total_day = data.age * mult
 
-      /* 4) Store in Firebase */
-      const userEmail = currentUser?.email || "Unknown User"
-
-      // 4.a) Parse registrationTime ("hh:mm AM/PM")
+      // 4) Prepare to parse registration date & time
       const [timePart, ampm] = data.registrationTime.split(" ")
       const [hoursStr, minutesStr] = timePart.split(":")
       let hours = Number(hoursStr)
       const minutes = Number(minutesStr)
-
       if (ampm === "PM" && hours < 12) hours += 12
       if (ampm === "AM" && hours === 12) hours = 0
 
-      // 4.b) Parse registrationDate ("YYYY-MM-DD")
       const [year, month, day] = data.registrationDate.split("-").map((v) => Number(v))
 
-      let createdAtDate
+      // ─── REPLACED: Use PC's local time ─────────────────────────────
+      const createdAtDate = new Date(year, month - 1, day, hours, minutes)
 
-      // Try to get the current time from WorldTimeAPI again to ensure accuracy
-      try {
-        const response = await fetch("https://worldtimeapi.org/api/timezone/Asia/Kolkata")
-        const timeData = await response.json()
-        createdAtDate = new Date(timeData.datetime)
-      } catch (error) {
-        console.error("Error fetching time for submission:", error)
-        // Fallback to parsed form values if API fails
-        createdAtDate = new Date(year, month - 1, day, hours, minutes)
-      }
-
-      /* Create payment history entry for the initial payment */
-      const paymentHistory = []
+      // 5) Build initial payment history
+      const paymentHistory: { amount: number; paymentMode: string; time: string }[] = []
       if (Number(data.amountPaid) > 0) {
         paymentHistory.push({
-          amount: Number(data.amountPaid),
+          amount: data.amountPaid,
           paymentMode: data.paymentMode,
           time: createdAtDate.toISOString(),
         })
       }
 
+      // 6) Save to Firebase
+      const userEmail = auth.currentUser?.email || "Unknown User"
       await set(push(ref(database, "patients")), {
         ...data,
         total_day,
         enteredBy: userEmail,
         createdAt: createdAtDate.toISOString(),
-        paymentHistory: paymentHistory,
+        paymentHistory,
       })
 
-      /* 5) Send WhatsApp confirmation */
+      // 7) Send WhatsApp confirmation
       const totalAmount = data.bloodTests.reduce((s, t) => s + t.price, 0)
-      const remainingAmount = totalAmount - Number(data.discountAmount || 0) - Number(data.amountPaid || 0)
-
+      const remainingAmount = totalAmount - data.discountAmount - data.amountPaid
       const testNames = data.bloodTests.map((t) => t.testName).join(", ")
       const msg =
         `Dear ${data.name},\n\n` +
         `We have received your request for: ${testNames}.\n\n` +
         `Total   : Rs. ${totalAmount.toFixed(2)}\n` +
-        (Number(data.discountAmount) > 0 ? `Discount: Rs. ${Number(data.discountAmount).toFixed(2)}\n` : "") +
-        `Paid    : Rs. ${Number(data.amountPaid).toFixed(2)}\n` +
+        (data.discountAmount > 0 ? `Discount: Rs. ${data.discountAmount.toFixed(2)}\n` : "") +
+        `Paid    : Rs. ${data.amountPaid.toFixed(2)}\n` +
         `Balance : Rs. ${remainingAmount.toFixed(2)}\n\n` +
         `Your Lab Id: ${data.patientId}\n\n` +
         `Thank you for choosing us.\nRegards,\nMedBliss`
 
-      const r = await fetch("https://wa.medblisss.com/send-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token: "99583991573",
-          number: `91${data.contact}`,
-          message: msg,
-        }),
-      })
-      if (!r.ok) throw new Error("WhatsApp send failed")
+      try {
+        const r = await fetch("https://wa.medblisss.com/send-text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: "99583991573",
+            number: `91${data.contact}`,
+            message: msg,
+          }),
+        })
+        if (!r.ok) console.error("WhatsApp send failed")
+      } catch (whatsappError) {
+        console.error("WhatsApp error:", whatsappError)
+        // Continue with form submission even if WhatsApp fails
+      }
 
-      alert("Patient saved & WhatsApp sent!")
-      reset()
+      alert("Patient saved successfully!")
+
+      // Reset form and state properly
+      reset({
+        hospitalName: "MEDFORD HOSPITAL",
+        visitType: "opd",
+        title: "",
+        name: "",
+        contact: "",
+        dayType: "year",
+        gender: "",
+        address: "",
+        email: "",
+        doctorName: "",
+        doctorId: "",
+        bloodTests: [],
+        paymentMode: "online",
+        patientId: "",
+        registrationDate: currentDate,
+        registrationTime: currentTime,
+      })
     } catch (e) {
-      console.error(e)
+      console.error("Form submission error:", e)
       alert("Something went wrong. Please try again.")
     }
   }
@@ -525,18 +537,15 @@ useEffect(() => {
 
                 {/* Name and Contact in flex */}
                 <div className="flex gap-2 mb-2">
-                <div className="w-1/4">
-  <Label className="text-xs">Title</Label>
-  <Select
-    value={title}
-    onValueChange={(v) => setValue("title", v)}
-  >
-    <SelectTrigger className="h-8 text-xs">
-      <SelectValue placeholder="Select" />
-    </SelectTrigger>
-    <SelectContent>
-      <SelectItem value=".">NoTitle</SelectItem>
-      <SelectItem value="MR">MR</SelectItem>
+                  <div className="w-1/4">
+                    <Label className="text-xs">Title</Label>
+                    <Select value={title} onValueChange={(v) => setValue("title", v)}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value=".">NoTitle</SelectItem>
+                        <SelectItem value="MR">MR</SelectItem>
                         <SelectItem value="MRS">MRS</SelectItem>
                         <SelectItem value="MAST">MAST</SelectItem>
                         <SelectItem value="BABA">BABA</SelectItem>
@@ -648,22 +657,19 @@ useEffect(() => {
                   </div>
 
                   <div className="w-1/2">
-  <Label className="text-xs">Gender</Label>
-  <Select
-    value={gender}
-    onValueChange={(v) => setValue("gender", v)}
-  >
-    <SelectTrigger className="h-8 text-xs">
-      <SelectValue placeholder="Select gender" />
-    </SelectTrigger>
-    <SelectContent>
-      <SelectItem value="Male">Male</SelectItem>
-      <SelectItem value="Female">Female</SelectItem>
-      <SelectItem value="Other">Other</SelectItem>
-    </SelectContent>
-  </Select>
-  {errors.gender && <p className="text-red-500 text-[10px] mt-0.5">{errors.gender.message}</p>}
-</div>
+                    <Label className="text-xs">Gender</Label>
+                    <Select value={gender} onValueChange={(v) => setValue("gender", v)}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select gender" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Male">Male</SelectItem>
+                        <SelectItem value="Female">Female</SelectItem>
+                        <SelectItem value="Other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {errors.gender && <p className="text-red-500 text-[10px] mt-0.5">{errors.gender.message}</p>}
+                  </div>
                 </div>
               </div>
 

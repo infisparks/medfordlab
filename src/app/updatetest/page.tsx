@@ -37,6 +37,7 @@ export interface Parameter {
   name: string;
   unit: string;
   valueType: "text" | "number";      // accepted value type
+  defaultValue?: string | number 
   formula?: string;  
                   // <‑‑ NEW
   iscomment?: boolean;               // <‑‑ NEW  (true if this row is just a comment)
@@ -49,6 +50,10 @@ export interface Parameter {
     shortName: string;
   }[];
 }
+export interface Description {
+  heading: string
+  content: string
+}
 
 export interface Subheading {
   title: string;
@@ -59,6 +64,7 @@ export interface Subheading {
 export interface BloodTestFormInputs {
   testName: string;
   price: number;
+  descriptions?: Description[]
   parameters: Parameter[];
   subheadings: Subheading[];
   isOutsource?: boolean;
@@ -188,6 +194,23 @@ const ParameterEditor: React.FC<ParameterEditorProps> = ({
           className="w-full border rounded px-2 py-1"
         />
       </div>
+
+      {/* Default Value (optional) */}
+<div className="mt-2">
+  <label className="block text-xs">Default Value</label>
+  <input
+    type={
+      /* if you want dynamic type: */
+      // useWatch({ control, name: `parameters.${index}.valueType` }) === "number"
+      //   ? "number"
+      //   : "text"
+      "text"
+    }
+    {...register(`parameters.${index}.defaultValue`)}
+    className="w-full border rounded px-2 py-1"
+    placeholder="e.g. 0 or N/A"
+/>
+</div>
 
       {/* Comment checkbox */}
       <div className="mt-2 flex items-center space-x-2">
@@ -518,6 +541,7 @@ const TestModal: React.FC<TestModalProps> = ({
         ? {
             testName: testData.testName,
             price: testData.price,
+            descriptions: testData.descriptions || [], 
             parameters: testData.parameters,
             subheadings: testData.subheadings,
             isOutsource: testData.isOutsource || false,
@@ -525,11 +549,13 @@ const TestModal: React.FC<TestModalProps> = ({
         : {
             testName: "",
             price: 0,
+            descriptions: [],
             parameters: [
               {
                 name: "",
                 unit: "",
                 valueType: "text",
+                
                 formula: "",
                 iscomment: false,
                 suggestions: [], 
@@ -564,6 +590,8 @@ const TestModal: React.FC<TestModalProps> = ({
     }, [paramFields.fields.length, setValue]);
   
   const subheadingFields = useFieldArray({ control, name: "subheadings" });
+  const descFields = useFieldArray({ control, name: "descriptions" });
+
 
   const testNameErr = getFieldErrorMessage(errors, ["testName"]);
   const testPriceErr = getFieldErrorMessage(errors, ["price"]);
@@ -817,6 +845,38 @@ const TestModal: React.FC<TestModalProps> = ({
               </button>
             </div>
 
+            <div>
+  <label className="block text-sm font-medium">Test Descriptions</label>
+  {descFields.fields.map((field, dIdx) => (
+    <div key={field.id} className="flex space-x-2 mt-2">
+      <input
+        {...register(`descriptions.${dIdx}.heading`, { required: "Required" })}
+        placeholder="Heading"
+        className="w-1/3 border rounded px-2 py-1"
+      />
+      <textarea
+        {...register(`descriptions.${dIdx}.content`, { required: "Required" })}
+        placeholder="Content"
+        className="w-2/3 border rounded px-2 py-1"
+      />
+      <button
+        type="button"
+        onClick={() => descFields.remove(dIdx)}
+        className="text-red-500 hover:text-red-700"
+      >
+        <FaTrash />
+      </button>
+    </div>
+  ))}
+  <button
+    type="button"
+    onClick={() => descFields.append({ heading: "", content: "" })}
+    className="mt-2 inline-flex items-center px-3 py-1 border border-green-600 text-green-600 rounded hover:bg-green-50"
+  >
+    <FaPlusCircle className="mr-1" /> Add Description
+  </button>
+</div>
+
             {/* Save / delete */}
             <div className="flex justify-between items-center mt-4">
               {testData && (
@@ -910,6 +970,7 @@ const ManageBloodTests: React.FC = () => {
             <tr className="bg-blue-100">
               <th className="border px-4 py-2">Test Name</th>
               <th className="border px-4 py-2">Price (Rs.)</th>
+              
               <th className="border px-4 py-2">Parameters</th>
               <th className="border px-4 py-2">Subheadings</th>
               <th className="border px-4 py-2">Created At</th>
