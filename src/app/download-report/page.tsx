@@ -393,8 +393,8 @@ const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
     
       try {
         // load both as compressed JPEG
-        const img1 = await loadImageAsCompressedJPEG(stamp.src, 0.5)
-        const img2 = await loadImageAsCompressedJPEG(stamp2.src, 0.5)
+        const img1 = await loadImageAsCompressedJPEG(stamp2.src, 0.5)
+        const img2 = await loadImageAsCompressedJPEG(stamp.src, 0.5)
     
         // bottom-right stamp
         doc.addImage(img1, "JPEG", sx, sy, sw, sh)
