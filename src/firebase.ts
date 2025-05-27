@@ -14,6 +14,7 @@ const firebaseConfig = {
   measurementId: "G-B5WWS1F1CR"
 };
 
+
 // const firebaseConfig = {
 //   apiKey: "AIzaSyBSxxT5S_0VGjZ4O0Ykob3RKJLoXRdTyek",
 //   authDomain: "hospital-63094.firebaseapp.com",
