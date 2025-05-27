@@ -633,6 +633,7 @@ const saveUpdatedRegistrationTime = async () => {
       doc.text("RANGE", x4 + 2, yPos + 5)
 
       yPos += rowH + 2
+      
       const subheads = tData.subheadings ?? []
       const subNames = subheads.flatMap((s) => s.parameterNames)
       const globals = tData.parameters.filter((p) => !subNames.includes(p.name))
