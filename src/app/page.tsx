@@ -44,6 +44,7 @@ interface BloodTest {
 }
 
 interface Patient {
+  visitType: "opd" | "ipd"
   id: string
   name: string
   patientId: string
@@ -152,6 +153,7 @@ export default function Dashboard() {
   const [deletedPatients, setDeletedPatients] = useState<string[]>([])
   const [deleteReason, setDeleteReason] = useState<string>("")
   const [deleteRequestModalPatient, setDeleteRequestModalPatient] = useState<Patient | null>(null)
+  const [tempDiscount, setTempDiscount] = useState<string>("")
 
   /* --- helpers --- */
   const getRank = (p: Patient) => (!p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2)
@@ -165,6 +167,7 @@ export default function Dashboard() {
         ...d,
         discountAmount: Number(d.discountAmount || 0),
         age: Number(d.age),
+        visitType: d.visitType || "opd",
       }))
 
       // Extract delete requests and deleted status
@@ -313,25 +316,6 @@ export default function Dashboard() {
       console.error(e)
       alert("Error deleting.")
     }
-  }
-
-  const handleUpdateAmount = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!selectedPatient) return
-    const added = Number.parseFloat(newAmountPaid) || 0
-    const updatedAmountPaid = selectedPatient.amountPaid + added
-
-    await update(ref(database, `patients/${selectedPatient.id}`), {
-      amountPaid: updatedAmountPaid,
-      paymentHistory: [
-        ...(selectedPatient.paymentHistory || []),
-        { amount: added, paymentMode, time: new Date().toISOString() },
-      ],
-    })
-    setNewAmountPaid("")
-    setSelectedPatient(null)
-    setPaymentMode("online")
-    alert("Payment updated!")
   }
 
   const format12Hour = (iso: string) =>
@@ -701,6 +685,59 @@ export default function Dashboard() {
     }
   }
 
+  const handleUpdateAmountAndDiscount = async (
+    discountAmount: number,
+    tempDiscount: string,
+    setTempDiscount: (value: string) => void,
+  ) => {
+    if (!selectedPatient) return
+
+    const additionalPayment = Number.parseFloat(newAmountPaid) || 0
+    const newDiscountAmount = Number.parseFloat(tempDiscount) || 0
+    const updatedAmountPaid = selectedPatient.amountPaid + additionalPayment
+
+    try {
+      const updateData: any = {
+        discountAmount: newDiscountAmount,
+      }
+
+      // Only update payment if there's an additional amount
+      if (additionalPayment > 0) {
+        updateData.amountPaid = updatedAmountPaid
+        updateData.paymentHistory = [
+          ...(selectedPatient.paymentHistory || []),
+          { amount: additionalPayment, paymentMode, time: new Date().toISOString() },
+        ]
+      }
+
+      await update(ref(database, `patients/${selectedPatient.id}`), updateData)
+
+      // Update the selected patient state to reflect changes
+      setSelectedPatient({
+        ...selectedPatient,
+        discountAmount: newDiscountAmount,
+        amountPaid: updatedAmountPaid,
+        paymentHistory:
+          additionalPayment > 0
+            ? [
+                ...(selectedPatient.paymentHistory || []),
+                { amount: additionalPayment, paymentMode, time: new Date().toISOString() },
+              ]
+            : selectedPatient.paymentHistory,
+      })
+
+      // Reset only the additional payment field
+      setNewAmountPaid("")
+      setPaymentMode("online")
+
+      // Don't close the modal - keep it open for further updates
+      alert("Payment and discount updated successfully!")
+    } catch (error) {
+      console.error("Error updating payment and discount:", error)
+      alert("Error updating payment and discount. Please try again.")
+    }
+  }
+
   /* --------------------  RENDER  -------------------- */
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
@@ -985,14 +1022,25 @@ export default function Dashboard() {
                               />
                             </td>
                           )}
-                          <td className="px-4 py-3">
-                            <div className="flex flex-col">
-                              <span className="font-medium text-gray-800">{p.name}</span>
-                              <span className="text-xs text-gray-500">
-                                {p.age}y • {p.gender} • {p.contact || "No contact"}
-                              </span>
-                            </div>
-                          </td>
+                        <td className="px-4 py-3">
+  <div className="flex items-center space-x-2">
+    <span className="font-medium text-gray-800">{p.name}</span>
+    <span
+      className={`
+        inline-block px-2 py-0.5 text-xs font-semibold rounded-full
+        ${p.visitType === "opd"
+          ? "bg-indigo-100 text-indigo-800"
+          : "bg-emerald-100 text-emerald-800"}
+      `}
+    >
+      {p.visitType.toUpperCase()}
+    </span>
+  </div>
+  <div className="mt-1 text-xs text-gray-500">
+    {p.age}y • {p.gender} • {p.contact || "No contact"}
+  </div>
+</td>
+
                           <td className="px-4 py-3">
                             {p.bloodTests?.length ? (
                               <div className="max-h-20 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
@@ -1165,6 +1213,7 @@ export default function Dashboard() {
                                         onClick={() => {
                                           setSelectedPatient(p)
                                           setNewAmountPaid("")
+                                          setTempDiscount(p.discountAmount.toString())
                                         }}
                                         className="inline-flex items-center px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 transition-colors duration-200 shadow-sm"
                                         disabled={!!hasDeleteRequest}
@@ -1274,7 +1323,7 @@ export default function Dashboard() {
         </motion.div>
       </main>
 
-      {/* Payment modal */}
+      {/* Payment modal - FIXED VERSION */}
       <AnimatePresence>
         {selectedPatient && (
           <motion.div
@@ -1282,106 +1331,154 @@ export default function Dashboard() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 overflow-y-auto"
           >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 relative"
-            >
-              <button
-                onClick={() => setSelectedPatient(null)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+            <div className="min-h-screen px-4 py-6 flex items-center justify-center">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto relative"
               >
-                <XCircleIcon className="h-6 w-6" />
-              </button>
-
-              <div className="mb-6">
-                <h3 className="text-xl font-bold text-gray-800 mb-1">Update Payment</h3>
-                <p className="text-gray-500 text-sm">{selectedPatient.name}</p>
-              </div>
-
-              {(() => {
-                const { testTotal, remaining } = calculateAmounts(selectedPatient)
-                return (
-                  <div className="mb-6 bg-gray-50 rounded-xl p-4 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Test Total:</span>
-                      <span className="font-medium">{formatCurrency(testTotal)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Discount:</span>
-                      <span className="font-medium text-amber-600">
-                        {formatCurrency(selectedPatient.discountAmount)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">Current Paid:</span>
-                      <span className="font-medium text-teal-600">{formatCurrency(selectedPatient.amountPaid)}</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-2 border-t border-gray-200">
-                      <span className="text-sm font-medium text-gray-800">Remaining:</span>
-                      <span className="font-bold text-red-600">{formatCurrency(remaining)}</span>
-                    </div>
-                  </div>
-                )
-              })()}
-
-              <div className="mb-6">
-                <button
-                  onClick={handleDownloadBill}
-                  className="w-full bg-teal-600 text-white py-3 rounded-xl font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm flex items-center justify-center"
-                >
-                  <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
-                  Download Bill
-                </button>
-              </div>
-
-              <form onSubmit={handleUpdateAmount} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Additional Payment (₹)</label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <BanknotesIcon className="h-4 w-4 text-gray-400" />
-                    </div>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={newAmountPaid}
-                      onChange={(e) => setNewAmountPaid(e.target.value)}
-                      className="pl-10 w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                      placeholder="Enter amount"
-                      required
-                    />
+                <div className="sticky top-0 bg-white rounded-t-2xl border-b border-gray-100 p-6 pb-4">
+                  <button
+                    onClick={() => setSelectedPatient(null)}
+                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    <XCircleIcon className="h-6 w-6" />
+                  </button>
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800 mb-1">Update Payment & Discount</h3>
+                    <p className="text-gray-500 text-sm">{selectedPatient.name}</p>
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Payment Mode</label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <CreditCardIcon className="h-4 w-4 text-gray-400" />
-                    </div>
-                    <select
-                      value={paymentMode}
-                      onChange={(e) => setPaymentMode(e.target.value)}
-                      className="pl-10 w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                    >
-                      <option value="cash">Cash</option>
-                      <option value="online">Online</option>
-                    </select>
-                  </div>
+
+                <div className="p-6 pt-2">
+                  {(() => {
+                    const testTotal = selectedPatient.bloodTests?.reduce((s, t) => s + t.price, 0) || 0
+                    const currentPaid = Number(selectedPatient.amountPaid || 0)
+                    const additionalPayment = Number(newAmountPaid) || 0
+                    const discountAmount = Number(tempDiscount) || 0
+                    const remaining = testTotal - discountAmount - currentPaid - additionalPayment
+
+                    return (
+                      <>
+                        <div className="mb-6 bg-gray-50 rounded-xl p-4 space-y-3">
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-gray-600">Test Total:</span>
+                            <span className="font-medium">{formatCurrency(testTotal)}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-gray-600">Current Discount:</span>
+                            <span className="font-medium text-amber-600">{formatCurrency(discountAmount)}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-gray-600">Current Paid:</span>
+                            <span className="font-medium text-teal-600">{formatCurrency(currentPaid)}</span>
+                          </div>
+                          {additionalPayment > 0 && (
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm text-gray-600">Additional Payment:</span>
+                              <span className="font-medium text-blue-600">{formatCurrency(additionalPayment)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                            <span className="text-sm font-medium text-gray-800">Remaining:</span>
+                            <span
+                              className={`font-bold ${remaining > 0 ? "text-red-600" : remaining < 0 ? "text-green-600" : "text-gray-600"}`}
+                            >
+                              {formatCurrency(remaining)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="mb-6">
+                          <button
+                            onClick={handleDownloadBill}
+                            className="w-full bg-teal-600 text-white py-3 rounded-xl font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm flex items-center justify-center"
+                          >
+                            <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                            Download Bill
+                          </button>
+                        </div>
+
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            handleUpdateAmountAndDiscount(discountAmount, tempDiscount, setTempDiscount)
+                          }}
+                          className="space-y-4"
+                        >
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Discount Amount (₹)</label>
+                            <div className="relative">
+                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <BanknotesIcon className="h-4 w-4 text-gray-400" />
+                              </div>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={tempDiscount}
+                                onChange={(e) => setTempDiscount(e.target.value)}
+                                className="pl-10 w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                                placeholder="Enter discount amount"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Additional Payment (₹)
+                            </label>
+                            <div className="relative">
+                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <BanknotesIcon className="h-4 w-4 text-gray-400" />
+                              </div>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={newAmountPaid}
+                                onChange={(e) => setNewAmountPaid(e.target.value)}
+                                className="pl-10 w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                                placeholder="Enter additional payment"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Payment Mode</label>
+                            <div className="relative">
+                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <CreditCardIcon className="h-4 w-4 text-gray-400" />
+                              </div>
+                              <select
+                                value={paymentMode}
+                                onChange={(e) => setPaymentMode(e.target.value)}
+                                className="pl-10 w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                              >
+                                <option value="cash">Cash</option>
+                                <option value="online">Online</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <button
+                            type="submit"
+                            className="w-full bg-violet-600 text-white py-3 rounded-xl font-medium hover:bg-violet-700 transition-colors duration-200 shadow-sm flex items-center justify-center"
+                          >
+                            <BanknotesIcon className="h-4 w-4 mr-2" />
+                            Update Payment & Discount
+                          </button>
+                        </form>
+                      </>
+                    )
+                  })()}
                 </div>
-                <button
-                  type="submit"
-                  className="w-full bg-violet-600 text-white py-3 rounded-xl font-medium hover:bg-violet-700 transition-colors duration-200 shadow-sm flex items-center justify-center"
-                >
-                  <BanknotesIcon className="h-4 w-4 mr-2" />
-                  Update Payment
-                </button>
-              </form>
-            </motion.div>
+              </motion.div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1394,56 +1491,61 @@ export default function Dashboard() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 overflow-y-auto"
           >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 relative"
-            >
-              <button
-                onClick={() => setSampleModalPatient(null)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+            <div className="min-h-screen px-4 py-6 flex items-center justify-center">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto relative"
               >
-                <XCircleIcon className="h-6 w-6" />
-              </button>
-
-              <div className="mb-6">
-                <h3 className="text-xl font-bold text-gray-800 mb-1">Set Sample Collection Time</h3>
-                <p className="text-gray-500 text-sm">{sampleModalPatient.name}</p>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Date & Time</label>
-                  <input
-                    type="datetime-local"
-                    value={sampleDateTime}
-                    onChange={(e) => setSampleDateTime(e.target.value)}
-                    max={formatLocalDateTime()}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                  />
-                </div>
-                <p className="text-sm text-gray-600">Selected: {format12Hour(sampleDateTime)}</p>
-
-                <div className="flex justify-end space-x-3 pt-4">
+                <div className="sticky top-0 bg-white rounded-t-2xl border-b border-gray-100 p-6 pb-4">
                   <button
                     onClick={() => setSampleModalPatient(null)}
-                    className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors duration-200 text-gray-800 font-medium"
+                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
                   >
-                    Cancel
+                    <XCircleIcon className="h-6 w-6" />
                   </button>
-                  <button
-                    onClick={handleSaveSampleDate}
-                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors duration-200 font-medium"
-                  >
-                    Save
-                  </button>
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800 mb-1">Set Sample Collection Time</h3>
+                    <p className="text-gray-500 text-sm">{sampleModalPatient.name}</p>
+                  </div>
                 </div>
-              </div>
-            </motion.div>
+
+                <div className="p-6 pt-2">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        value={sampleDateTime}
+                        onChange={(e) => setSampleDateTime(e.target.value)}
+                        max={formatLocalDateTime()}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                      />
+                    </div>
+                    <p className="text-sm text-gray-600">Selected: {format12Hour(sampleDateTime)}</p>
+
+                    <div className="flex justify-end space-x-3 pt-4">
+                      <button
+                        onClick={() => setSampleModalPatient(null)}
+                        className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors duration-200 text-gray-800 font-medium"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveSampleDate}
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors duration-200 font-medium"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1456,61 +1558,68 @@ export default function Dashboard() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 overflow-y-auto"
           >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 relative"
-            >
-              <button
-                onClick={() => setDeleteRequestModalPatient(null)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+            <div className="min-h-screen px-4 py-6 flex items-center justify-center">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto relative"
               >
-                <XCircleIcon className="h-6 w-6" />
-              </button>
-
-              <div className="mb-6">
-                <h3 className="text-xl font-bold text-gray-800 mb-1">Request Deletion</h3>
-                <p className="text-gray-500 text-sm">{deleteRequestModalPatient.name}</p>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Deletion (Required)</label>
-                  <textarea
-                    value={deleteReason}
-                    onChange={(e) => setDeleteReason(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                    rows={4}
-                    placeholder="Please provide a detailed reason for this deletion request"
-                    required
-                  />
-                </div>
-
-                <div className="flex justify-end space-x-3 pt-4">
+                <div className="sticky top-0 bg-white rounded-t-2xl border-b border-gray-100 p-6 pb-4">
                   <button
                     onClick={() => setDeleteRequestModalPatient(null)}
-                    className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors duration-200 text-gray-800 font-medium"
+                    className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
                   >
-                    Cancel
+                    <XCircleIcon className="h-6 w-6" />
                   </button>
-                  <button
-                    onClick={submitDeleteRequest}
-                    disabled={!deleteReason.trim()}
-                    className={`px-4 py-2 rounded-lg text-white font-medium ${
-                      deleteReason.trim()
-                        ? "bg-red-600 hover:bg-red-700 transition-colors duration-200"
-                        : "bg-red-300 cursor-not-allowed"
-                    }`}
-                  >
-                    Submit Request
-                  </button>
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800 mb-1">Request Deletion</h3>
+                    <p className="text-gray-500 text-sm">{deleteRequestModalPatient.name}</p>
+                  </div>
                 </div>
-              </div>
-            </motion.div>
+
+                <div className="p-6 pt-2">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Reason for Deletion (Required)
+                      </label>
+                      <textarea
+                        value={deleteReason}
+                        onChange={(e) => setDeleteReason(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                        rows={4}
+                        placeholder="Please provide a detailed reason for this deletion request"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex justify-end space-x-3 pt-4">
+                      <button
+                        onClick={() => setDeleteRequestModalPatient(null)}
+                        className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition-colors duration-200 text-gray-800 font-medium"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={submitDeleteRequest}
+                        disabled={!deleteReason.trim()}
+                        className={`px-4 py-2 rounded-lg text-white font-medium ${
+                          deleteReason.trim()
+                            ? "bg-red-600 hover:bg-red-700 transition-colors duration-200"
+                            : "bg-red-300 cursor-not-allowed"
+                        }`}
+                      >
+                        Submit Request
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
