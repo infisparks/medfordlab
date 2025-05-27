@@ -181,6 +181,11 @@ function DownloadReport() {
     currentTime: "",
   })
 
+  const [updateRegistrationTimeModal, setUpdateRegistrationTimeModal] = useState({
+  isOpen: false,
+  currentTime: "",
+});
+
   // Fetch patient data
   useEffect(() => {
     if (!patientId) return
@@ -313,36 +318,75 @@ const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
   }
 
   // Open modal to update sampleCollectedAt time
-  const updateSampleCollectedTime = () => {
-    const currentTime = patientData?.sampleCollectedAt
-      ? toLocalDateTimeString(patientData.sampleCollectedAt)
-      : toLocalDateTimeString()
+ const updateSampleCollectedTime = () => {
+  const currentTime = patientData?.sampleCollectedAt
+    ? toLocalDateTimeString(patientData.sampleCollectedAt)
+    : toLocalDateTimeString();
 
-    setUpdateSampleTimeModal({
-      isOpen: true,
-      currentTime,
-    })
-  }
+  setUpdateSampleTimeModal({
+    isOpen: true,
+    currentTime,
+  });
+}; 
+
+    // Open modal to update createdAt (registration time)
+// Open modal to update createdAt (Registration On)
+const updateRegistrationTime = () => {
+  const currentTime = patientData?.createdAt
+    ? toLocalDateTimeString(patientData.createdAt)
+    : toLocalDateTimeString();
+
+  setUpdateRegistrationTimeModal({
+    isOpen: true,
+    currentTime,
+  });
+};
+
+
+
+  
 
   // Save updated sampleCollectedAt time
   const saveUpdatedSampleTime = async () => {
     if (!patientData) return
 
     try {
-      const patientRef = dbRef(database, `patients/${patientId}`)
-      const newSampleCollectedAt = new Date(updateSampleTimeModal.currentTime).toISOString()
+    const patientRef = dbRef(database, `patients/${patientId}`);
+    const newCreatedAt = new Date(updateRegistrationTimeModal.currentTime).toISOString();
 
-      await update(patientRef, { sampleCollectedAt: newSampleCollectedAt })
+    await update(patientRef, { createdAt: newCreatedAt });
 
-      setPatientData((prev) => (prev ? { ...prev, sampleCollectedAt: newSampleCollectedAt } : prev))
+    // update local state
+    setPatientData((prev) => (prev ? { ...prev, createdAt: newCreatedAt } : prev));
 
-      setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }))
-      alert("Sample collected time updated successfully!")
-    } catch (error) {
-      console.error("Error updating sample collected time:", error)
-      alert("Failed to update sample collected time.")
-    }
+    setUpdateRegistrationTimeModal((prev) => ({ ...prev, isOpen: false }));
+    alert("Registration time updated successfully!");
+  } catch (error) {
+    console.error("Error updating registration time:", error);
+    alert("Failed to update registration time.");
   }
+  
+  };
+
+  // Save updated registration time (createdAt)
+const saveUpdatedRegistrationTime = async () => {
+  if (!patientData) return;
+
+  try {
+    const patientRef = dbRef(database, `patients/${patientId}`);
+    const newCreatedAt = new Date(updateRegistrationTimeModal.currentTime).toISOString();
+
+    await update(patientRef, { createdAt: newCreatedAt });
+
+    setPatientData((prev) => (prev ? { ...prev, createdAt: newCreatedAt } : prev));
+
+    setUpdateRegistrationTimeModal((prev) => ({ ...prev, isOpen: false }));
+    alert("Registration time updated successfully!");
+  } catch (error) {
+    console.error("Error updating registration time:", error);
+    alert("Failed to update registration time.");
+  }
+};
 
   // Generate PDF report
   const generatePDFReport = async (data: PatientData, includeLetterhead: boolean, skipCover: boolean) => {
@@ -787,6 +831,39 @@ const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
             {/* Report Actions Card */}
             <div className="bg-white rounded-xl shadow-lg p-8 space-y-4 col-span-1 md:col-span-2">
               <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">Report Ready</h2>
+{/* Registration On Display and Update Button */}
+<div className="p-4 bg-gray-100 rounded-lg">
+  <div className="flex items-center justify-between">
+    <div>
+      <p className="text-sm font-medium text-gray-700">Registration On:</p>
+      <p className="text-sm text-gray-600">
+        {patientData.createdAt ? format12Hour(patientData.createdAt) : "Not set"}
+      </p>
+    </div>
+    <button
+      onClick={updateRegistrationTime}
+      className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
+    >
+      {/* pencil icon */}
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        className="h-4 w-4 mr-1"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+        />
+      </svg>
+      Update Time
+    </button>
+  </div>
+</div>
+
 
               {/* Sample Collected On Display and Update Button */}
               <div className="p-4 bg-gray-100 rounded-lg">
@@ -1160,6 +1237,55 @@ const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
             <p className="mt-4 text-sm text-gray-500">This may take a few moments.</p>
           </div>
         )}
+
+{/* Update Registration Time Modal */}
+{updateRegistrationTimeModal.isOpen && (
+  <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+    <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
+      <button
+        onClick={() => setUpdateRegistrationTimeModal((p) => ({ ...p, isOpen: false }))}
+        className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+      >
+        ✕
+      </button>
+      <h3 className="text-lg font-semibold mb-4">
+        Update Registration Time for {patientData?.name}
+      </h3>
+      <label className="block text-sm font-medium text-gray-700 mb-2">
+        Registration Date & Time
+      </label>
+      <input
+        type="datetime-local"
+        value={updateRegistrationTimeModal.currentTime}
+        onChange={(e) =>
+          setUpdateRegistrationTimeModal((p) => ({ ...p, currentTime: e.target.value }))
+        }
+        max={toLocalDateTimeString()}
+        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
+      />
+      <p className="mt-2 text-sm text-gray-600">
+        Selected:{" "}
+        {updateRegistrationTimeModal.currentTime
+          ? format12Hour(updateRegistrationTimeModal.currentTime)
+          : ""}
+      </p>
+      <div className="mt-6 flex justify-end space-x-2">
+        <button
+          onClick={() => setUpdateRegistrationTimeModal((p) => ({ ...p, isOpen: false }))}
+          className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={saveUpdatedRegistrationTime}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
         {/* Update ReportedOn Time Modal */}
         {updateTimeModal.isOpen && (

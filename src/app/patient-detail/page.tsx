@@ -114,6 +114,7 @@ const [showTestSuggestions, setShowTestSuggestions] = useState(false);
   const [availablePackages, setAvailablePackages] = useState<PackageType[]>([])
   const [showDoctorSuggestions, setShowDoctorSuggestions] = useState(false)
   const [selectedTest, setSelectedTest] = useState("")
+  const [initialBloodtest, setInitialBloodtest] = useState<Record<string, any>>({})
 
   /* 3) Fetch doctors */
   useEffect(() => {
@@ -209,6 +210,7 @@ if (data.createdAt) {
   data.registrationTime = dt.toTimeString().slice(0, 5)      // "HH:MM"
 }
 reset(data)
+setInitialBloodtest(data.bloodtest ?? {})
 
       } catch (e) {
         console.error(e)
@@ -289,7 +291,15 @@ reset(data)
       alert("Please add at least one blood test before submitting.")
       return
     }
+    const keepIds = new Set(data.bloodTests.map((t) => t.testId));
 
+    const prunedBloodtest: Record<string, any> = {};
+    Object.entries(initialBloodtest).forEach(([key, val]: any) => {
+      // every saved report has val.testId; keep only the ones still present
+      if (val && keepIds.has(val.testId)) {
+        prunedBloodtest[key] = val;
+      }
+    });
     try {
       /* 1) No duplicate tests */
       const testIds = data.bloodTests.map((t) => t.testId)
@@ -310,10 +320,12 @@ const createdAtIso = new Date(
 
 await update(ref(database, `patients/${patientIdQuery}`), {
   ...data,
+  bloodtest: prunedBloodtest,   // 🔽 add this line
   total_day,
   updatedAt: new Date().toISOString(),
-  createdAt: createdAtIso,    // ← overwrite the old createdAt
-})
+  createdAt: createdAtIso,
+});
+
 
 
       /* 4) Update in MedfordFamily database */
