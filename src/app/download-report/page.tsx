@@ -347,26 +347,30 @@ const updateRegistrationTime = () => {
   
 
   // Save updated sampleCollectedAt time
-  const saveUpdatedSampleTime = async () => {
-    if (!patientData) return
+  // Save updated sampleCollectedAt time
+const saveUpdatedSampleTime = async () => {
+  if (!patientData) return;
 
-    try {
+  try {
+    // 1) Reference the patient node
     const patientRef = dbRef(database, `patients/${patientId}`);
-    const newCreatedAt = new Date(updateRegistrationTimeModal.currentTime).toISOString();
-
-    await update(patientRef, { createdAt: newCreatedAt });
-
-    // update local state
-    setPatientData((prev) => (prev ? { ...prev, createdAt: newCreatedAt } : prev));
-
-    setUpdateRegistrationTimeModal((prev) => ({ ...prev, isOpen: false }));
-    alert("Registration time updated successfully!");
+    // 2) Convert picked datetime-local string to ISO
+    const newSampleAt = new Date(updateSampleTimeModal.currentTime).toISOString();
+    // 3) Write only sampleCollectedAt
+    await update(patientRef, { sampleCollectedAt: newSampleAt });
+    // 4) Sync local state
+    setPatientData((prev) =>
+      prev ? { ...prev, sampleCollectedAt: newSampleAt } : prev
+    );
+    // 5) Close modal
+    setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }));
+    // alert("Sample collected time updated successfully!");
   } catch (error) {
-    console.error("Error updating registration time:", error);
-    alert("Failed to update registration time.");
+    console.error("Error updating sample collected time:", error);
+    alert("Failed to update sample collected time.");
   }
-  
-  };
+};
+
 
   // Save updated registration time (createdAt)
 const saveUpdatedRegistrationTime = async () => {
@@ -381,7 +385,7 @@ const saveUpdatedRegistrationTime = async () => {
     setPatientData((prev) => (prev ? { ...prev, createdAt: newCreatedAt } : prev));
 
     setUpdateRegistrationTimeModal((prev) => ({ ...prev, isOpen: false }));
-    alert("Registration time updated successfully!");
+    // alert("Registration time updated successfully!");
   } catch (error) {
     console.error("Error updating registration time:", error);
     alert("Failed to update registration time.");
