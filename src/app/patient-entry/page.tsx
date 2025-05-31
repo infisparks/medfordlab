@@ -2,10 +2,22 @@
 
 import type React from "react"
 import { useEffect, useState, useMemo } from "react"
-
 import { useForm, useFieldArray, type SubmitHandler } from "react-hook-form"
 import { database, auth } from "../../firebase"
-import { ref, push, set, runTransaction, get, type DataSnapshot } from "firebase/database"
+import {
+  ref,
+  push,
+  set,
+  runTransaction,
+  get,
+  query,
+  orderByChild,
+  startAt,
+  endAt,
+  limitToFirst,
+  onValue,
+  type DataSnapshot,
+} from "firebase/database"
 import {
   UserCircleIcon,
   PhoneIcon,
@@ -115,7 +127,7 @@ const PatientEntryForm: React.FC = () => {
   const [currentUser, setCurrentUser] = useState(auth.currentUser)
   useEffect(() => auth.onAuthStateChanged(setCurrentUser), [])
 
-  /* 2) Current date and time for registration - fetched from online source */
+  /* 2) Current date and time for registration */
   const [currentDate, setCurrentDate] = useState("")
   const [currentTime, setCurrentTime] = useState("")
 
@@ -128,6 +140,7 @@ const PatientEntryForm: React.FC = () => {
     watch,
     setValue,
     reset,
+    getValues,
   } = useForm<IFormInput>({
     defaultValues: {
       hospitalName: "MEDFORD HOSPITAL",
@@ -146,7 +159,6 @@ const PatientEntryForm: React.FC = () => {
       patientId: "",
       registrationDate: "",
       registrationTime: "",
-      // age, discountAmount, amountPaid are now undefined → show as blank
     },
   })
   const title = watch("title")
@@ -156,7 +168,6 @@ const PatientEntryForm: React.FC = () => {
   useEffect(() => {
     const maleTitles = new Set(["MR", "MAST", "BABA"])
     const femaleTitles = new Set(["MS", "MISS", "MRS", "BABY", "SMT"])
-    // leave blank for these
     const noGender = new Set(["BABY OF", "DR", "", "."])
 
     if (maleTitles.has(title)) {
@@ -167,8 +178,8 @@ const PatientEntryForm: React.FC = () => {
       setValue("gender", "")
     }
   }, [title, setValue])
-  /* Fetch current time from online source */
-  // Initialize registrationDate / registrationTime from the PC’s local clock
+
+  // Initialize registrationDate / registrationTime from the PC's local clock
   useEffect(() => {
     const now = new Date()
 
@@ -189,21 +200,22 @@ const PatientEntryForm: React.FC = () => {
     setCurrentTime(formattedTime)
     setValue("registrationDate", formattedDate)
     setValue("registrationTime", formattedTime)
-  }, [])
-  // Remove setValue from dependency array
+  }, [setValue])
 
-  /* 4) Local state */
+  /* 4) Local state - OPTIMIZED FOR INDEXED AUTOCOMPLETE */
   const [doctorList, setDoctorList] = useState<{ id: string; doctorName: string }[]>([])
   const [availableBloodTests, setAvailableBloodTests] = useState<
     { id: string; testName: string; price: number; type: string }[]
   >([])
   const [availablePackages, setAvailablePackages] = useState<PackageType[]>([])
-  const [existingPatients, setExistingPatients] = useState<PatientSuggestion[]>([])
+
+  /** ── PATIENT AUTOCOMPLETE STATE (OPTIMIZED) ── **/
+  const [filteredPatientSuggestions, setFilteredPatientSuggestions] = useState<PatientSuggestion[]>([])
   const [showPatientSuggestions, setShowPatientSuggestions] = useState(false)
+
   const [showDoctorSuggestions, setShowDoctorSuggestions] = useState(false)
   const [selectedTest, setSelectedTest] = useState("")
   const [showTestSuggestions, setShowTestSuggestions] = useState(false)
-  // Add a new state variable for the search text
   const [searchText, setSearchText] = useState("")
 
   /* 5) Fetch doctors */
@@ -235,7 +247,6 @@ const PatientEntryForm: React.FC = () => {
               id,
               testName: d.testName,
               price: Number(d.price),
-              // if isOutsource === false → in‑hospital; otherwise (true or missing) → outsource
               type: d.isOutsource === false ? "inhospital" : "outsource",
             }))
             .sort((a, b) => a.testName.localeCompare(b.testName))
@@ -267,40 +278,52 @@ const PatientEntryForm: React.FC = () => {
     })()
   }, [])
 
-  /* 8) Fetch EXISTING patients for suggestions */
-  useEffect(() => {
-    ;(async () => {
-      const snap = await get(ref(database, "patients"))
-      if (snap.exists()) {
-        const temp: Record<string, PatientSuggestion> = {}
-        snap.forEach((child: DataSnapshot) => {
-          const d = child.val()
-          if (d?.patientId && !temp[d.patientId]) {
-            temp[d.patientId] = {
-              id: child.key!,
-              name: (d.name as string) || "",
-              contact: (d.contact as string) || "",
-              patientId: d.patientId as string,
-              age: Number(d.age) || 0,
-              dayType: (d.dayType as any) || "year",
-              gender: (d.gender as string) || "",
-              title: (d.title as string) || "",
-            }
-          }
-        })
+  /** ── OPTIMIZED PATIENT NAME AUTOCOMPLETE ── **/
+  // Whenever the user types into the "name" input, run a prefix query on /patientIndex
+  /** ── PATIENT AUTOCOMPLETE (QUERYING /patients/{…}) ── **/
+const watchName = watch("name") || "";
 
-        // now dedupe by name (so each patient name appears only once)
-        const suggestions = Object.values(temp)
-        const uniquePatients = Array.from(new Map(suggestions.map((p) => [p.name, p])).values())
+useEffect(() => {
+  const prefix = watchName.trim().toUpperCase();
+  if (prefix.length < 2) {
+    // If fewer than 2 letters, don’t show anything
+    setFilteredPatientSuggestions([]);
+    return;
+  }
 
-        setExistingPatients(uniquePatients)
-      }
-    })()
-  }, [])
+  // ↓ Now query *directly* under "/patients", ordering by child "name"
+  const patientsRef = ref(database, "patients");
+  const patientQuery = query(
+    patientsRef,
+    orderByChild("name"),
+    startAt(prefix),
+    endAt(prefix + "\uf8ff"),
+    limitToFirst(10)
+  );
 
-  /* 9) Suggestions */
+  const unsubscribe = onValue(patientQuery, (snap: DataSnapshot) => {
+    const arr: PatientSuggestion[] = [];
+    snap.forEach((childSnap) => {
+      const d = childSnap.val() as any;
+      arr.push({
+        id: childSnap.key!,
+        name: d.name,         // the patient’s uppercase name
+        contact: d.contact,   // phone
+        age: d.age,           // age
+        dayType: d.dayType,   // “year” / “month” / “day”
+        gender: d.gender,
+        title: d.title,
+        patientId: d.patientId, // UHID
+      });
+    });
+    setFilteredPatientSuggestions(arr);
+  });
+
+  return () => unsubscribe();
+}, [watchName]);
+
+  /* 9) Suggestions for doctors */
   const watchDoctorName = watch("doctorName") ?? ""
-  const watchPatientName = watch("name") ?? ""
 
   const filteredDoctorSuggestions = useMemo(
     () =>
@@ -308,14 +331,6 @@ const PatientEntryForm: React.FC = () => {
         ? doctorList.filter((d) => d.doctorName.toLowerCase().startsWith(watchDoctorName.toLowerCase()))
         : [],
     [watchDoctorName, doctorList],
-  )
-
-  const filteredPatientSuggestions = useMemo(
-    () =>
-      watchPatientName.trim().length >= 2
-        ? existingPatients.filter((p) => p.name.toUpperCase().includes(watchPatientName.toUpperCase()))
-        : [],
-    [watchPatientName, existingPatients],
   )
 
   /* 10) Field array for blood tests */
@@ -332,8 +347,50 @@ const PatientEntryForm: React.FC = () => {
   const unselectedBloodTests = useMemo(() => {
     return availableBloodTests.filter((t) => !bloodTests.some((bt) => bt.testId === t.id))
   }, [availableBloodTests, bloodTests])
+
+  /** ── OPTIMIZED PATIENT SELECTION HANDLER ── **/
+  async function handlePatientSelect(p: PatientSuggestion) {
+    // 1) Immediately fill in the basic fields we already know:
+    setValue("name", p.name)
+    setValue("contact", p.contact)
+    setValue("age", p.age)
+    setValue("dayType", p.dayType ?? "")
+    setValue("gender", p.gender ?? "")
+    setValue("title", p.title ?? "")
+    setValue("patientId", p.patientId ?? "")
+
+    // 2) Hide the suggestion dropdown
+    setShowPatientSuggestions(false)
+
+    // 3) Fetch the full patient from /patients/{key}
+    const fullSnap = await get(ref(database, `patients/${p.id}`))
+    if (!fullSnap.exists()) return
+    const fullData = fullSnap.val() as any
+
+    // 4) Populate the remaining form fields (address, email, doctor, etc.)
+    if (fullData.address) setValue("address", fullData.address)
+    if (fullData.email) setValue("email", fullData.email)
+    if (fullData.doctorName) setValue("doctorName", fullData.doctorName)
+    if (fullData.doctorId) setValue("doctorId", fullData.doctorId)
+
+    // 5) Populate bloodTests & payment fields if they exist
+    if (Array.isArray(fullData.bloodTests)) {
+      reset(
+        {
+          ...getValues(), // keep the fields we set above
+          bloodTests: fullData.bloodTests,
+          discountAmount: fullData.discountAmount,
+          amountPaid: fullData.amountPaid,
+          paymentMode: fullData.paymentMode,
+          registrationDate: fullData.registrationDate.slice(0, 10),
+          registrationTime: fullData.registrationTime,
+        },
+        { keepValues: true },
+      )
+    }
+  }
+
   /* 12) Add selected test */
-  // Update the handleAddTest function to also clear the search text
   const handleAddTest = () => {
     if (!selectedTest) return
 
@@ -351,7 +408,6 @@ const PatientEntryForm: React.FC = () => {
       setShowTestSuggestions(false)
     }
   }
-  /* 13) Submit handler */
 
   // add all remaining tests
   const handleAddAllTests = () => {
@@ -373,6 +429,7 @@ const PatientEntryForm: React.FC = () => {
     }
   }
 
+  /* 13) OPTIMIZED Submit handler */
   const onSubmit: SubmitHandler<IFormInput> = async (data) => {
     // Ensure numeric fields are numbers
     data.discountAmount = isNaN(data.discountAmount) ? 0 : data.discountAmount
@@ -408,8 +465,6 @@ const PatientEntryForm: React.FC = () => {
       if (ampm === "AM" && hours === 12) hours = 0
 
       const [year, month, day] = data.registrationDate.split("-").map((v) => Number(v))
-
-      // ─── REPLACED: Use PC's local time ─────────────────────────────
       const createdAtDate = new Date(year, month - 1, day, hours, minutes)
 
       // 5) Build initial payment history
@@ -422,14 +477,29 @@ const PatientEntryForm: React.FC = () => {
         })
       }
 
-      // 6) Save to Firebase
+      // 6a) Save full patient record under "/patients"
       const userEmail = auth.currentUser?.email || "Unknown User"
-      await set(push(ref(database, "patients")), {
+      const newPatientRef = push(ref(database, "patients"))
+      await set(newPatientRef, {
         ...data,
         total_day,
         enteredBy: userEmail,
         createdAt: createdAtDate.toISOString(),
+        status: "pending",
         paymentHistory,
+      })
+
+      // 6b) ALSO write a lightweight index entry under "/patientIndex/{newKey}"
+      const patientKey = newPatientRef.key!
+      await set(ref(database, `patientIndex/${patientKey}`), {
+        // only minimal fields for autocomplete:
+        name: data.name.toUpperCase(),
+        contact: data.contact,
+        age: data.age,
+        dayType: data.dayType,
+        gender: data.gender,
+        title: data.title,
+        patientId: data.patientId,
       })
 
       // 7) Send WhatsApp confirmation
@@ -459,7 +529,6 @@ const PatientEntryForm: React.FC = () => {
         if (!r.ok) console.error("WhatsApp send failed")
       } catch (whatsappError) {
         console.error("WhatsApp error:", whatsappError)
-        // Continue with form submission even if WhatsApp fails
       }
 
       alert("Patient saved successfully!")
@@ -551,7 +620,6 @@ const PatientEntryForm: React.FC = () => {
                         <SelectItem value="BABA">BABA</SelectItem>
                         <SelectItem value="MISS">MISS</SelectItem>
                         <SelectItem value="MS">MS</SelectItem>
-                        {/* <SelectItem value="MRS">MRS</SelectItem> */}
                         <SelectItem value="BABY">BABY</SelectItem>
                         <SelectItem value="SMT">SMT</SelectItem>
                         <SelectItem value="BABY OF">BABY OF</SelectItem>
@@ -572,7 +640,8 @@ const PatientEntryForm: React.FC = () => {
                           },
                         })}
                         className="h-8 text-xs pl-7"
-                        placeholder="JOHN DOE"
+                        placeholder="Type at least 2 letters..."
+                        onFocus={() => setShowPatientSuggestions(true)}
                       />
                       <UserCircleIcon className="h-3.5 w-3.5 absolute left-2 top-[7px] text-gray-400" />
                     </div>
@@ -581,19 +650,12 @@ const PatientEntryForm: React.FC = () => {
                       <ul className="absolute z-10 w-full bg-white border border-gray-300 mt-0.5 rounded-md max-h-32 overflow-y-auto text-xs">
                         {filteredPatientSuggestions.map((p) => (
                           <li
-                            key={p.patientId}
+                            key={p.id}
                             className="px-2 py-1 hover:bg-gray-100 cursor-pointer"
-                            onClick={() => {
-                              setValue("name", p.name.toUpperCase())
-                              setValue("contact", p.contact)
-                              setValue("age", p.age)
-                              setValue("dayType", p.dayType)
-                              setValue("gender", p.gender)
-                              if (p.title) setValue("title", p.title)
-                              setShowPatientSuggestions(false)
-                            }}
+                            onClick={() => handlePatientSelect(p)}
                           >
-                            {p.name.toUpperCase()} – {p.contact}
+                            {p.name} – {p.contact} ({p.age}
+                            {p.dayType.charAt(0).toUpperCase()})
                           </li>
                         ))}
                       </ul>
@@ -758,6 +820,7 @@ const PatientEntryForm: React.FC = () => {
                           required: "Referring doctor is required",
                           onChange: () => setShowDoctorSuggestions(true),
                         })}
+                        className="h-8 text-xs pl-7"
                       />
                       {errors.doctorName && (
                         <p className="text-red-500 text-[10px] mt-0.5">{errors.doctorName.message}</p>
@@ -836,7 +899,6 @@ const PatientEntryForm: React.FC = () => {
                       Remove All
                     </Button>
 
-                    {/* Replace the Input component in the Blood Tests Section with this updated version */}
                     <div className="relative">
                       <Input
                         type="text"
@@ -846,9 +908,7 @@ const PatientEntryForm: React.FC = () => {
                         onChange={(e) => {
                           const value = e.target.value
                           setSearchText(value)
-                          // Clear the selected test when typing
                           setSelectedTest("")
-                          // Show dropdown with filtered tests if there's text
                           setShowTestSuggestions(value.trim().length > 0)
                         }}
                       />
