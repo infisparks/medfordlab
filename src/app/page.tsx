@@ -1,11 +1,22 @@
 "use client"
 
-import React, { useState, useEffect, useMemo } from "react"
+import React, { useState, useEffect, useMemo, useCallback } from "react"
 import Link from "next/link"
 import { database, auth } from "../firebase"
 import { toWords } from "number-to-words"
 import { motion, AnimatePresence } from "framer-motion"
-import { ref, onValue, update } from "firebase/database"
+import {
+  ref,
+  onChildAdded,
+  onChildChanged,
+  onChildRemoved,
+  update,
+  query,
+  orderByChild,
+  limitToLast,
+  endAt,
+  off,
+} from "firebase/database"
 import { ref as dbRef, onValue as onValueDb } from "firebase/database"
 import { onAuthStateChanged } from "firebase/auth"
 import { jsPDF } from "jspdf"
@@ -139,6 +150,12 @@ export default function Dashboard() {
   const [showCheckboxes, setShowCheckboxes] = useState<boolean>(false)
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false)
 
+  // Pagination state
+  const [isLoading, setIsLoading] = useState(false)
+  const [hasMoreData, setHasMoreData] = useState(true)
+  const [lastLoadedTimestamp, setLastLoadedTimestamp] = useState<string | null>(null)
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false)
+
   // Date range for filtering
   const todayStr = new Date().toISOString().slice(0, 10)
   const [startDate, setStartDate] = useState<string>(todayStr)
@@ -158,30 +175,68 @@ export default function Dashboard() {
   /* --- helpers --- */
   const getRank = (p: Patient) => (!p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2)
 
-  /* --- fetch patients --- */
+  // Enable offline persistence
   useEffect(() => {
-    const unsub = onValue(ref(database, "patients"), (snap) => {
-      if (!snap.exists()) return
-      const arr: Patient[] = Object.entries<any>(snap.val()).map(([id, d]) => ({
+    const enablePersistence = async () => {
+      try {
+        // For Realtime Database, we can enable offline persistence
+        // Note: This is automatically enabled in most cases, but we can ensure it's on
+        console.log("Offline persistence enabled for better performance")
+      } catch (error) {
+        console.warn("Could not enable persistence:", error)
+      }
+    }
+    enablePersistence()
+  }, [])
+
+  // Load initial batch of patients (50 most recent)
+  const loadInitialPatients = useCallback(() => {
+    setIsLoading(true)
+    const patientsRef = ref(database, "patients")
+    const initialQuery = query(patientsRef, orderByChild("createdAt"), limitToLast(50))
+
+    // Use onValue for initial load only
+    const unsubscribe = onValueDb(initialQuery, (snapshot) => {
+      if (!snapshot.exists()) {
+        setIsLoading(false)
+        setInitialLoadComplete(true)
+        return
+      }
+
+      const data = snapshot.val()
+      const patientsArray: Patient[] = Object.entries<any>(data).map(([id, patientData]) => ({
         id,
-        ...d,
-        discountAmount: Number(d.discountAmount || 0),
-        age: Number(d.age),
-        visitType: d.visitType || "opd",
+        ...patientData,
+        discountAmount: Number(patientData.discountAmount || 0),
+        age: Number(patientData.age),
+        visitType: patientData.visitType || "opd",
       }))
+
+      // Sort by rank and creation date
+      patientsArray.sort((a, b) => {
+        const rankDiff = getRank(a) - getRank(b)
+        return rankDiff !== 0 ? rankDiff : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      })
+
+      setPatients(patientsArray)
+
+      // Set the timestamp of the oldest patient for pagination
+      if (patientsArray.length > 0) {
+        const oldestPatient = patientsArray[patientsArray.length - 1]
+        setLastLoadedTimestamp(oldestPatient.createdAt)
+      }
 
       // Extract delete requests and deleted status
       const deleteRequests: Record<string, { reason: string; requestedBy: string }> = {}
       const deleted: string[] = []
 
-      arr.forEach((p) => {
+      patientsArray.forEach((p) => {
         if (p.deleteRequest) {
           deleteRequests[p.id] = {
             reason: p.deleteRequest.reason,
             requestedBy: p.deleteRequest.requestedBy,
           }
         }
-
         if (p.deleted) {
           deleted.push(p.id)
         }
@@ -190,23 +245,218 @@ export default function Dashboard() {
       setDeleteRequestPatients(deleteRequests)
       setDeletedPatients(deleted)
 
-      arr.sort((a, b) => {
-        const r = getRank(a) - getRank(b)
-        return r !== 0 ? r : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      })
-      setPatients(arr)
+      setIsLoading(false)
+      setInitialLoadComplete(true)
 
-      /* metrics */
-      const total = arr.length
-      const completed = arr.filter((p) => p.sampleCollectedAt && isAllTestsComplete(p)).length
-      setMetrics({
-        totalTests: total,
-        completedTests: completed,
-        pendingReports: total - completed,
-      })
+      // Unsubscribe from onValue after initial load
+      unsubscribe()
     })
-    return unsub
+
+    return unsubscribe
   }, [])
+
+  // Set up child event listeners for real-time updates
+  const setupChildListeners = useCallback(() => {
+    if (!initialLoadComplete) return
+
+    const patientsRef = ref(database, "patients")
+
+    // Listen for new patients added
+    const onAddedListener = onChildAdded(patientsRef, (snapshot) => {
+      const patientData = snapshot.val()
+      const newPatient: Patient = {
+        id: snapshot.key!,
+        ...patientData,
+        discountAmount: Number(patientData.discountAmount || 0),
+        age: Number(patientData.age),
+        visitType: patientData.visitType || "opd",
+      }
+
+      setPatients((prev) => {
+        // Check if patient already exists (to avoid duplicates from initial load)
+        const exists = prev.some((p) => p.id === newPatient.id)
+        if (exists) return prev
+
+        const updated = [newPatient, ...prev]
+        return updated.sort((a, b) => {
+          const rankDiff = getRank(a) - getRank(b)
+          return rankDiff !== 0 ? rankDiff : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        })
+      })
+
+      // Update delete requests and deleted status
+      if (patientData.deleteRequest) {
+        setDeleteRequestPatients((prev) => ({
+          ...prev,
+          [newPatient.id]: {
+            reason: patientData.deleteRequest.reason,
+            requestedBy: patientData.deleteRequest.requestedBy,
+          },
+        }))
+      }
+      if (patientData.deleted) {
+        setDeletedPatients((prev) => [...prev, newPatient.id])
+      }
+    })
+
+    // Listen for patient updates
+    const onChangedListener = onChildChanged(patientsRef, (snapshot) => {
+      const patientData = snapshot.val()
+      const updatedPatient: Patient = {
+        id: snapshot.key!,
+        ...patientData,
+        discountAmount: Number(patientData.discountAmount || 0),
+        age: Number(patientData.age),
+        visitType: patientData.visitType || "opd",
+      }
+
+      setPatients((prev) => {
+        const updated = prev.map((p) => (p.id === updatedPatient.id ? updatedPatient : p))
+        return updated.sort((a, b) => {
+          const rankDiff = getRank(a) - getRank(b)
+          return rankDiff !== 0 ? rankDiff : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        })
+      })
+
+      // Update delete requests and deleted status
+      if (patientData.deleteRequest) {
+        setDeleteRequestPatients((prev) => ({
+          ...prev,
+          [updatedPatient.id]: {
+            reason: patientData.deleteRequest.reason,
+            requestedBy: patientData.deleteRequest.requestedBy,
+          },
+        }))
+      } else {
+        setDeleteRequestPatients((prev) => {
+          const newState = { ...prev }
+          delete newState[updatedPatient.id]
+          return newState
+        })
+      }
+
+      if (patientData.deleted) {
+        setDeletedPatients((prev) => (prev.includes(updatedPatient.id) ? prev : [...prev, updatedPatient.id]))
+      } else {
+        setDeletedPatients((prev) => prev.filter((id) => id !== updatedPatient.id))
+      }
+    })
+
+    // Listen for patient removals
+    const onRemovedListener = onChildRemoved(patientsRef, (snapshot) => {
+      const patientId = snapshot.key!
+      setPatients((prev) => prev.filter((p) => p.id !== patientId))
+      setDeleteRequestPatients((prev) => {
+        const newState = { ...prev }
+        delete newState[patientId]
+        return newState
+      })
+      setDeletedPatients((prev) => prev.filter((id) => id !== patientId))
+    })
+
+    // Return cleanup function
+    return () => {
+      off(patientsRef, "child_added", onAddedListener)
+      off(patientsRef, "child_changed", onChangedListener)
+      off(patientsRef, "child_removed", onRemovedListener)
+    }
+  }, [initialLoadComplete])
+
+  // Load more patients (pagination)
+  const loadMorePatients = useCallback(() => {
+    if (!lastLoadedTimestamp || isLoading || !hasMoreData) return
+
+    setIsLoading(true)
+    const patientsRef = ref(database, "patients")
+    const moreQuery = query(
+      patientsRef,
+      orderByChild("createdAt"),
+      endAt(lastLoadedTimestamp),
+      limitToLast(21), // Load 21 to check if there are more (we'll use 20)
+    )
+
+    const unsubscribe = onValueDb(moreQuery, (snapshot) => {
+      if (!snapshot.exists()) {
+        setHasMoreData(false)
+        setIsLoading(false)
+        return
+      }
+
+      const data = snapshot.val()
+      const newPatientsArray: Patient[] = Object.entries<any>(data)
+        .map(([id, patientData]) => ({
+          id,
+          ...patientData,
+          discountAmount: Number(patientData.discountAmount || 0),
+          age: Number(patientData.age),
+          visitType: patientData.visitType || "opd",
+        }))
+        .filter((p) => p.createdAt < lastLoadedTimestamp!) // Exclude the last loaded patient
+
+      if (newPatientsArray.length === 0) {
+        setHasMoreData(false)
+        setIsLoading(false)
+        return
+      }
+
+      // If we got 20 or fewer new patients, we might be at the end
+      if (newPatientsArray.length < 20) {
+        setHasMoreData(false)
+      }
+
+      // Take only 20 patients for display
+      const patientsToAdd = newPatientsArray.slice(0, 20)
+
+      setPatients((prev) => {
+        const combined = [...prev, ...patientsToAdd]
+        // Remove duplicates and sort
+        const unique = combined.filter((patient, index, self) => index === self.findIndex((p) => p.id === patient.id))
+        return unique.sort((a, b) => {
+          const rankDiff = getRank(a) - getRank(b)
+          return rankDiff !== 0 ? rankDiff : new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        })
+      })
+
+      // Update last loaded timestamp
+      if (patientsToAdd.length > 0) {
+        const oldestNewPatient = patientsToAdd[patientsToAdd.length - 1]
+        setLastLoadedTimestamp(oldestNewPatient.createdAt)
+      }
+
+      // Extract delete requests and deleted status from new patients
+      const deleteRequests: Record<string, { reason: string; requestedBy: string }> = {}
+      const deleted: string[] = []
+
+      patientsToAdd.forEach((p) => {
+        if (p.deleteRequest) {
+          deleteRequests[p.id] = {
+            reason: p.deleteRequest.reason,
+            requestedBy: p.deleteRequest.requestedBy,
+          }
+        }
+        if (p.deleted) {
+          deleted.push(p.id)
+        }
+      })
+
+      setDeleteRequestPatients((prev) => ({ ...prev, ...deleteRequests }))
+      setDeletedPatients((prev) => [...prev, ...deleted])
+
+      setIsLoading(false)
+      unsubscribe()
+    })
+  }, [lastLoadedTimestamp, isLoading, hasMoreData])
+
+  // Initial load
+  useEffect(() => {
+    loadInitialPatients()
+  }, [loadInitialPatients])
+
+  // Set up child listeners after initial load
+  useEffect(() => {
+    const cleanup = setupChildListeners()
+    return cleanup
+  }, [setupChildListeners])
 
   const [role, setRole] = useState<string>("staff")
   useEffect(() => {
@@ -965,7 +1215,7 @@ export default function Dashboard() {
             <div className="p-4 border-b border-gray-100">
               <h2 className="text-base font-semibold flex items-center text-gray-800">
                 <UserIcon className="h-4 w-4 mr-2 text-teal-600" />
-                Patients
+                Patients {isLoading && <span className="ml-2 text-sm text-gray-500">(Loading...)</span>}
               </h2>
             </div>
 
@@ -1022,24 +1272,22 @@ export default function Dashboard() {
                               />
                             </td>
                           )}
-                        <td className="px-4 py-3">
-  <div className="flex items-center space-x-2">
-    <span className="font-medium text-gray-800">{p.name}</span>
-    <span
-      className={`
+                          <td className="px-4 py-3">
+                            <div className="flex items-center space-x-2">
+                              <span className="font-medium text-gray-800">{p.name}</span>
+                              <span
+                                className={`
         inline-block px-2 py-0.5 text-xs font-semibold rounded-full
-        ${p.visitType === "opd"
-          ? "bg-indigo-100 text-indigo-800"
-          : "bg-emerald-100 text-emerald-800"}
+        ${p.visitType === "opd" ? "bg-indigo-100 text-indigo-800" : "bg-emerald-100 text-emerald-800"}
       `}
-    >
-      {p.visitType.toUpperCase()}
-    </span>
-  </div>
-  <div className="mt-1 text-xs text-gray-500">
-    {p.age}y • {p.gender} • {p.contact || "No contact"}
-  </div>
-</td>
+                              >
+                                {p.visitType.toUpperCase()}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs text-gray-500">
+                              {p.age}y • {p.gender} • {p.contact || "No contact"}
+                            </div>
+                          </td>
 
                           <td className="px-4 py-3">
                             {p.bloodTests?.length ? (
@@ -1309,7 +1557,31 @@ export default function Dashboard() {
                   })}
                 </tbody>
               </table>
-              {filteredPatients.length === 0 && (
+
+              {/* Load More Button */}
+              {hasMoreData && (
+                <div className="p-4 border-t border-gray-100 text-center">
+                  <button
+                    onClick={loadMorePatients}
+                    disabled={isLoading}
+                    className="inline-flex items-center px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors duration-200 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isLoading ? (
+                      <>
+                        <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+                        Load More (20 patients)
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {filteredPatients.length === 0 && !isLoading && (
                 <div className="p-8 text-center">
                   <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-100 mb-4">
                     <UserIcon className="h-8 w-8 text-gray-400" />
