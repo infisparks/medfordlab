@@ -101,6 +101,9 @@ const parseRangeKey = (key: string) => {
 };
 const isNumeric = (s: string) => !isNaN(+s) && isFinite(+s);
 
+/* ---- Helper to format numbers with up to 3 decimals, dropping trailing zeros ---- */
+const fmt3 = (n: number) => n.toFixed(3).replace(/\.?0+$/, "");
+
 /* ---------- dropdown position helper ---------- */
 interface SuggestPos {
   t: number;
@@ -132,6 +135,7 @@ const BloodValuesForm: React.FC = () => {
     defaultValues: { patientId: patientId || "", tests: [] },
   });
 
+  /* ── Fetch autocomplete values ── */
   useEffect(() => {
     (async () => {
       try {
@@ -143,6 +147,7 @@ const BloodValuesForm: React.FC = () => {
     })();
   }, []);
 
+  /* ── Fetch patient’s booked tests and definitions ── */
   useEffect(() => {
     if (!patientId) return;
     (async () => {
@@ -259,8 +264,7 @@ const BloodValuesForm: React.FC = () => {
     })();
   }, [patientId, reset]);
 
-  // ══════════════ Removed auto-truncate effect ══════════════
-  // We only keep the “sum to 100” warning logic here, no forced .toFixed(2).
+  /* ══════════════ “Sum to 100” warning logic ══════════════ */
   const testsWatch = watch("tests");
   useEffect(() => {
     const warn: Record<string, boolean> = {};
@@ -284,7 +288,7 @@ const BloodValuesForm: React.FC = () => {
     setWarn100(warn);
   }, [testsWatch]);
 
-  // ══════════════ Formula recalculation on Shift key (no .toFixed) ══════════════
+  /* ══════════════ Formula recalculation on Shift key ══════════════ */
   useEffect(() => {
     const runAll = () => {
       const tArr = watch("tests");
@@ -308,7 +312,7 @@ const BloodValuesForm: React.FC = () => {
               if (!isNaN(r)) {
                 setValue(
                   `tests.${tIdx}.parameters.${pIdx}.value`,
-                  String(r), // preserve full precision
+                  fmt3(r),
                   { shouldValidate: false }
                 );
               }
@@ -322,9 +326,14 @@ const BloodValuesForm: React.FC = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [watch, setValue]);
 
+  /* ══════════════ Numeric Change: allow up to 3 decimal places ══════════════ */
   const numericChange = (v: string, t: number, p: number, sp?: number) => {
-    if (v !== "" && v !== "-" && !isNumeric(v)) return;
-
+    if (v === "" || v === "-") {
+      // allow empty or single minus
+    } else {
+      const regex = /^-?\d*(\.\d{0,3})?$/;
+      if (!regex.test(v)) return;
+    }
     const path =
       sp == null
         ? `tests.${t}.parameters.${p}.value`
@@ -332,6 +341,7 @@ const BloodValuesForm: React.FC = () => {
     setValue(path as Path<BloodValuesFormInputs>, v, { shouldValidate: false });
   };
 
+  /* ══════════════ Build suggestions for text inputs ══════════════ */
   const buildMatches = (param: TestParameterValue, q: string): string[] => {
     if (Array.isArray(param.suggestions) && param.suggestions.length > 0) {
       const pool = param.suggestions.map((s) => s.description);
@@ -370,7 +380,7 @@ const BloodValuesForm: React.FC = () => {
     setShowSug(null);
   };
 
-  // ══════════════ Single‐formula calculation (no .toFixed) ══════════════
+  /* ══════════════ Single‐formula calculation via button ══════════════ */
   const calcFormulaOnce = (tIdx: number, pIdx: number) => {
     const data = watch("tests")[tIdx];
     const p = data.parameters[pIdx];
@@ -390,13 +400,11 @@ const BloodValuesForm: React.FC = () => {
     try {
       const r = Function('"use strict";return (' + expr + ")")();
       if (!isNaN(r))
-        setValue(
-          `tests.${tIdx}.parameters.${pIdx}.value`,
-          String(r) // preserve full precision
-        );
+        setValue(`tests.${tIdx}.parameters.${pIdx}.value`, fmt3(r));
     } catch {}
   };
 
+  /* ══════════════ Handle “fill remaining” for subheadings that sum to 100 ══════════════ */
   const fillRemaining = (tIdx: number, sh: SubHeading, lastIdx: number) => {
     const test = watch("tests")[tIdx];
     const idxs = sh.parameterNames
@@ -412,11 +420,12 @@ const BloodValuesForm: React.FC = () => {
     const integerValue = Math.round(remainder);
     setValue(
       `tests.${tIdx}.parameters.${lastIdx}.value`,
-      integerValue.toString(), // no “.00”
+      integerValue.toString(),
       { shouldValidate: false }
     );
   };
 
+  /* ══════════════ Submit handler: write back to Firebase ══════════════ */
   const onSubmit: SubmitHandler<BloodValuesFormInputs> = async (data) => {
     try {
       const fullEmail = auth.currentUser?.email ?? "";
@@ -479,6 +488,7 @@ const BloodValuesForm: React.FC = () => {
     }
   };
 
+  /* ── Early returns for missing patientId or loading ── */
   if (!patientId)
     return (
       <CenterCard icon={FiUser} title="Patient Not Found">
@@ -689,6 +699,7 @@ const BloodValuesForm: React.FC = () => {
   );
 };
 
+/* ─────────────────── ParamRow Component ─────────────────── */
 interface RowProps {
   tIdx: number;
   pIdx: number;
@@ -838,6 +849,7 @@ const ParamRow: React.FC<RowProps> = ({
   );
 };
 
+/* ─────────────────── CenterCard Component ─────────────────── */
 const CenterCard: React.FC<{
   icon: any;
   title?: string;

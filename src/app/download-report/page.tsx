@@ -1,5 +1,6 @@
 "use client"
 
+import type React from "react"
 import { Suspense, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { jsPDF } from "jspdf"
@@ -11,6 +12,7 @@ import letterhead from "../../../public/letterhead.png"
 import firstpage from "../../../public/first.png"
 import stamp from "../../../public/stamp.png"
 import stamp2 from "../../../public/stamp2.png"
+
 // -----------------------------
 // Type Definitions
 // -----------------------------
@@ -50,6 +52,13 @@ export interface PatientData {
   bloodtest?: Record<string, BloodTestData>
   dayType?: string
   title?: string
+}
+
+// Combined Test Group interface
+interface CombinedTestGroup {
+  id: string
+  name: string
+  tests: string[]
 }
 
 // -----------------------------
@@ -139,6 +148,11 @@ const formatDMY = (date: Date | string) => {
   return `${day}/${month}/${year}, ${hrsStr}:${mins} ${ampm}`
 }
 
+// Generate a unique ID
+const generateId = () => {
+  return Math.random().toString(36).substring(2, 9)
+}
+
 // -----------------------------
 // Component
 // -----------------------------
@@ -161,6 +175,12 @@ function DownloadReport() {
   const [isSendingGraphReport, setIsSendingGraphReport] = useState(false)
   const [selectedTests, setSelectedTests] = useState<string[]>([])
 
+  // State for combined test groups
+  const [combinedGroups, setCombinedGroups] = useState<CombinedTestGroup[]>([])
+  const [showCombineInterface, setShowCombineInterface] = useState(false)
+  const [draggedTest, setDraggedTest] = useState<string | null>(null)
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
+
   // State for updating reportedOn time
   const [updateTimeModal, setUpdateTimeModal] = useState<{
     isOpen: boolean
@@ -182,9 +202,9 @@ function DownloadReport() {
   })
 
   const [updateRegistrationTimeModal, setUpdateRegistrationTimeModal] = useState({
-  isOpen: false,
-  currentTime: "",
-});
+    isOpen: false,
+    currentTime: "",
+  })
 
   // Fetch patient data
   useEffect(() => {
@@ -194,34 +214,30 @@ function DownloadReport() {
         const snap = await get(dbRef(database, `patients/${patientId}`))
         if (!snap.exists()) return alert("Patient not found")
 
-          const data = snap.val() as PatientData
-          if (!data.bloodtest) return alert("No report found.")
-          
-          // 1) fetch the shared descriptions for each test from /bloodTests/<testKey>/descriptions
+        const data = snap.val() as PatientData
+        if (!data.bloodtest) return alert("No report found.")
+
+        // 1) fetch the shared descriptions for each test from /bloodTests/<testKey>/descriptions
         // inside your useEffect, after you pull down `data`:
         await Promise.all(
-               Object.keys(data.bloodtest).map(async (testKey) => {
-                 // read descriptions from /bloodTests/{testKey}/descriptions
-                 const rec = data.bloodtest![testKey]
-                
-                 const defSnap = await get(
-                  dbRef(database, `bloodTests/${rec.testId}/descriptions`)
-                )
-                if (defSnap.exists()) {
-                  const raw = defSnap.val()
-                  const arr = Array.isArray(raw) ? raw : Object.values(raw)
-                  rec.descriptions = arr as { heading: string; content: string }[]
-                }
-              })
-            )
+          Object.keys(data.bloodtest).map(async (testKey) => {
+            // read descriptions from /bloodTests/{testKey}/descriptions
+            const rec = data.bloodtest![testKey]
 
-          
-          // 2) then filter out hidden parameters as before
-          data.bloodtest = hideInvisible(data)
-          
-          // 3) finally set into state
-          setPatientData(data)
-          
+            const defSnap = await get(dbRef(database, `bloodTests/${rec.testId}/descriptions`))
+            if (defSnap.exists()) {
+              const raw = defSnap.val()
+              const arr = Array.isArray(raw) ? raw : Object.values(raw)
+              rec.descriptions = arr as { heading: string; content: string }[]
+            }
+          })
+        )
+
+        // 2) then filter out hidden parameters as before
+        data.bloodtest = hideInvisible(data)
+
+        // 3) finally set into state
+        setPatientData(data)
       } catch (e) {
         console.error(e)
         alert("Error fetching patient.")
@@ -237,39 +253,38 @@ function DownloadReport() {
   }, [patientData])
 
   // Hide invisible parameters
- // Hide invisible parameters but preserve descriptions
-const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
-  const out: Record<string, BloodTestData> = {}
-  if (!d.bloodtest) return out
+  // Hide invisible parameters but preserve descriptions
+  const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
+    const out: Record<string, BloodTestData> = {}
+    if (!d.bloodtest) return out
 
-  for (const k in d.bloodtest) {
-    const t = d.bloodtest[k]
-    if (t.type === "outsource") continue
+    for (const k in d.bloodtest) {
+      const t = d.bloodtest[k]
+      if (t.type === "outsource") continue
 
-    const keptParams = Array.isArray(t.parameters)
-      ? t.parameters
-          .filter((p) => p.visibility !== "hidden")
-          .map((p) => ({
-            ...p,
-            subparameters: Array.isArray(p.subparameters)
-              ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
-              : [],
-          }))
-      : []
+      const keptParams = Array.isArray(t.parameters)
+        ? t.parameters
+            .filter((p) => p.visibility !== "hidden")
+            .map((p) => ({
+              ...p,
+              subparameters: Array.isArray(p.subparameters)
+                ? p.subparameters.filter((sp) => sp.visibility !== "hidden")
+                : [],
+            }))
+        : []
 
-    out[k] = {
-      ...t,
-      parameters: keptParams,
-      subheadings: t.subheadings,
-      reportedOn: t.reportedOn,
-      // 👇 make sure to carry your fetched descriptions through
-      descriptions: t.descriptions,
+      out[k] = {
+        ...t,
+        parameters: keptParams,
+        subheadings: t.subheadings,
+        reportedOn: t.reportedOn,
+        // 👇 make sure to carry your fetched descriptions through
+        descriptions: t.descriptions,
+      }
     }
+
+    return out
   }
-
-  return out
-}
-
 
   // Update reportedOn time for a test
   const updateReportedOnTime = (testKey: string) => {
@@ -318,82 +333,145 @@ const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
   }
 
   // Open modal to update sampleCollectedAt time
- const updateSampleCollectedTime = () => {
-  const currentTime = patientData?.sampleCollectedAt
-    ? toLocalDateTimeString(patientData.sampleCollectedAt)
-    : toLocalDateTimeString();
+  const updateSampleCollectedTime = () => {
+    const currentTime = patientData?.sampleCollectedAt
+      ? toLocalDateTimeString(patientData.sampleCollectedAt)
+      : toLocalDateTimeString()
 
-  setUpdateSampleTimeModal({
-    isOpen: true,
-    currentTime,
-  });
-}; 
-
-    // Open modal to update createdAt (registration time)
-// Open modal to update createdAt (Registration On)
-const updateRegistrationTime = () => {
-  const currentTime = patientData?.createdAt
-    ? toLocalDateTimeString(patientData.createdAt)
-    : toLocalDateTimeString();
-
-  setUpdateRegistrationTimeModal({
-    isOpen: true,
-    currentTime,
-  });
-};
-
-
-
-  
-
-  // Save updated sampleCollectedAt time
-  // Save updated sampleCollectedAt time
-const saveUpdatedSampleTime = async () => {
-  if (!patientData) return;
-
-  try {
-    // 1) Reference the patient node
-    const patientRef = dbRef(database, `patients/${patientId}`);
-    // 2) Convert picked datetime-local string to ISO
-    const newSampleAt = new Date(updateSampleTimeModal.currentTime).toISOString();
-    // 3) Write only sampleCollectedAt
-    await update(patientRef, { sampleCollectedAt: newSampleAt });
-    // 4) Sync local state
-    setPatientData((prev) =>
-      prev ? { ...prev, sampleCollectedAt: newSampleAt } : prev
-    );
-    // 5) Close modal
-    setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }));
-    // alert("Sample collected time updated successfully!");
-  } catch (error) {
-    console.error("Error updating sample collected time:", error);
-    alert("Failed to update sample collected time.");
+    setUpdateSampleTimeModal({
+      isOpen: true,
+      currentTime,
+    })
   }
-};
 
+  // Open modal to update createdAt (Registration On)
+  const updateRegistrationTime = () => {
+    const currentTime = patientData?.createdAt ? toLocalDateTimeString(patientData.createdAt) : toLocalDateTimeString()
+
+    setUpdateRegistrationTimeModal({
+      isOpen: true,
+      currentTime,
+    })
+  }
+
+  // Save updated sampleCollectedAt time
+  const saveUpdatedSampleTime = async () => {
+    if (!patientData) return
+
+    try {
+      // 1) Reference the patient node
+      const patientRef = dbRef(database, `patients/${patientId}`)
+      // 2) Convert picked datetime-local string to ISO
+      const newSampleAt = new Date(updateSampleTimeModal.currentTime).toISOString()
+      // 3) Write only sampleCollectedAt
+      await update(patientRef, { sampleCollectedAt: newSampleAt })
+      // 4) Sync local state
+      setPatientData((prev) => (prev ? { ...prev, sampleCollectedAt: newSampleAt } : prev))
+      // 5) Close modal
+      setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }))
+      // alert("Sample collected time updated successfully!");
+    } catch (error) {
+      console.error("Error updating sample collected time:", error)
+      alert("Failed to update sample collected time.")
+    }
+  }
 
   // Save updated registration time (createdAt)
-const saveUpdatedRegistrationTime = async () => {
-  if (!patientData) return;
+  const saveUpdatedRegistrationTime = async () => {
+    if (!patientData) return
 
-  try {
-    const patientRef = dbRef(database, `patients/${patientId}`);
-    const newCreatedAt = new Date(updateRegistrationTimeModal.currentTime).toISOString();
+    try {
+      const patientRef = dbRef(database, `patients/${patientId}`)
+      const newCreatedAt = new Date(updateRegistrationTimeModal.currentTime).toISOString()
 
-    await update(patientRef, { createdAt: newCreatedAt });
+      await update(patientRef, { createdAt: newCreatedAt })
 
-    setPatientData((prev) => (prev ? { ...prev, createdAt: newCreatedAt } : prev));
+      setPatientData((prev) => (prev ? { ...prev, createdAt: newCreatedAt } : prev))
 
-    setUpdateRegistrationTimeModal((prev) => ({ ...prev, isOpen: false }));
-    // alert("Registration time updated successfully!");
-  } catch (error) {
-    console.error("Error updating registration time:", error);
-    alert("Failed to update registration time.");
+      setUpdateRegistrationTimeModal((prev) => ({ ...prev, isOpen: false }))
+      // alert("Registration time updated successfully!");
+    } catch (error) {
+      console.error("Error updating registration time:", error)
+      alert("Failed to update registration time.")
+    }
   }
-};
+
+  // Add a new combined test group
+  const addCombinedGroup = () => {
+    const newGroup: CombinedTestGroup = {
+      id: generateId(),
+      name: `Combined Group ${combinedGroups.length + 1}`,
+      tests: [],
+    }
+    setCombinedGroups([...combinedGroups, newGroup])
+  }
+
+  // Remove a combined test group
+  const removeCombinedGroup = (groupId: string) => {
+    setCombinedGroups(combinedGroups.filter((group) => group.id !== groupId))
+  }
+
+  // Update group name
+  const updateGroupName = (groupId: string, newName: string) => {
+    setCombinedGroups(combinedGroups.map((group) => (group.id === groupId ? { ...group, name: newName } : group)))
+  }
+
+  // Handle drag start
+  const handleDragStart = (testKey: string) => {
+    setDraggedTest(testKey)
+  }
+
+  // Handle drag over
+  const handleDragOver = (e: React.DragEvent, groupId: string) => {
+    e.preventDefault()
+    setActiveGroupId(groupId)
+  }
+
+  // Handle drag leave
+  const handleDragLeave = () => {
+    setActiveGroupId(null)
+  }
+
+  // Handle drop
+  const handleDrop = (e: React.DragEvent, groupId: string) => {
+    e.preventDefault()
+    if (!draggedTest) return
+
+    // Find the group
+    const updatedGroups = combinedGroups.map((group) => {
+      if (group.id === groupId) {
+        // Only add the test if it's not already in the group
+        if (!group.tests.includes(draggedTest)) {
+          return {
+            ...group,
+            tests: [...group.tests, draggedTest],
+          }
+        }
+      }
+      return group
+    })
+
+    setCombinedGroups(updatedGroups)
+    setDraggedTest(null)
+    setActiveGroupId(null)
+  }
+
+  // Remove a test from a group
+  const removeTestFromGroup = (groupId: string, testKey: string) => {
+    setCombinedGroups(
+      combinedGroups.map((group) =>
+        group.id === groupId ? { ...group, tests: group.tests.filter((t) => t !== testKey) } : group
+      )
+    )
+  }
 
   // Generate PDF report
-  const generatePDFReport = async (data: PatientData, includeLetterhead: boolean, skipCover: boolean) => {
+  const generatePDFReport = async (
+    data: PatientData,
+    includeLetterhead: boolean,
+    skipCover: boolean,
+    combinedGroups: CombinedTestGroup[] = []
+  ) => {
     const doc = new jsPDF("p", "mm", "a4")
     let printedBy = "Unknown"
     const w = doc.internal.pageSize.getWidth()
@@ -434,16 +512,17 @@ const saveUpdatedRegistrationTime = async () => {
     }
 
     const addStamp = async () => {
-      const sw = 40, sh = 30
-      const sx = w - left - sw        // right-aligned
-      const cx = (w - sw) / 2        // centered
+      const sw = 40,
+        sh = 30
+      const sx = w - left - sw // right-aligned
+      const cx = (w - sw) / 2 // centered
       const sy = h - sh - 23
-    
+
       try {
         // load both as compressed JPEG
         const img1 = await loadImageAsCompressedJPEG(stamp2.src, 0.5)
         const img2 = await loadImageAsCompressedJPEG(stamp.src, 0.5)
-    
+
         // bottom-right stamp
         doc.addImage(img1, "JPEG", sx, sy, sw, sh)
         // centered stamp
@@ -451,7 +530,7 @@ const saveUpdatedRegistrationTime = async () => {
       } catch (e) {
         console.error("Stamp load error:", e)
       }
-    
+
       doc.setFont("helvetica", "normal").setFontSize(10)
       doc.text(`Printed by ${printedBy}`, left, sy + sh)
     }
@@ -586,11 +665,136 @@ const saveUpdatedRegistrationTime = async () => {
       }
     }
 
+    const printTest = (testKey: string, tData: BloodTestData) => {
+      doc.setDrawColor(0, 51, 102).setLineWidth(0.5)
+      doc.line(left, yPos, w - left, yPos)
+      doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(0, 51, 102)
+      doc.text(testKey.replace(/_/g, " ").toUpperCase(), w / 2, yPos + 8, { align: "center" })
+      yPos += 10
+
+      doc.setFontSize(10).setFillColor(0, 51, 102)
+      const rowH = 7
+      doc.rect(left, yPos, totalW, rowH, "F")
+      doc.setTextColor(255, 255, 255)
+      doc.text("PARAMETER", x1 + 2, yPos + 5)
+      doc.text("VALUE", x2 + 2, yPos + 5)
+      doc.text("UNIT", x3 + 2, yPos + 5)
+      doc.text("RANGE", x4 + 2, yPos + 5)
+
+      yPos += rowH + 2
+
+      const subheads = tData.subheadings ?? []
+      const subNames = subheads.flatMap((s) => s.parameterNames)
+      const globals = tData.parameters.filter((p) => !subNames.includes(p.name))
+
+      globals.forEach((g) => printRow(g))
+      subheads.forEach((sh) => {
+        const rows = tData.parameters.filter((p) => sh.parameterNames.includes(p.name))
+        if (!rows.length) return
+        doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(0, 51, 102)
+        doc.text(sh.title, x1, yPos + 5)
+        yPos += 6
+        rows.forEach((r) => printRow(r))
+      })
+      yPos += 3
+      if (Array.isArray(tData.descriptions) && tData.descriptions.length) {
+        // small gap before descriptions
+        yPos += 4
+
+        tData.descriptions.forEach(({ heading, content }) => {
+          // 1) Print bold heading + colon
+          const label = heading + ""
+          doc.setFont("helvetica", "bold").setFontSize(10)
+          doc.text(label, x1, yPos + lineH)
+
+          // 2) Print content in normal font, wrapping to remaining width
+          doc.setFont("helvetica", "normal").setFontSize(9)
+          // compute available width after label
+          const labelWidth = doc.getTextWidth(label + " ")
+          const contentWidth = totalW - labelWidth
+          const contentLines = doc.splitTextToSize(content, contentWidth)
+          // indent content so it starts just after the label
+          doc.text(contentLines, x1 + labelWidth + 2, yPos + lineH)
+
+          // advance yPos by the taller of label‐line or content lines
+          const linesPrinted = Math.max(1, contentLines.length)
+          yPos += linesPrinted * lineH + 2
+        })
+      }
+    }
+
     await addCover()
     if (!data.bloodtest) return doc.output("blob")
 
     let first = true
-    for (const testKey in data.bloodtest) {
+
+    // Process combined groups first (without printing the group heading)
+    for (const group of combinedGroups) {
+      if (group.tests.length === 0) continue
+
+      // Filter tests to only include those that are selected
+      const testsToInclude = group.tests.filter(
+        (testKey) => selectedTests.includes(testKey) && data.bloodtest![testKey]
+      )
+
+      if (testsToInclude.length === 0) continue
+
+      // Get the first test's enteredBy for printer name
+      const firstTestKey = testsToInclude[0]
+      const firstTest = data.bloodtest[firstTestKey]
+      let printerName = "Unknown"
+
+      if (firstTest.enteredBy) {
+        try {
+          const userSnap = await get(dbRef(database, `users/${firstTest.enteredBy}`))
+          if (userSnap.exists()) {
+            const usr = userSnap.val() as { name?: string }
+            printerName = usr.name || firstTest.enteredBy
+          } else {
+            printerName = firstTest.enteredBy
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error)
+          printerName = firstTest.enteredBy
+        }
+      }
+      printedBy = printerName
+
+      if (skipCover) {
+        if (!first) doc.addPage()
+      } else {
+        doc.addPage()
+      }
+      first = false
+
+      await addLetter()
+      // Use the first test's reportedOn for the header
+      yPos = headerY(firstTest.reportedOn)
+
+      // Print each test in the group (without any extra group heading)
+      for (const testKey of testsToInclude) {
+        const tData = data.bloodtest[testKey]
+        printTest(testKey, tData)
+        yPos += 10 // Add some space between tests
+      }
+
+      doc.setFont("helvetica", "italic").setFontSize(7).setTextColor(0)
+      doc.text(
+        "--------------------- END OF REPORT ---------------------",
+        w / 2,
+        yPos + 4,
+        { align: "center" }
+      )
+      yPos += 10
+    }
+
+    // Process remaining individual tests (that aren't in combined groups)
+    const combinedTestKeys = combinedGroups.flatMap((group) => group.tests)
+    const remainingTests = Object.keys(data.bloodtest).filter(
+      (key) => selectedTests.includes(key) && !combinedTestKeys.includes(key)
+    )
+
+    for (const testKey of remainingTests) {
       const tData = data.bloodtest[testKey]
       if (tData.type === "outsource" || !tData.parameters.length) continue
 
@@ -621,64 +825,15 @@ const saveUpdatedRegistrationTime = async () => {
       await addLetter()
       yPos = headerY(tData.reportedOn)
 
-      doc.setDrawColor(0, 51, 102).setLineWidth(0.5)
-      doc.line(left, yPos, w - left, yPos)
-      doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(0, 51, 102)
-      doc.text(testKey.replace(/_/g, " ").toUpperCase(), w / 2, yPos + 8, { align: "center" })
-      yPos += 10
+      printTest(testKey, tData)
 
-      doc.setFontSize(10).setFillColor(0, 51, 102)
-      const rowH = 7
-      doc.rect(left, yPos, totalW, rowH, "F")
-      doc.setTextColor(255, 255, 255)
-      doc.text("PARAMETER", x1 + 2, yPos + 5)
-      doc.text("VALUE", x2 + 2, yPos + 5)
-      doc.text("UNIT", x3 + 2, yPos + 5)
-      doc.text("RANGE", x4 + 2, yPos + 5)
-
-      yPos += rowH + 2
-      
-      const subheads = tData.subheadings ?? []
-      const subNames = subheads.flatMap((s) => s.parameterNames)
-      const globals = tData.parameters.filter((p) => !subNames.includes(p.name))
-
-      globals.forEach((g) => printRow(g))
-      subheads.forEach((sh) => {
-        const rows = tData.parameters.filter((p) => sh.parameterNames.includes(p.name))
-        if (!rows.length) return
-        doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(0, 51, 102)
-        doc.text(sh.title, x1, yPos + 5)
-        yPos += 6
-        rows.forEach((r) => printRow(r))
-      })
-      yPos += 3
-      if (Array.isArray(tData.descriptions) && tData.descriptions.length) {
-        // small gap before descriptions
-        yPos += 4
-      
-        tData.descriptions.forEach(({ heading, content }) => {
-          // 1) Print bold heading + colon
-          const label = heading + ""
-          doc.setFont("helvetica", "bold").setFontSize(10)
-          doc.text(label, x1, yPos + lineH)
-      
-          // 2) Print content in normal font, wrapping to remaining width
-          doc.setFont("helvetica", "normal").setFontSize(9)
-          // compute available width after label
-          const labelWidth = doc.getTextWidth(label + " ")
-          const contentWidth = totalW - labelWidth
-          const contentLines = doc.splitTextToSize(content, contentWidth)
-          // indent content so it starts just after the label
-          doc.text(contentLines, x1 + labelWidth + 2, yPos + lineH)
-      
-          // advance yPos by the taller of label‐line or content lines
-          const linesPrinted = Math.max(1, contentLines.length)
-          yPos += linesPrinted * lineH + 2
-        })
-      }
-      
       doc.setFont("helvetica", "italic").setFontSize(7).setTextColor(0)
-      doc.text("--------------------- END OF REPORT ---------------------", w / 2, yPos + 4, { align: "center" })
+      doc.text(
+        "--------------------- END OF REPORT ---------------------",
+        w / 2,
+        yPos + 4,
+        { align: "center" }
+      )
       yPos += 10
     }
 
@@ -698,10 +853,10 @@ const saveUpdatedRegistrationTime = async () => {
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key)),
+        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key))
       ),
     }
-    const blob = await generatePDFReport(filteredData, true, true)
+    const blob = await generatePDFReport(filteredData, true, true, combinedGroups)
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
@@ -715,10 +870,10 @@ const saveUpdatedRegistrationTime = async () => {
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key)),
+        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key))
       ),
     }
-    const blob = await generatePDFReport(filteredData, false, true)
+    const blob = await generatePDFReport(filteredData, false, true, combinedGroups)
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
@@ -732,11 +887,11 @@ const saveUpdatedRegistrationTime = async () => {
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key)),
+        Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key))
       ),
     }
     try {
-      const blob = await generatePDFReport(filteredData, withLetter, true)
+      const blob = await generatePDFReport(filteredData, withLetter, true, combinedGroups)
       const url = URL.createObjectURL(blob)
       window.open(url, "_blank")
       setTimeout(() => URL.revokeObjectURL(url), 10_000)
@@ -753,10 +908,10 @@ const saveUpdatedRegistrationTime = async () => {
       const filteredData: PatientData = {
         ...patientData,
         bloodtest: Object.fromEntries(
-          Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key)),
+          Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key))
         ),
       }
-      const blob = await generatePDFReport(filteredData, true, false)
+      const blob = await generatePDFReport(filteredData, true, false, combinedGroups)
       const store = getStorage()
       const filename = `reports/${filteredData.name}.pdf`
       const snap = await uploadBytes(storageRef(store, filename), blob)
@@ -836,39 +991,38 @@ const saveUpdatedRegistrationTime = async () => {
             {/* Report Actions Card */}
             <div className="bg-white rounded-xl shadow-lg p-8 space-y-4 col-span-1 md:col-span-2">
               <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">Report Ready</h2>
-{/* Registration On Display and Update Button */}
-<div className="p-4 bg-gray-100 rounded-lg">
-  <div className="flex items-center justify-between">
-    <div>
-      <p className="text-sm font-medium text-gray-700">Registration On:</p>
-      <p className="text-sm text-gray-600">
-        {patientData.createdAt ? format12Hour(patientData.createdAt) : "Not set"}
-      </p>
-    </div>
-    <button
-      onClick={updateRegistrationTime}
-      className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
-    >
-      {/* pencil icon */}
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        className="h-4 w-4 mr-1"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={2}
-          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-        />
-      </svg>
-      Update Time
-    </button>
-  </div>
-</div>
-
+              {/* Registration On Display and Update Button */}
+              <div className="p-4 bg-gray-100 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">Registration On:</p>
+                    <p className="text-sm text-gray-600">
+                      {patientData.createdAt ? format12Hour(patientData.createdAt) : "Not set"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={updateRegistrationTime}
+                    className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
+                  >
+                    {/* pencil icon */}
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4 mr-1"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                      />
+                    </svg>
+                    Update Time
+                  </button>
+                </div>
+              </div>
 
               {/* Sample Collected On Display and Update Button */}
               <div className="p-4 bg-gray-100 rounded-lg">
@@ -940,7 +1094,7 @@ const saveUpdatedRegistrationTime = async () => {
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"
                     />
                   </svg>
                   <span>Download PDF (No letterhead)</span>
@@ -1161,7 +1315,47 @@ const saveUpdatedRegistrationTime = async () => {
 
             {/* Test Selection Card */}
             <div className="bg-white rounded-xl shadow-lg p-6 col-span-1 md:col-span-2">
-              <h3 className="text-lg font-semibold mb-4 text-gray-800">Select Tests to Include</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-800">Select Tests to Include</h3>
+                <button
+                  onClick={() => setShowCombineInterface(!showCombineInterface)}
+                  className="flex items-center text-sm font-medium px-4 py-2 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors"
+                >
+                  {showCombineInterface ? (
+                    <>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-4 w-4 mr-1"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Hide Combine Interface
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-4 w-4 mr-1"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                        />
+                      </svg>
+                      Combine Tests
+                    </>
+                  )}
+                </button>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {patientData?.bloodtest &&
                   Object.keys(patientData.bloodtest).map((testKey) => {
@@ -1175,6 +1369,8 @@ const saveUpdatedRegistrationTime = async () => {
                         className={`flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 ${
                           isStoolTest ? "border-amber-300 bg-amber-50 hover:bg-amber-100" : ""
                         }`}
+                        draggable={showCombineInterface}
+                        onDragStart={() => handleDragStart(testKey)}
                       >
                         <div className="flex items-start space-x-3">
                           <input
@@ -1184,7 +1380,7 @@ const saveUpdatedRegistrationTime = async () => {
                             checked={selectedTests.includes(testKey)}
                             onChange={() => {
                               setSelectedTests((prev) =>
-                                prev.includes(testKey) ? prev.filter((k) => k !== testKey) : [...prev, testKey],
+                                prev.includes(testKey) ? prev.filter((k) => k !== testKey) : [...prev, testKey]
                               )
                             }}
                           />
@@ -1232,6 +1428,144 @@ const saveUpdatedRegistrationTime = async () => {
                   })}
               </div>
             </div>
+
+            {/* Combined Tests Interface */}
+            {showCombineInterface && (
+              <div className="bg-white rounded-xl shadow-lg p-6 col-span-1 md:col-span-2">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-semibold text-gray-800">Combine Tests</h3>
+                  <button
+                    onClick={addCombinedGroup}
+                    className="flex items-center text-sm font-medium px-4 py-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 transition-colors"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4 mr-1"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                      />
+                    </svg>
+                    Add Group
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  {combinedGroups.length === 0 ? (
+                    <div className="text-center p-8 border-2 border-dashed border-gray-300 rounded-lg">
+                      <p className="text-gray-500">Click "Add Group" to create a new combined test group</p>
+                      <p className="text-sm text-gray-400 mt-2">
+                        You can drag and drop tests into groups to combine them in the report
+                      </p>
+                    </div>
+                  ) : (
+                    combinedGroups.map((group) => (
+                      <div
+                        key={group.id}
+                        className={`p-4 border-2 ${
+                          activeGroupId === group.id ? "border-purple-400 bg-purple-50" : "border-gray-200"
+                        } rounded-lg`}
+                        onDragOver={(e) => handleDragOver(e, group.id)}
+                        onDragLeave={handleDragLeave}
+                        onDrop={(e) => handleDrop(e, group.id)}
+                      >
+                        <div className="flex justify-between items-center mb-3">
+                          <div className="flex-1 mr-2">
+                            <input
+                              type="text"
+                              value={group.name}
+                              onChange={(e) => updateGroupName(group.id, e.target.value)}
+                              className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                              placeholder="Group Name"
+                            />
+                          </div>
+                          <button
+                            onClick={() => removeCombinedGroup(group.id)}
+                            className="p-1 text-red-500 hover:text-red-700 rounded-full hover:bg-red-50"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              className="h-5 w-5"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M6 18L18 6M6 6l12 12"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+
+                        <div className="min-h-[100px] p-3 bg-gray-50 rounded-lg">
+                          {group.tests.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                              Drag tests here to combine them
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {group.tests.map((testKey) => (
+                                <div
+                                  key={testKey}
+                                  className="flex justify-between items-center p-2 bg-white rounded border"
+                                >
+                                  <span className="text-sm font-medium">
+                                    {testKey.replace(/_/g, " ").toUpperCase()}
+                                  </span>
+                                  <button
+                                    onClick={() => removeTestFromGroup(group.id, testKey)}
+                                    className="text-gray-500 hover:text-red-500"
+                                  >
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      className="h-4 w-4"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                      stroke="currentColor"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M6 18L18 6M6 6l12 12"
+                                      />
+                                    </svg>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mt-2 text-xs text-gray-500">
+                          <span className="font-medium">Tip:</span> Drag tests from the list above to add them to this
+                          group
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {combinedGroups.length > 0 && (
+                  <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <h4 className="font-medium text-yellow-800 mb-1">How Combined Tests Work</h4>
+                    <p className="text-sm text-yellow-700">
+                      Tests in the same group will be printed sequentially on the same page in the PDF report,
+                      each with its own heading and values.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="text-center bg-white p-8 rounded-xl shadow-lg">
@@ -1243,54 +1577,46 @@ const saveUpdatedRegistrationTime = async () => {
           </div>
         )}
 
-{/* Update Registration Time Modal */}
-{updateRegistrationTimeModal.isOpen && (
-  <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-    <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
-      <button
-        onClick={() => setUpdateRegistrationTimeModal((p) => ({ ...p, isOpen: false }))}
-        className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
-      >
-        ✕
-      </button>
-      <h3 className="text-lg font-semibold mb-4">
-        Update Registration Time for {patientData?.name}
-      </h3>
-      <label className="block text-sm font-medium text-gray-700 mb-2">
-        Registration Date & Time
-      </label>
-      <input
-        type="datetime-local"
-        value={updateRegistrationTimeModal.currentTime}
-        onChange={(e) =>
-          setUpdateRegistrationTimeModal((p) => ({ ...p, currentTime: e.target.value }))
-        }
-        max={toLocalDateTimeString()}
-        className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
-      />
-      <p className="mt-2 text-sm text-gray-600">
-        Selected:{" "}
-        {updateRegistrationTimeModal.currentTime
-          ? format12Hour(updateRegistrationTimeModal.currentTime)
-          : ""}
-      </p>
-      <div className="mt-6 flex justify-end space-x-2">
-        <button
-          onClick={() => setUpdateRegistrationTimeModal((p) => ({ ...p, isOpen: false }))}
-          className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={saveUpdatedRegistrationTime}
-          className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
-        >
-          Save
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+        {/* Update Registration Time Modal */}
+        {updateRegistrationTimeModal.isOpen && (
+          <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+            <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6 relative">
+              <button
+                onClick={() => setUpdateRegistrationTimeModal((p) => ({ ...p, isOpen: false }))}
+                className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+              <h3 className="text-lg font-semibold mb-4">Update Registration Time for {patientData?.name}</h3>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Registration Date & Time</label>
+              <input
+                type="datetime-local"
+                value={updateRegistrationTimeModal.currentTime}
+                onChange={(e) => setUpdateRegistrationTimeModal((p) => ({ ...p, currentTime: e.target.value }))}
+                max={toLocalDateTimeString()}
+                className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-2 text-sm text-gray-600">
+                Selected:{" "}
+                {updateRegistrationTimeModal.currentTime ? format12Hour(updateRegistrationTimeModal.currentTime) : ""}
+              </p>
+              <div className="mt-6 flex justify-end space-x-2">
+                <button
+                  onClick={() => setUpdateRegistrationTimeModal((p) => ({ ...p, isOpen: false }))}
+                  className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveUpdatedRegistrationTime}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Update ReportedOn Time Modal */}
         {updateTimeModal.isOpen && (
