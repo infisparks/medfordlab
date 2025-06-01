@@ -10,7 +10,7 @@ import {
   Path,
 } from "react-hook-form";
 import { useSearchParams, useRouter } from "next/navigation";
-import { database ,auth  } from "../../../firebase";
+import { database, auth } from "../../../firebase";
 import { ref, get, set } from "firebase/database";
 import {
   FiDroplet,
@@ -99,7 +99,6 @@ const parseRangeKey = (key: string) => {
   const mul = unit === "y" ? 365 : unit === "m" ? 30 : 1;
   return { lower: l * mul, upper: u * mul };
 };
-const round2 = (n: number) => +n.toFixed(2);
 const isNumeric = (s: string) => !isNaN(+s) && isFinite(+s);
 
 /* ---------- dropdown position helper ---------- */
@@ -192,11 +191,11 @@ const BloodValuesForm: React.FC = () => {
               }
               if (!normal && ranges.length) normal = ranges[ranges.length - 1].rangeValue;
 
-               const testKey = def.testName
-                 .toLowerCase()
-                 .replace(/\s+/g, "_")
-                 .replace(/[.#$[\]]/g, "");
-                 
+              const testKey = def.testName
+                .toLowerCase()
+                .replace(/\s+/g, "_")
+                .replace(/[.#$[\]]/g, "");
+
               const saved = stored?.[testKey]?.parameters?.find((q: any) => q.name === p.name);
 
               let subps;
@@ -227,10 +226,10 @@ const BloodValuesForm: React.FC = () => {
                 name: p.name,
                 unit: p.unit,
                 value: saved
-     ? saved.value
-     : (p.defaultValue !== undefined
-         ? p.defaultValue
-                  : ""),
+                  ? saved.value
+                  : p.defaultValue !== undefined
+                  ? p.defaultValue
+                  : "",
                 range: normal,
                 formula: p.formula || "",
                 valueType: p.valueType || "number",
@@ -260,6 +259,32 @@ const BloodValuesForm: React.FC = () => {
     })();
   }, [patientId, reset]);
 
+  // ══════════════ Removed auto-truncate effect ══════════════
+  // We only keep the “sum to 100” warning logic here, no forced .toFixed(2).
+  const testsWatch = watch("tests");
+  useEffect(() => {
+    const warn: Record<string, boolean> = {};
+
+    testsWatch.forEach((t, tIdx) => {
+      t.subheadings?.forEach((sh, shIdx) => {
+        if (!(sh.is100 === true || sh.is100 === "true")) return;
+        const tag = `${tIdx}-${shIdx}`;
+        const idxs = sh.parameterNames
+          .map((n) => t.parameters.findIndex((p) => p.name === n))
+          .filter((i) => i >= 0);
+        let sum = 0;
+        idxs.forEach((i) => {
+          const v = +testsWatch[tIdx].parameters[i].value;
+          if (!isNaN(v)) sum += v;
+        });
+        warn[tag] = sum > 100.0001;
+      });
+    });
+
+    setWarn100(warn);
+  }, [testsWatch]);
+
+  // ══════════════ Formula recalculation on Shift key (no .toFixed) ══════════════
   useEffect(() => {
     const runAll = () => {
       const tArr = watch("tests");
@@ -273,14 +298,19 @@ const BloodValuesForm: React.FC = () => {
           if (p.formula && p.valueType === "number") {
             let expr = p.formula;
             Object.entries(nums).forEach(([k, v]) => {
-              expr = expr.replace(new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), v + "");
+              expr = expr.replace(
+                new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+                v + ""
+              );
             });
             try {
               const r = Function('"use strict";return (' + expr + ")")();
               if (!isNaN(r)) {
-                setValue(`tests.${tIdx}.parameters.${pIdx}.value`, round2(+r).toFixed(2), {
-                  shouldValidate: false,
-                });
+                setValue(
+                  `tests.${tIdx}.parameters.${pIdx}.value`,
+                  String(r), // preserve full precision
+                  { shouldValidate: false }
+                );
               }
             } catch {}
           }
@@ -291,40 +321,6 @@ const BloodValuesForm: React.FC = () => {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [watch, setValue]);
-
-  const testsWatch = watch("tests");
-  useEffect(() => {
-    const clone = JSON.parse(JSON.stringify(testsWatch)) as TestValueEntry[];
-    const warn: Record<string, boolean> = {};
-    let dirty = false;
-    clone.forEach((t, tIdx) => {
-      t.parameters.forEach((p, pIdx) => {
-        if (String(p.value).includes(".")) {
-                   const vs = (+p.value).toFixed(2)
-                   if (String(p.value) !== vs) {
-                     clone[tIdx].parameters[pIdx].value = vs
-                     dirty = true
-                   }
-                 }
-      });
-
-      t.subheadings?.forEach((sh, shIdx) => {
-        if (!(sh.is100 === true || sh.is100 === "true")) return;
-        const tag = `${tIdx}-${shIdx}`;
-        const idxs = sh.parameterNames
-          .map((n) => t.parameters.findIndex((p) => p.name === n))
-          .filter((i) => i >= 0);
-        let sum = 0;
-        idxs.forEach((i) => {
-          const v = +clone[tIdx].parameters[i].value;
-          if (!isNaN(v)) sum += v;
-        });
-        warn[tag] = sum > 100.0001;
-      });
-    });
-    if (dirty) setValue("tests", clone, { shouldValidate: false });
-    setWarn100(warn);
-  }, [testsWatch, setValue]);
 
   const numericChange = (v: string, t: number, p: number, sp?: number) => {
     if (v !== "" && v !== "-" && !isNumeric(v)) return;
@@ -374,6 +370,7 @@ const BloodValuesForm: React.FC = () => {
     setShowSug(null);
   };
 
+  // ══════════════ Single‐formula calculation (no .toFixed) ══════════════
   const calcFormulaOnce = (tIdx: number, pIdx: number) => {
     const data = watch("tests")[tIdx];
     const p = data.parameters[pIdx];
@@ -385,12 +382,18 @@ const BloodValuesForm: React.FC = () => {
     });
     let expr = p.formula;
     Object.entries(nums).forEach(([k, v]) => {
-      expr = expr.replace(new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), v + "");
+      expr = expr.replace(
+        new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+        v + ""
+      );
     });
     try {
       const r = Function('"use strict";return (' + expr + ")")();
       if (!isNaN(r))
-        setValue(`tests.${tIdx}.parameters.${pIdx}.value`, round2(+r).toFixed(2));
+        setValue(
+          `tests.${tIdx}.parameters.${pIdx}.value`,
+          String(r) // preserve full precision
+        );
     } catch {}
   };
 
@@ -409,7 +412,7 @@ const BloodValuesForm: React.FC = () => {
     const integerValue = Math.round(remainder);
     setValue(
       `tests.${tIdx}.parameters.${lastIdx}.value`,
-      integerValue.toString(),        // no “.00”
+      integerValue.toString(), // no “.00”
       { shouldValidate: false }
     );
   };
@@ -419,7 +422,10 @@ const BloodValuesForm: React.FC = () => {
       const fullEmail = auth.currentUser?.email ?? "";
       const enteredBy = fullEmail.split("@")[0];
       for (const t of data.tests) {
-        const key = t.testName.toLowerCase().replace(/\s+/g, "_").replace(/[.#$[\]]/g, "");
+        const key = t.testName
+          .toLowerCase()
+          .replace(/\s+/g, "_")
+          .replace(/[.#$[\]]/g, "");
         const now = new Date().toISOString();
         const testRef = ref(database, `patients/${data.patientId}/bloodtest/${key}`);
         const existingSnap = await get(testRef);
@@ -435,13 +441,19 @@ const BloodValuesForm: React.FC = () => {
               if (p.valueType === "number" && p.value !== "") {
                 const strValue = String(p.value);
                 const numValue = +p.value;
-                obj.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
+                obj.value =
+                  strValue.includes(".") && strValue.endsWith("0")
+                    ? strValue
+                    : numValue;
               }
               subs.forEach((sp) => {
                 if (sp.valueType === "number" && sp.value !== "") {
                   const strValue = String(sp.value);
                   const numValue = +sp.value;
-                  sp.value = strValue.includes('.') && strValue.endsWith('0') ? strValue : numValue;
+                  sp.value =
+                    strValue.includes(".") && strValue.endsWith("0")
+                      ? strValue
+                      : numValue;
                 }
               });
               return obj;
@@ -578,7 +590,8 @@ const BloodValuesForm: React.FC = () => {
                           )}
                         </h4>
                         {list.map((p) => {
-                          const isLast = need100 && p.originalIndex === last.originalIndex;
+                          const isLast =
+                            need100 && p.originalIndex === last.originalIndex;
                           return (
                             <ParamRow
                               key={p.originalIndex}
@@ -592,7 +605,9 @@ const BloodValuesForm: React.FC = () => {
                               textChange={textChange}
                               calcOne={calcFormulaOnce}
                               isLastOf100={isLast}
-                              fillRemaining={() => fillRemaining(tIdx, s, p.originalIndex)}
+                              fillRemaining={() =>
+                                fillRemaining(tIdx, s, p.originalIndex)
+                              }
                               setSuggest={setSuggest}
                               setShowSug={setShowSug}
                             />
@@ -624,7 +639,10 @@ const BloodValuesForm: React.FC = () => {
           })}
 
           <div className="border-t pt-3 mt-4">
-            <button disabled={isSubmitting} className="btn-blue w-full flex gap-2 justify-center">
+            <button
+              disabled={isSubmitting}
+              className="btn-blue w-full flex gap-2 justify-center"
+            >
               {isSubmitting ? (
                 <>
                   <FiLoader className="animate-spin w-5 h-5" />
@@ -687,7 +705,6 @@ interface RowProps {
   pickSug: (val: string, t: number, p: number) => void;
 }
 
-
 const ParamRow: React.FC<RowProps> = ({
   tIdx,
   pIdx,
@@ -707,7 +724,7 @@ const ParamRow: React.FC<RowProps> = ({
   const value = currentParam.value;
   const numValue = parseFloat(value as string);
   const parsedRange = parseRange(currentParam.range);
-  
+
   let isOutOfRange = false;
   if (!isNaN(numValue)) {
     const { min, max } = parsedRange;
@@ -720,9 +737,9 @@ const ParamRow: React.FC<RowProps> = ({
     }
   }
 
-  const common = { 
+  const common = {
     className: `input ${isOutOfRange ? "bg-red-100 border-red-300" : ""}`,
-    placeholder: param.valueType === "number" ? "Value" : "Text" 
+    placeholder: param.valueType === "number" ? "Value" : "Text",
   };
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
@@ -743,12 +760,13 @@ const ParamRow: React.FC<RowProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       e.preventDefault();
       const form = e.currentTarget.form;
       if (!form) return;
-      const inputs = Array.from(form.elements)
-        .filter((el): el is HTMLInputElement => el.tagName === 'INPUT');
+      const inputs = Array.from(form.elements).filter(
+        (el): el is HTMLInputElement => el.tagName === "INPUT"
+      );
       const idx = inputs.indexOf(e.currentTarget);
       const next = inputs[idx + 1];
       if (next) next.focus();
@@ -789,7 +807,7 @@ const ParamRow: React.FC<RowProps> = ({
           <div className="mx-2 w-28 relative">
             <input
               {...common}
-              onKeyDown={handleKeyDown}    
+              onKeyDown={handleKeyDown}
               type="text"
               value={String(currentParam.value ?? "")}
               onChange={(e) => numericChange(e.target.value, tIdx, pIdx)}
@@ -812,7 +830,8 @@ const ParamRow: React.FC<RowProps> = ({
         )}
 
         <div className="flex-1 text-right text-gray-600">
-          Normal Range: <span className="font-medium text-green-600">{currentParam.range}</span>
+          Normal Range:{" "}
+          <span className="font-medium text-green-600">{currentParam.range}</span>
         </div>
       </div>
     </div>
@@ -827,7 +846,11 @@ const CenterCard: React.FC<{
 }> = ({ icon: Icon, title, spin, children }) => (
   <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
     <div className="bg-white p-8 rounded-xl shadow text-center max-w-md">
-      <Icon className={`w-12 h-12 text-blue-600 mx-auto mb-4 ${spin ? "animate-spin" : ""}`} />
+      <Icon
+        className={`w-12 h-12 text-blue-600 mx-auto mb-4 ${
+          spin ? "animate-spin" : ""
+        }`}
+      />
       {title && <h2 className="font-bold text-xl mb-2">{title}</h2>}
       {children}
     </div>

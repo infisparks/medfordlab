@@ -157,7 +157,7 @@ export default function Dashboard() {
   const [initialLoadComplete, setInitialLoadComplete] = useState(false)
 
   // Date range for filtering
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const todayStr = new Date().toLocaleDateString("en-CA");
   const [startDate, setStartDate] = useState<string>(todayStr)
   const [endDate, setEndDate] = useState<string>(todayStr)
 
@@ -489,9 +489,9 @@ export default function Dashboard() {
       if (!matchesSearch) return false
 
       // 3. Date-range filter (registration date)
-      const regDate = new Date(p.createdAt)
-      if (start && regDate < start) return false
-      if (end && regDate > end) return false
+      const regDateStr = new Date(p.createdAt).toLocaleDateString("en-CA"); // YYYY-MM-DD
+      if (startDate && regDateStr < startDate) return false;
+      if (endDate   && regDateStr > endDate)   return false;
 
       // 4. Status filter
       const sampleCollected = !!p.sampleCollectedAt
