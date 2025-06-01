@@ -326,12 +326,13 @@ const BloodValuesForm: React.FC = () => {
     return () => window.removeEventListener("keydown", onKey);
   }, [watch, setValue]);
 
-  /* ══════════════ Numeric Change: allow up to 3 decimal places ══════════════ */
+  /* ══════════════ Numeric Change: allow up to 3 decimal places or “<” / “>” prefixes ══════════════ */
   const numericChange = (v: string, t: number, p: number, sp?: number) => {
     if (v === "" || v === "-") {
       // allow empty or single minus
     } else {
-      const regex = /^-?\d*(\.\d{0,3})?$/;
+      // allow numbers with up to 3 decimals, optionally prefixed by “<” or “>”
+      const regex = /^[<>]?-?\d*(\.\d{0,3})?$/;
       if (!regex.test(v)) return;
     }
     const path =
@@ -447,24 +448,34 @@ const BloodValuesForm: React.FC = () => {
             const subs = p.subparameters?.filter((sp) => sp.value !== "") ?? [];
             if (p.value !== "" || subs.length) {
               const obj: any = { ...p, subparameters: subs };
-              if (p.valueType === "number" && p.value !== "") {
-                const strValue = String(p.value);
+
+              // If the entered value starts with ">" or "<", keep it as a string
+              const strValue = String(p.value);
+              if (/^[<>]/.test(strValue)) {
+                obj.value = strValue;
+              } else if (p.valueType === "number" && p.value !== "") {
+                // Otherwise, convert to number (or preserve trailing zero if present)
                 const numValue = +p.value;
                 obj.value =
                   strValue.includes(".") && strValue.endsWith("0")
                     ? strValue
                     : numValue;
               }
+
+              // Handle subparameters similarly
               subs.forEach((sp) => {
-                if (sp.valueType === "number" && sp.value !== "") {
-                  const strValue = String(sp.value);
-                  const numValue = +sp.value;
+                const spStr = String(sp.value);
+                if (/^[<>]/.test(spStr)) {
+                  sp.value = spStr;
+                } else if (sp.valueType === "number" && sp.value !== "") {
+                  const spNum = +sp.value;
                   sp.value =
-                    strValue.includes(".") && strValue.endsWith("0")
-                      ? strValue
-                      : numValue;
+                    spStr.includes(".") && spStr.endsWith("0")
+                      ? spStr
+                      : spNum;
                 }
               });
+
               return obj;
             }
             return null;
@@ -750,7 +761,7 @@ const ParamRow: React.FC<RowProps> = ({
 
   const common = {
     className: `input ${isOutOfRange ? "bg-red-100 border-red-300" : ""}`,
-    placeholder: param.valueType === "number" ? "Value" : "Text",
+    placeholder: param.valueType === "number" ? "Value or >10 / <10" : "Text",
   };
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {

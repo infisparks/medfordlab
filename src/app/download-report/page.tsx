@@ -186,20 +186,20 @@ function DownloadReport() {
     isOpen: boolean
     testKey: string
     currentTime: string
-  }>({
-    isOpen: false,
-    testKey: "",
-    currentTime: "",
-  })
+  }>( {
+      isOpen: false,
+      testKey: "",
+      currentTime: "",
+    } )
 
   // State for updating sampleCollectedAt time
   const [updateSampleTimeModal, setUpdateSampleTimeModal] = useState<{
     isOpen: boolean
     currentTime: string
-  }>({
-    isOpen: false,
-    currentTime: "",
-  })
+  }>( {
+      isOpen: false,
+      currentTime: "",
+    } )
 
   const [updateRegistrationTimeModal, setUpdateRegistrationTimeModal] = useState({
     isOpen: false,
@@ -218,10 +218,8 @@ function DownloadReport() {
         if (!data.bloodtest) return alert("No report found.")
 
         // 1) fetch the shared descriptions for each test from /bloodTests/<testKey>/descriptions
-        // inside your useEffect, after you pull down `data`:
         await Promise.all(
           Object.keys(data.bloodtest).map(async (testKey) => {
-            // read descriptions from /bloodTests/{testKey}/descriptions
             const rec = data.bloodtest![testKey]
 
             const defSnap = await get(dbRef(database, `bloodTests/${rec.testId}/descriptions`))
@@ -253,7 +251,6 @@ function DownloadReport() {
   }, [patientData])
 
   // Hide invisible parameters
-  // Hide invisible parameters but preserve descriptions
   const hideInvisible = (d: PatientData): Record<string, BloodTestData> => {
     const out: Record<string, BloodTestData> = {}
     if (!d.bloodtest) return out
@@ -278,7 +275,7 @@ function DownloadReport() {
         parameters: keptParams,
         subheadings: t.subheadings,
         reportedOn: t.reportedOn,
-        // 👇 make sure to carry your fetched descriptions through
+        // preserve fetched descriptions
         descriptions: t.descriptions,
       }
     }
@@ -359,17 +356,11 @@ function DownloadReport() {
     if (!patientData) return
 
     try {
-      // 1) Reference the patient node
       const patientRef = dbRef(database, `patients/${patientId}`)
-      // 2) Convert picked datetime-local string to ISO
       const newSampleAt = new Date(updateSampleTimeModal.currentTime).toISOString()
-      // 3) Write only sampleCollectedAt
       await update(patientRef, { sampleCollectedAt: newSampleAt })
-      // 4) Sync local state
       setPatientData((prev) => (prev ? { ...prev, sampleCollectedAt: newSampleAt } : prev))
-      // 5) Close modal
       setUpdateSampleTimeModal((prev) => ({ ...prev, isOpen: false }))
-      // alert("Sample collected time updated successfully!");
     } catch (error) {
       console.error("Error updating sample collected time:", error)
       alert("Failed to update sample collected time.")
@@ -389,7 +380,6 @@ function DownloadReport() {
       setPatientData((prev) => (prev ? { ...prev, createdAt: newCreatedAt } : prev))
 
       setUpdateRegistrationTimeModal((prev) => ({ ...prev, isOpen: false }))
-      // alert("Registration time updated successfully!");
     } catch (error) {
       console.error("Error updating registration time:", error)
       alert("Failed to update registration time.")
@@ -437,10 +427,8 @@ function DownloadReport() {
     e.preventDefault()
     if (!draggedTest) return
 
-    // Find the group
     const updatedGroups = combinedGroups.map((group) => {
       if (group.id === groupId) {
-        // Only add the test if it's not already in the group
         if (!group.tests.includes(draggedTest)) {
           return {
             ...group,
@@ -541,8 +529,8 @@ function DownloadReport() {
       doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(0, 0, 0)
 
       const sampleDT = data.sampleCollectedAt ? new Date(data.sampleCollectedAt) : new Date(data.createdAt)
-      const sampleDTStr = formatDMY(sampleDT) // was sampleDT.toLocaleString()
-      const registrationStr = formatDMY(data.createdAt) // was new Date(...).toLocaleString()
+      const sampleDTStr = formatDMY(sampleDT)
+      const registrationStr = formatDMY(data.createdAt)
       const reportedOnStr = reportedOnRaw ? formatDMY(reportedOnRaw) : "-"
 
       const leftRows = [
@@ -599,6 +587,7 @@ function DownloadReport() {
     }
 
     let yPos = 0
+
     const printRow = (p: Parameter, indent = 0) => {
       let rangeStr = ""
       if (typeof p.range === "string") {
@@ -616,13 +605,23 @@ function DownloadReport() {
       }
       rangeStr = rangeStr.replaceAll("/n", "\n")
 
+      // Determine if value indicates low/high via "<" or ">"
       let mark = ""
-      const numRange = parseNumericRangeString(rangeStr)
-      const numVal = Number.parseFloat(String(p.value))
-      if (numRange && !isNaN(numVal)) {
-        if (numVal < numRange.lower) mark = " L"
-        else if (numVal > numRange.upper) mark = " H"
+      const rawValue = String(p.value).trim()
+      if (rawValue.startsWith("<")) {
+        mark = " L"
+      } else if (rawValue.startsWith(">")) {
+        mark = " H"
+      } else {
+        // Fallback numeric comparison if not prefixed by < or >
+        const numRange = parseNumericRangeString(rangeStr)
+        const numVal = Number.parseFloat(rawValue)
+        if (numRange && !isNaN(numVal)) {
+          if (numVal < numRange.lower) mark = " L"
+          else if (numVal > numRange.upper) mark = " H"
+        }
       }
+
       const valStr = p.value !== "" ? `${p.value}${mark}` : "-"
 
       const rangeEmpty = rangeStr.trim() === ""
@@ -698,25 +697,19 @@ function DownloadReport() {
       })
       yPos += 3
       if (Array.isArray(tData.descriptions) && tData.descriptions.length) {
-        // small gap before descriptions
         yPos += 4
 
         tData.descriptions.forEach(({ heading, content }) => {
-          // 1) Print bold heading + colon
           const label = heading + ""
           doc.setFont("helvetica", "bold").setFontSize(10)
           doc.text(label, x1, yPos + lineH)
 
-          // 2) Print content in normal font, wrapping to remaining width
           doc.setFont("helvetica", "normal").setFontSize(9)
-          // compute available width after label
           const labelWidth = doc.getTextWidth(label + " ")
           const contentWidth = totalW - labelWidth
           const contentLines = doc.splitTextToSize(content, contentWidth)
-          // indent content so it starts just after the label
           doc.text(contentLines, x1 + labelWidth + 2, yPos + lineH)
 
-          // advance yPos by the taller of label‐line or content lines
           const linesPrinted = Math.max(1, contentLines.length)
           yPos += linesPrinted * lineH + 2
         })
@@ -732,14 +725,12 @@ function DownloadReport() {
     for (const group of combinedGroups) {
       if (group.tests.length === 0) continue
 
-      // Filter tests to only include those that are selected
       const testsToInclude = group.tests.filter(
         (testKey) => selectedTests.includes(testKey) && data.bloodtest![testKey]
       )
 
       if (testsToInclude.length === 0) continue
 
-      // Get the first test's enteredBy for printer name
       const firstTestKey = testsToInclude[0]
       const firstTest = data.bloodtest[firstTestKey]
       let printerName = "Unknown"
@@ -768,14 +759,12 @@ function DownloadReport() {
       first = false
 
       await addLetter()
-      // Use the first test's reportedOn for the header
       yPos = headerY(firstTest.reportedOn)
 
-      // Print each test in the group (without any extra group heading)
       for (const testKey of testsToInclude) {
         const tData = data.bloodtest[testKey]
         printTest(testKey, tData)
-        yPos += 10 // Add some space between tests
+        yPos += 10
       }
 
       doc.setFont("helvetica", "italic").setFontSize(7).setTextColor(0)
@@ -1004,7 +993,6 @@ function DownloadReport() {
                     onClick={updateRegistrationTime}
                     className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center"
                   >
-                    {/* pencil icon */}
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
                       className="h-4 w-4 mr-1"
