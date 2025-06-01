@@ -1459,7 +1459,7 @@ function DownloadReport() {
                 <div className="space-y-4">
                   {combinedGroups.length === 0 ? (
                     <div className="text-center p-8 border-2 border-dashed border-gray-300 rounded-lg">
-                      <p className="text-gray-500">Click "Add Group" to create a new combined test group</p>
+                      <p className="text-gray-500">Click Add Group to create a new combined test group</p>
                       <p className="text-sm text-gray-400 mt-2">
                         You can drag and drop tests into groups to combine them in the report
                       </p>
