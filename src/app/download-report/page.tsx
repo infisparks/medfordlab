@@ -61,6 +61,43 @@ interface CombinedTestGroup {
   tests: string[]
 }
 
+// Table interfaces for HTML parsing
+interface TableCell {
+  content: string
+  isHeader: boolean
+  colspan?: number
+  rowspan?: number
+  styles?: CSSStyles
+}
+
+interface TableRow {
+  cells: TableCell[]
+  styles?: CSSStyles
+}
+
+interface ParsedTable {
+  rows: TableRow[]
+  hasHeader: boolean
+  styles?: CSSStyles
+}
+
+// CSS Styles interface
+interface CSSStyles {
+  color?: string
+  backgroundColor?: string
+  fontWeight?: string
+  fontStyle?: string
+  fontSize?: number
+  textAlign?: string
+  margin?: number
+  padding?: number
+  borderWidth?: number
+  borderColor?: string
+  borderStyle?: string
+  width?: number
+  height?: number
+}
+
 // -----------------------------
 // Helper Functions
 // -----------------------------
@@ -153,6 +190,541 @@ const generateId = () => {
   return Math.random().toString(36).substring(2, 9)
 }
 
+// Decode HTML entities
+const decodeHTMLEntities = (text: string): string => {
+  const entities: Record<string, string> = {
+    "&lt;": "<",
+    "&gt;": ">",
+    "&amp;": "&",
+    "&quot;": '"',
+    "&apos;": "'",
+    "&nbsp;": " ",
+    "&ge;": "≥",
+    "&le;": "≤",
+    "&ne;": "≠",
+    "&plusmn;": "±",
+    "&times;": "×",
+    "&divide;": "÷",
+    "&deg;": "°",
+    "&micro;": "µ",
+    "&alpha;": "α",
+    "&beta;": "β",
+    "&gamma;": "γ",
+    "&delta;": "δ",
+    "&omega;": "ω",
+  }
+
+  return text.replace(/&[a-zA-Z0-9#]+;/g, (entity) => {
+    return entities[entity] || entity
+  })
+}
+
+// Parse CSS color to RGB values
+const parseColor = (color: string): [number, number, number] | null => {
+  if (!color) return null
+
+  // Handle hex colors
+  if (color.startsWith("#")) {
+    const hex = color.slice(1)
+    if (hex.length === 3) {
+      return [
+        Number.parseInt(hex[0] + hex[0], 16),
+        Number.parseInt(hex[1] + hex[1], 16),
+        Number.parseInt(hex[2] + hex[2], 16),
+      ]
+    } else if (hex.length === 6) {
+      return [
+        Number.parseInt(hex.slice(0, 2), 16),
+        Number.parseInt(hex.slice(2, 4), 16),
+        Number.parseInt(hex.slice(4, 6), 16),
+      ]
+    }
+  }
+
+  // Handle rgb() colors
+  const rgbMatch = color.match(/rgb$$\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$$/)
+  if (rgbMatch) {
+    return [Number.parseInt(rgbMatch[1]), Number.parseInt(rgbMatch[2]), Number.parseInt(rgbMatch[3])]
+  }
+
+  // Handle named colors
+  const namedColors: Record<string, [number, number, number]> = {
+    red: [255, 0, 0],
+    green: [0, 128, 0],
+    blue: [0, 0, 255],
+    black: [0, 0, 0],
+    white: [255, 255, 255],
+    gray: [128, 128, 128],
+    grey: [128, 128, 128],
+    yellow: [255, 255, 0],
+    orange: [255, 165, 0],
+    purple: [128, 0, 128],
+    pink: [255, 192, 203],
+    brown: [165, 42, 42],
+    navy: [0, 0, 128],
+    teal: [0, 128, 128],
+    lime: [0, 255, 0],
+    cyan: [0, 255, 255],
+    magenta: [255, 0, 255],
+    silver: [192, 192, 192],
+    maroon: [128, 0, 0],
+    olive: [128, 128, 0],
+  }
+
+  const lowerColor = color.toLowerCase()
+  return namedColors[lowerColor] || null
+}
+
+// Parse CSS unit values (px, pt, em, %, etc.)
+const parseCSSUnit = (value: string, baseFontSize = 9): number => {
+  if (!value) return 0
+
+  const numMatch = value.match(/^([\d.]+)(px|pt|em|rem|%)?$/i)
+  if (!numMatch) return 0
+
+  const num = Number.parseFloat(numMatch[1])
+  const unit = numMatch[2]?.toLowerCase() || "px"
+
+  switch (unit) {
+    case "pt":
+      return num
+    case "px":
+      return num * 0.75 // Convert px to pt (1px = 0.75pt)
+    case "em":
+    case "rem":
+      return num * baseFontSize
+    case "%":
+      return (num / 100) * baseFontSize
+    default:
+      return num
+  }
+}
+
+// Parse inline CSS styles
+const parseInlineCSS = (styleAttr: string): CSSStyles => {
+  const styles: CSSStyles = {}
+
+  if (!styleAttr) return styles
+
+  const declarations = styleAttr.split(";").filter(Boolean)
+
+  declarations.forEach((declaration) => {
+    const [property, value] = declaration.split(":").map((s) => s.trim())
+    if (!property || !value) return
+
+    const prop = property.toLowerCase()
+
+    switch (prop) {
+      case "color":
+        styles.color = value
+        break
+      case "background-color":
+      case "background":
+        styles.backgroundColor = value
+        break
+      case "font-weight":
+        styles.fontWeight = value
+        break
+      case "font-style":
+        styles.fontStyle = value
+        break
+      case "font-size":
+        styles.fontSize = parseCSSUnit(value)
+        break
+      case "text-align":
+        styles.textAlign = value
+        break
+      case "margin":
+        styles.margin = parseCSSUnit(value)
+        break
+      case "padding":
+        styles.padding = parseCSSUnit(value)
+        break
+      case "border-width":
+        styles.borderWidth = parseCSSUnit(value)
+        break
+      case "border-color":
+        styles.borderColor = value
+        break
+      case "border-style":
+        styles.borderStyle = value
+        break
+      case "border":
+        // Parse shorthand border property
+        const borderParts = value.split(/\s+/)
+        borderParts.forEach((part) => {
+          if (part.match(/^\d/)) {
+            styles.borderWidth = parseCSSUnit(part)
+          } else if (part.match(/^(solid|dashed|dotted)$/)) {
+            styles.borderStyle = part
+          } else {
+            styles.borderColor = part
+          }
+        })
+        break
+      case "width":
+        styles.width = parseCSSUnit(value)
+        break
+      case "height":
+        styles.height = parseCSSUnit(value)
+        break
+    }
+  })
+
+  return styles
+}
+
+// Apply CSS styles to jsPDF
+const applyCSSStyles = (doc: jsPDF, styles: CSSStyles, defaultFontSize = 9) => {
+  // Apply font size
+  if (styles.fontSize) {
+    doc.setFontSize(styles.fontSize)
+  }
+
+  // Apply font weight and style
+  let fontStyle = "normal"
+  if (
+    styles.fontWeight === "bold" ||
+    styles.fontWeight === "bolder" ||
+    Number.parseInt(styles.fontWeight || "400") >= 600
+  ) {
+    fontStyle = "bold"
+  }
+  if (styles.fontStyle === "italic") {
+    fontStyle = fontStyle === "bold" ? "bolditalic" : "italic"
+  }
+  doc.setFont("helvetica", fontStyle)
+
+  // Apply text color
+  if (styles.color) {
+    const color = parseColor(styles.color)
+    if (color) {
+      doc.setTextColor(color[0], color[1], color[2])
+    }
+  }
+}
+
+// Parse table from HTML element with CSS support
+const parseTable = (tableElement: Element): ParsedTable => {
+  const rows: TableRow[] = []
+  let hasHeader = false
+
+  // Parse table styles
+  const tableStyles = parseInlineCSS(tableElement.getAttribute("style") || "")
+
+  // Check if table has thead
+  const thead = tableElement.querySelector("thead")
+  const tbody = tableElement.querySelector("tbody")
+
+  if (thead) {
+    hasHeader = true
+    const headerRows = thead.querySelectorAll("tr")
+    headerRows.forEach((row) => {
+      const rowStyles = parseInlineCSS(row.getAttribute("style") || "")
+      const cells: TableCell[] = []
+      const cellElements = row.querySelectorAll("th, td")
+      cellElements.forEach((cell) => {
+        const cellStyles = parseInlineCSS(cell.getAttribute("style") || "")
+        cells.push({
+          content: decodeHTMLEntities(cell.innerHTML.replace(/<br\s*\/?>/gi, "\n")),
+          isHeader: true,
+          colspan: Number.parseInt(cell.getAttribute("colspan") || "1"),
+          rowspan: Number.parseInt(cell.getAttribute("rowspan") || "1"),
+          styles: cellStyles,
+        })
+      })
+      rows.push({ cells, styles: rowStyles })
+    })
+  }
+
+  // Process tbody or direct tr elements
+  const bodyRows = tbody ? tbody.querySelectorAll("tr") : tableElement.querySelectorAll("tr")
+  bodyRows.forEach((row) => {
+    // Skip if this row is already processed as header
+    if (thead && thead.contains(row)) return
+
+    const rowStyles = parseInlineCSS(row.getAttribute("style") || "")
+    const cells: TableCell[] = []
+    const cellElements = row.querySelectorAll("th, td")
+    cellElements.forEach((cell) => {
+      const cellStyles = parseInlineCSS(cell.getAttribute("style") || "")
+      cells.push({
+        content: decodeHTMLEntities(cell.innerHTML.replace(/<br\s*\/?>/gi, "\n")),
+        isHeader: cell.tagName.toLowerCase() === "th",
+        colspan: Number.parseInt(cell.getAttribute("colspan") || "1"),
+        rowspan: Number.parseInt(cell.getAttribute("rowspan") || "1"),
+        styles: cellStyles,
+      })
+    })
+    rows.push({ cells, styles: rowStyles })
+  })
+
+  return { rows, hasHeader, styles: tableStyles }
+}
+
+// Render table in PDF with CSS support
+const renderTable = (table: ParsedTable, doc: jsPDF, x: number, y: number, maxWidth: number): number => {
+  if (table.rows.length === 0) return y
+
+  const lineHeight = 5
+  const defaultCellPadding = 2
+  const defaultBorderWidth = 0.5
+
+  // Calculate column widths
+  const maxCols = Math.max(...table.rows.map((row) => row.cells.length))
+  const colWidth = maxWidth / maxCols
+
+  let currentY = y
+
+  table.rows.forEach((row, rowIndex) => {
+    let maxRowHeight = 0
+    const cellHeights: number[] = []
+
+    // Calculate heights for all cells in this row
+    row.cells.forEach((cell, cellIndex) => {
+      const cellPadding = cell.styles?.padding || defaultCellPadding
+      const cellWidth = colWidth * (cell.colspan || 1) - 2 * cellPadding
+
+      // Apply cell font styles for text measurement
+      if (cell.styles) {
+        applyCSSStyles(doc, cell.styles)
+      } else if (cell.isHeader) {
+        doc.setFont("helvetica", "bold").setFontSize(9)
+      } else {
+        doc.setFont("helvetica", "normal").setFontSize(8)
+      }
+
+      const lines = doc.splitTextToSize(cell.content.replace(/<[^>]*>/g, ""), cellWidth)
+      const cellHeight = Math.max(lines.length * lineHeight + 2 * cellPadding, lineHeight + 2 * cellPadding)
+      cellHeights.push(cellHeight)
+      maxRowHeight = Math.max(maxRowHeight, cellHeight)
+    })
+
+    // Draw cells
+    let currentX = x
+    row.cells.forEach((cell, cellIndex) => {
+      const cellWidth = colWidth * (cell.colspan || 1)
+      const cellHeight = maxRowHeight
+      const cellPadding = cell.styles?.padding || defaultCellPadding
+      const borderWidth = cell.styles?.borderWidth || defaultBorderWidth
+
+      // Set border properties
+      doc.setLineWidth(borderWidth)
+      if (cell.styles?.borderColor) {
+        const borderColor = parseColor(cell.styles.borderColor)
+        if (borderColor) {
+          doc.setDrawColor(borderColor[0], borderColor[1], borderColor[2])
+        }
+      } else {
+        doc.setDrawColor(0, 0, 0)
+      }
+
+      // Set background color
+      let hasFill = false
+      if (cell.styles?.backgroundColor) {
+        const bgColor = parseColor(cell.styles.backgroundColor)
+        if (bgColor) {
+          doc.setFillColor(bgColor[0], bgColor[1], bgColor[2])
+          hasFill = true
+        }
+      } else if (cell.isHeader) {
+        doc.setFillColor(240, 240, 240) // Default light gray for headers
+        hasFill = true
+      }
+
+      // Draw cell rectangle
+      if (hasFill) {
+        doc.rect(currentX, currentY, cellWidth, cellHeight, "FD") // Fill and Draw
+      } else {
+        doc.rect(currentX, currentY, cellWidth, cellHeight, "D") // Draw only
+      }
+
+      // Apply text styles
+      if (cell.styles) {
+        applyCSSStyles(doc, cell.styles)
+      } else if (cell.isHeader) {
+        doc.setFont("helvetica", "bold").setFontSize(9)
+        doc.setTextColor(0, 0, 0)
+      } else {
+        doc.setFont("helvetica", "normal").setFontSize(8)
+        doc.setTextColor(0, 0, 0)
+      }
+
+      // Draw text
+      const textWidth = cellWidth - 2 * cellPadding
+      const lines = doc.splitTextToSize(cell.content.replace(/<[^>]*>/g, ""), textWidth)
+
+      // Handle text alignment
+      const textAlign = cell.styles?.textAlign || "left"
+      lines.forEach((line: string, lineIndex: number) => {
+        let textX = currentX + cellPadding
+        if (textAlign === "center") {
+          textX = currentX + cellWidth / 2
+        } else if (textAlign === "right") {
+          textX = currentX + cellWidth - cellPadding
+        }
+
+        doc.text(line, textX, currentY + cellPadding + (lineIndex + 1) * lineHeight, {
+          align: textAlign as any,
+        })
+      })
+
+      currentX += cellWidth
+    })
+
+    currentY += maxRowHeight
+  })
+
+  return currentY + 5 // Add some spacing after table
+}
+
+// HTML Parser for PDF rendering with CSS and table support
+const parseHTMLContent = (htmlContent: string, doc: jsPDF, x: number, y: number, maxWidth: number): number => {
+  // Remove HTML tags and extract text with formatting info
+  const parser = new DOMParser()
+  const htmlDoc = parser.parseFromString(`<div>${htmlContent}</div>`, "text/html")
+  const container = htmlDoc.querySelector("div")
+
+  let currentY = y
+  const lineHeight = 5
+
+  if (!container) {
+    // Fallback to plain text
+    const cleanText = decodeHTMLEntities(htmlContent.replace(/<[^>]*>/g, ""))
+    const lines = doc.splitTextToSize(cleanText, maxWidth)
+    doc.setFont("helvetica", "normal").setFontSize(9)
+    doc.text(lines, x, currentY)
+    return currentY + lines.length * lineHeight
+  }
+
+  const processNode = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = decodeHTMLEntities(node.textContent?.trim() || "")
+      if (text) {
+        const lines = doc.splitTextToSize(text, maxWidth)
+        doc.text(lines, x, currentY)
+        currentY += lines.length * lineHeight
+      }
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as Element
+      const tagName = element.tagName.toLowerCase()
+
+      // Parse inline styles
+      const styles = parseInlineCSS(element.getAttribute("style") || "")
+
+      // Handle table elements
+      if (tagName === "table") {
+        const table = parseTable(element)
+        currentY = renderTable(table, doc, x, currentY, maxWidth)
+        return
+      }
+
+      // Apply CSS styles first
+      if (Object.keys(styles).length > 0) {
+        applyCSSStyles(doc, styles)
+      } else {
+        // Set font based on HTML tag (fallback)
+        switch (tagName) {
+          case "h1":
+            doc.setFont("helvetica", "bold").setFontSize(14)
+            currentY += 2 // Extra spacing before heading
+            break
+          case "h2":
+            doc.setFont("helvetica", "bold").setFontSize(12)
+            currentY += 2
+            break
+          case "h3":
+            doc.setFont("helvetica", "bold").setFontSize(11)
+            currentY += 1
+            break
+          case "h4":
+          case "h5":
+          case "h6":
+            doc.setFont("helvetica", "bold").setFontSize(10)
+            currentY += 1
+            break
+          case "strong":
+          case "b":
+            doc.setFont("helvetica", "bold").setFontSize(9)
+            break
+          case "em":
+          case "i":
+            doc.setFont("helvetica", "italic").setFontSize(9)
+            break
+          case "u":
+            doc.setFont("helvetica", "normal").setFontSize(9)
+            // Note: jsPDF doesn't support underline directly
+            break
+          case "p":
+            doc.setFont("helvetica", "normal").setFontSize(9)
+            if (currentY > y) currentY += 2 // Add spacing between paragraphs
+            break
+          case "br":
+            currentY += lineHeight
+            return
+          case "li":
+            doc.setFont("helvetica", "normal").setFontSize(9)
+            // Add bullet point
+            doc.text("• ", x, currentY)
+            const bulletWidth = doc.getTextWidth("• ")
+            const listText = decodeHTMLEntities(element.textContent?.trim() || "")
+            const listLines = doc.splitTextToSize(listText, maxWidth - bulletWidth)
+            doc.text(listLines, x + bulletWidth, currentY)
+            currentY += listLines.length * lineHeight
+            return
+          case "ul":
+          case "ol":
+            currentY += 1 // Add spacing before list
+            break
+          case "thead":
+          case "tbody":
+          case "tr":
+          case "th":
+          case "td":
+            // These are handled by the table parser
+            return
+          default:
+            doc.setFont("helvetica", "normal").setFontSize(9)
+        }
+      }
+
+      // Handle special elements with CSS support
+      if (tagName === "div" || tagName === "span") {
+        // Apply background color if specified
+        if (styles.backgroundColor) {
+          const bgColor = parseColor(styles.backgroundColor)
+          if (bgColor) {
+            // Draw background rectangle
+            doc.setFillColor(bgColor[0], bgColor[1], bgColor[2])
+            const textHeight = lineHeight * 1.2
+            doc.rect(x, currentY - textHeight + 2, maxWidth, textHeight, "F")
+          }
+        }
+      }
+
+      // Process child nodes
+      for (let i = 0; i < node.childNodes.length; i++) {
+        processNode(node.childNodes[i])
+      }
+
+      // Add spacing after certain elements
+      if (["h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "div"].includes(tagName)) {
+        currentY += styles.margin || 1
+      }
+
+      // Reset font after processing element
+      doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0, 0, 0)
+    }
+  }
+
+  // Process all child nodes
+  for (let i = 0; i < container.childNodes.length; i++) {
+    processNode(container.childNodes[i])
+  }
+
+  return currentY
+}
+
 // -----------------------------
 // Component
 // -----------------------------
@@ -186,20 +758,20 @@ function DownloadReport() {
     isOpen: boolean
     testKey: string
     currentTime: string
-  }>( {
-      isOpen: false,
-      testKey: "",
-      currentTime: "",
-    } )
+  }>({
+    isOpen: false,
+    testKey: "",
+    currentTime: "",
+  })
 
   // State for updating sampleCollectedAt time
   const [updateSampleTimeModal, setUpdateSampleTimeModal] = useState<{
     isOpen: boolean
     currentTime: string
-  }>( {
-      isOpen: false,
-      currentTime: "",
-    } )
+  }>({
+    isOpen: false,
+    currentTime: "",
+  })
 
   const [updateRegistrationTimeModal, setUpdateRegistrationTimeModal] = useState({
     isOpen: false,
@@ -228,7 +800,7 @@ function DownloadReport() {
               const arr = Array.isArray(raw) ? raw : Object.values(raw)
               rec.descriptions = arr as { heading: string; content: string }[]
             }
-          })
+          }),
         )
 
         // 2) then filter out hidden parameters as before
@@ -448,8 +1020,8 @@ function DownloadReport() {
   const removeTestFromGroup = (groupId: string, testKey: string) => {
     setCombinedGroups(
       combinedGroups.map((group) =>
-        group.id === groupId ? { ...group, tests: group.tests.filter((t) => t !== testKey) } : group
-      )
+        group.id === groupId ? { ...group, tests: group.tests.filter((t) => t !== testKey) } : group,
+      ),
     )
   }
 
@@ -458,7 +1030,7 @@ function DownloadReport() {
     data: PatientData,
     includeLetterhead: boolean,
     skipCover: boolean,
-    combinedGroups: CombinedTestGroup[] = []
+    combinedGroups: CombinedTestGroup[] = [],
   ) => {
     const doc = new jsPDF("p", "mm", "a4")
     let printedBy = "Unknown"
@@ -696,22 +1268,21 @@ function DownloadReport() {
         rows.forEach((r) => printRow(r))
       })
       yPos += 3
+
+      // Updated descriptions rendering with HTML, CSS, and table support
       if (Array.isArray(tData.descriptions) && tData.descriptions.length) {
         yPos += 4
 
         tData.descriptions.forEach(({ heading, content }) => {
-          const label = heading + ""
-          doc.setFont("helvetica", "bold").setFontSize(10)
-          doc.text(label, x1, yPos + lineH)
+          // Render heading
+          doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(0, 51, 102)
+          doc.text(heading, x1, yPos + lineH)
+          yPos += lineH + 2
 
-          doc.setFont("helvetica", "normal").setFontSize(9)
-          const labelWidth = doc.getTextWidth(label + " ")
-          const contentWidth = totalW - labelWidth
-          const contentLines = doc.splitTextToSize(content, contentWidth)
-          doc.text(contentLines, x1 + labelWidth + 2, yPos + lineH)
-
-          const linesPrinted = Math.max(1, contentLines.length)
-          yPos += linesPrinted * lineH + 2
+          // Render HTML content with CSS and table support
+          doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(0, 0, 0)
+          yPos = parseHTMLContent(content, doc, x1, yPos, totalW)
+          yPos += 4 // Add some spacing after each description
         })
       }
     }
@@ -726,7 +1297,7 @@ function DownloadReport() {
       if (group.tests.length === 0) continue
 
       const testsToInclude = group.tests.filter(
-        (testKey) => selectedTests.includes(testKey) && data.bloodtest![testKey]
+        (testKey) => selectedTests.includes(testKey) && data.bloodtest![testKey],
       )
 
       if (testsToInclude.length === 0) continue
@@ -768,19 +1339,14 @@ function DownloadReport() {
       }
 
       doc.setFont("helvetica", "italic").setFontSize(7).setTextColor(0)
-      doc.text(
-        "--------------------- END OF REPORT ---------------------",
-        w / 2,
-        yPos + 4,
-        { align: "center" }
-      )
+      doc.text("--------------------- END OF REPORT ---------------------", w / 2, yPos + 4, { align: "center" })
       yPos += 10
     }
 
     // Process remaining individual tests (that aren't in combined groups)
     const combinedTestKeys = combinedGroups.flatMap((group) => group.tests)
     const remainingTests = Object.keys(data.bloodtest).filter(
-      (key) => selectedTests.includes(key) && !combinedTestKeys.includes(key)
+      (key) => selectedTests.includes(key) && !combinedTestKeys.includes(key),
     )
 
     for (const testKey of remainingTests) {
@@ -817,12 +1383,7 @@ function DownloadReport() {
       printTest(testKey, tData)
 
       doc.setFont("helvetica", "italic").setFontSize(7).setTextColor(0)
-      doc.text(
-        "--------------------- END OF REPORT ---------------------",
-        w / 2,
-        yPos + 4,
-        { align: "center" }
-      )
+      doc.text("--------------------- END OF REPORT ---------------------", w / 2, yPos + 4, { align: "center" })
       yPos += 10
     }
 
@@ -842,7 +1403,7 @@ function DownloadReport() {
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key))
+        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key)),
       ),
     }
     const blob = await generatePDFReport(filteredData, true, true, combinedGroups)
@@ -859,7 +1420,7 @@ function DownloadReport() {
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key))
+        Object.entries(patientData.bloodtest!).filter(([key]) => selectedTests.includes(key)),
       ),
     }
     const blob = await generatePDFReport(filteredData, false, true, combinedGroups)
@@ -876,7 +1437,7 @@ function DownloadReport() {
     const filteredData: PatientData = {
       ...patientData,
       bloodtest: Object.fromEntries(
-        Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key))
+        Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key)),
       ),
     }
     try {
@@ -897,7 +1458,7 @@ function DownloadReport() {
       const filteredData: PatientData = {
         ...patientData,
         bloodtest: Object.fromEntries(
-          Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key))
+          Object.entries(patientData.bloodtest ?? {}).filter(([key]) => selectedTests.includes(key)),
         ),
       }
       const blob = await generatePDFReport(filteredData, true, false, combinedGroups)
@@ -1368,7 +1929,7 @@ function DownloadReport() {
                             checked={selectedTests.includes(testKey)}
                             onChange={() => {
                               setSelectedTests((prev) =>
-                                prev.includes(testKey) ? prev.filter((k) => k !== testKey) : [...prev, testKey]
+                                prev.includes(testKey) ? prev.filter((k) => k !== testKey) : [...prev, testKey],
                               )
                             }}
                           />
@@ -1547,8 +2108,8 @@ function DownloadReport() {
                   <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                     <h4 className="font-medium text-yellow-800 mb-1">How Combined Tests Work</h4>
                     <p className="text-sm text-yellow-700">
-                      Tests in the same group will be printed sequentially on the same page in the PDF report,
-                      each with its own heading and values.
+                      Tests in the same group will be printed sequentially on the same page in the PDF report, each with
+                      its own heading and values.
                     </p>
                   </div>
                 )}

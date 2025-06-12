@@ -79,6 +79,7 @@ const RegisterPage: React.FC = () => {
                 Email address
               </label>
               <div className="mt-1">
+               
                 <input
                   id="email"
                   name="email"
