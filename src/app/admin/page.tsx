@@ -1,9 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useState, useMemo } from "react"
-import { ref, get } from "firebase/database"
-import { database } from "../../firebase"
+import { useState, useMemo, useCallback } from "react"
 import Link from "next/link"
 import {
   CalendarIcon,
@@ -16,7 +14,9 @@ import {
   ClipboardDocumentListIcon,
   FunnelIcon,
   TrashIcon,
+  ArrowPathIcon,
 } from "@heroicons/react/24/outline"
+import { usePatientData } from "./hooks/use-patient-data"
 
 /* ─────────────────── Types ─────────────────── */
 interface BloodTest {
@@ -60,28 +60,57 @@ type PaymentStatus = "all" | "paid" | "unpaid" | "partial"
 /* ------------------------------------------------------------------ */
 const AdminPanel: React.FC = () => {
   /* ─────────────────── State ─────────────────── */
-  const [patients, setPatients] = useState<Patient[]>([])
   const [searchTerm, setSearchTerm] = useState("")
-  const [fromDate, setFromDate] = useState("")
-  const [toDate, setToDate] = useState("")
+  const [fromDate, setFromDate] = useState(formatDate(new Date())) // Default to today
+  const [toDate, setToDate] = useState(formatDate(new Date())) // Default to today
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("all")
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
   const [isFilterOpen, setIsFilterOpen] = useState(false)
+  const [pageSize, setPageSize] = useState(50)
+  const [userChangedDates, setUserChangedDates] = useState(false)
 
-  /* ─────────────────── Initialize date filters ─────────────────── */
-  useEffect(() => {
-    // Set default date range to current month
-    const today = new Date()
-    const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
-    const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+  const { patients, isLoading, hasMore, loadMorePatients, fetchPatients } = usePatientData({
+    fromDate,
+    toDate,
+    pageSize,
+  })
 
-    setFromDate(formatDate(firstDayOfMonth))
-    setToDate(formatDate(lastDayOfMonth))
-  }, [])
-
-  const formatDate = (date: Date): string => {
+  /* ─────────────────── Helper functions ─────────────────── */
+  function formatDate(date: Date): string {
     return date.toISOString().split("T")[0]
   }
+
+  /* ─────────────────── Event handlers ─────────────────── */
+  const handleFromDateChange = (newDate: string) => {
+    setFromDate(newDate)
+    setUserChangedDates(true)
+
+    // Ensure toDate is not more than 30 days after fromDate
+    if (newDate) {
+      const from = new Date(newDate)
+      const maxToDate = new Date(from)
+      maxToDate.setDate(from.getDate() + 30)
+
+      const currentTo = toDate ? new Date(toDate) : null
+      if (currentTo && currentTo > maxToDate) {
+        setToDate(formatDate(maxToDate))
+      }
+    }
+  }
+
+  const handleToDateChange = (newDate: string) => {
+    setToDate(newDate)
+    setUserChangedDates(true)
+  }
+
+  const resetToToday = useCallback(() => {
+    const today = new Date()
+    const formattedToday = formatDate(today)
+    setFromDate(formattedToday)
+    setToDate(formattedToday)
+    setUserChangedDates(false)
+    fetchPatients()
+  }, [fetchPatients])
 
   /* ─────────────────── Derived ─────────────────── */
   const filteredPatients = useMemo(() => {
@@ -91,18 +120,6 @@ const AdminPanel: React.FC = () => {
 
       // Search filter
       const matchesSearch = patient.name.toLowerCase().includes(searchTerm.toLowerCase())
-
-      // Date range filter
-      let matchesDate = true
-      const patientDate = patient.registrationDate || (patient.createdAt ? patient.createdAt.split("T")[0] : "")
-
-      if (fromDate && patientDate) {
-        matchesDate = matchesDate && patientDate >= fromDate
-      }
-
-      if (toDate && patientDate) {
-        matchesDate = matchesDate && patientDate <= toDate
-      }
 
       // Payment status filter
       let matchesPaymentStatus = true
@@ -121,9 +138,9 @@ const AdminPanel: React.FC = () => {
         }
       }
 
-      return matchesSearch && matchesDate && matchesPaymentStatus
+      return matchesSearch && matchesPaymentStatus
     })
-  }, [patients, searchTerm, fromDate, toDate, paymentStatus])
+  }, [patients, searchTerm, paymentStatus])
 
   const summary = useMemo(() => {
     let totalDiscount = 0
@@ -164,27 +181,6 @@ const AdminPanel: React.FC = () => {
     }
   }, [filteredPatients])
 
-  /* ─────────────────── Effects ─────────────────── */
-  useEffect(() => {
-    const patientsRef = ref(database, "patients")
-
-    get(patientsRef)
-      .then((snapshot) => {
-        if (snapshot.exists()) {
-          const dataObj = snapshot.val()
-          /* Convert the object keyed by Firebase IDs into an array */
-          const dataArray: Patient[] = Object.keys(dataObj).map((key) => ({
-            id: key,
-            ...dataObj[key],
-            age: Number(dataObj[key].age),
-            discountAmount: Number(dataObj[key].discountAmount) || 0,
-          }))
-          setPatients(dataArray)
-        }
-      })
-      .catch((err) => console.error("Error fetching patients:", err))
-  }, [])
-
   /* ─────────────────── Render ─────────────────── */
   return (
     <div className="min-h-screen bg-gray-50">
@@ -201,7 +197,7 @@ const AdminPanel: React.FC = () => {
             </div>
             <div className="flex items-center space-x-4">
               <Link
-                href="/deleted-appointments"
+                href="/deletehistroy"
                 className="flex items-center space-x-2 text-red-600 hover:text-red-700"
               >
                 <TrashIcon className="h-5 w-5" />
@@ -217,7 +213,7 @@ const AdminPanel: React.FC = () => {
 
       <main className="max-w-7xl mx-auto px-6 py-8">
         {/* ───── Basic Filters ───── */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2">
           <div className="relative">
             <MagnifyingGlassIcon className="absolute left-3 top-3.5 h-5 w-5 text-gray-400" />
             <input
@@ -233,7 +229,7 @@ const AdminPanel: React.FC = () => {
             <input
               type="date"
               value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
+              onChange={(e) => handleFromDateChange(e.target.value)}
               className="w-full pl-10 pr-4 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-colors"
               placeholder="From Date"
             />
@@ -243,11 +239,42 @@ const AdminPanel: React.FC = () => {
             <input
               type="date"
               value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
+              onChange={(e) => handleToDateChange(e.target.value)}
+              max={
+                fromDate
+                  ? (() => {
+                      const maxDate = new Date(fromDate)
+                      maxDate.setDate(maxDate.getDate() + 30)
+                      return formatDate(maxDate)
+                    })()
+                  : undefined
+              }
               className="w-full pl-10 pr-4 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-colors"
               placeholder="To Date"
             />
           </div>
+        </div>
+
+        {/* Date range indicator */}
+        <div className="col-span-1 md:col-span-3 text-sm text-gray-500 mb-4">
+          {!userChangedDates ? (
+            <div className="flex items-center">
+              <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                Todays data only
+              </span>
+              <span className="ml-2">Change dates to view historical data</span>
+            </div>
+          ) : (
+            <div className="flex items-center">
+              <span className="bg-amber-100 text-amber-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                Custom date range
+              </span>
+              <button onClick={resetToToday} className="ml-2 text-blue-600 hover:text-blue-800 flex items-center">
+                <ArrowPathIcon className="h-3 w-3 mr-1" />
+                Reset to today
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ───── Advanced Filters ───── */}
@@ -276,6 +303,22 @@ const AdminPanel: React.FC = () => {
                     <option value="partial">Partially Paid</option>
                   </select>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Records Per Page</label>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value))
+                      // Reset and refetch when page size changes
+                      fetchPatients()
+                    }}
+                    className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-colors"
+                  >
+                    <option value={25}>25 records</option>
+                    <option value={50}>50 records</option>
+                    <option value={100}>100 records</option>
+                  </select>
+                </div>
               </div>
             </div>
           )}
@@ -283,52 +326,68 @@ const AdminPanel: React.FC = () => {
 
         {/* ───── Summary Cards ───── */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          {/* Net Billing */}
-          <SummaryCard
-            label="Net Billing"
-            value={summary.netBilling}
-            Icon={ScaleIcon}
-            iconBg="bg-green-100"
-            iconColor="text-green-600"
-          />
-          {/* Total Discount */}
-          <SummaryCard
-            label="Total Discount"
-            value={summary.totalDiscount}
-            Icon={TagIcon}
-            iconBg="bg-purple-100"
-            iconColor="text-purple-600"
-          />
-          {/* Amount Paid (with breakdown) */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <div className="flex flex-col items-start">
-              <div className="flex items-center justify-between w-full">
-                <SummaryHeader label="Amount Paid" Icon={CurrencyDollarIcon} />
-                <p className="text-2xl font-semibold text-gray-900">₹{summary.totalPaid.toFixed(2)}</p>
-              </div>
-              <div className="mt-2 text-sm text-gray-700">
-                <p>Online: ₹{summary.totalOnline.toFixed(2)}</p>
-                <p>Cash:&nbsp;&nbsp; ₹{summary.totalCash.toFixed(2)}</p>
-              </div>
+          {isLoading && filteredPatients.length === 0 ? (
+            <div className="col-span-1 md:col-span-4 bg-white p-6 rounded-xl shadow-sm border border-gray-100 text-center">
+              <p className="text-gray-500">Loading patient data...</p>
             </div>
-          </div>
-          {/* Outstanding */}
-          <SummaryCard
-            label="Outstanding"
-            value={summary.totalRemaining}
-            Icon={ReceiptRefundIcon}
-            iconBg="bg-red-100"
-            iconColor="text-red-600"
-          />
+          ) : (
+            <>
+              {/* Net Billing */}
+              <SummaryCard
+                label="Net Billing"
+                value={summary.netBilling}
+                Icon={ScaleIcon}
+                iconBg="bg-green-100"
+                iconColor="text-green-600"
+              />
+              {/* Total Discount */}
+              <SummaryCard
+                label="Total Discount"
+                value={summary.totalDiscount}
+                Icon={TagIcon}
+                iconBg="bg-purple-100"
+                iconColor="text-purple-600"
+              />
+              {/* Amount Paid (with breakdown) */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <div className="flex flex-col items-start">
+                  <div className="flex items-center justify-between w-full">
+                    <SummaryHeader label="Amount Paid" Icon={CurrencyDollarIcon} />
+                    <p className="text-2xl font-semibold text-gray-900">₹{summary.totalPaid.toFixed(2)}</p>
+                  </div>
+                  <div className="mt-2 text-sm text-gray-700">
+                    <p>Online: ₹{summary.totalOnline.toFixed(2)}</p>
+                    <p>Cash:&nbsp;&nbsp; ₹{summary.totalCash.toFixed(2)}</p>
+                  </div>
+                </div>
+              </div>
+              {/* Remaining Amount */}
+              <SummaryCard
+                label="Remaining Amount"
+                value={summary.totalRemaining}
+                Icon={ReceiptRefundIcon}
+                iconBg="bg-red-100"
+                iconColor="text-red-600"
+              />
+            </>
+          )}
         </div>
 
         {/* ───── Patients Table ───── */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
             <h3 className="text-base font-semibold text-gray-900">Patient Records</h3>
-            <p className="text-sm text-gray-500">
-              {filteredPatients.length} {filteredPatients.length === 1 ? "patient" : "patients"} found
-            </p>
+            <div className="flex items-center">
+              {isLoading && (
+                <span className="inline-flex items-center mr-3 text-sm text-gray-500">
+                  <ArrowPathIcon className="h-4 w-4 mr-1 animate-spin" />
+                  Loading...
+                </span>
+              )}
+              <p className="text-sm text-gray-500">
+                {filteredPatients.length} {filteredPatients.length === 1 ? "patient" : "patients"} found
+              </p>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -383,13 +442,26 @@ const AdminPanel: React.FC = () => {
                 ) : (
                   <tr>
                     <td colSpan={9} className="px-6 py-8 text-center text-gray-500">
-                      No patients found matching your filters.
+                      {isLoading ? "Loading patient data..." : "No patients found matching your filters."}
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
+
+          {/* Load More Button */}
+          {hasMore && (
+            <div className="flex justify-center p-4 border-t border-gray-100">
+              <button
+                onClick={loadMorePatients}
+                disabled={isLoading}
+                className="px-4 py-2 bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 transition-colors disabled:opacity-50"
+              >
+                {isLoading ? "Loading..." : "Load More Patients"}
+              </button>
+            </div>
+          )}
         </div>
       </main>
 

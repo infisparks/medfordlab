@@ -1,8 +1,21 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useState, useMemo } from "react"
-import { ref, get } from "firebase/database"
+import { useEffect, useState, useMemo, useCallback } from "react"
+import {
+  ref,
+  query,
+  orderByChild,
+  equalTo,
+  startAt,
+  endAt,
+  limitToFirst,
+  onChildAdded,
+  onChildChanged,
+  onChildRemoved,
+  get,
+  off,
+} from "firebase/database"
 import { database } from "../../firebase"
 import Link from "next/link"
 import {
@@ -13,6 +26,7 @@ import {
   ClipboardDocumentListIcon,
   FunnelIcon,
   ExclamationTriangleIcon,
+  ArrowPathIcon,
 } from "@heroicons/react/24/outline"
 
 /* ─────────────────── Types ─────────────────── */
@@ -63,15 +77,19 @@ const DeletedAppointments: React.FC = () => {
   const [toDate, setToDate] = useState("")
   const [isFilterOpen, setIsFilterOpen] = useState(false)
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [pageSize, setPageSize] = useState(50)
+  const [hasMore, setHasMore] = useState(true)
+  const [lastKey, setLastKey] = useState<string | null>(null)
 
   /* ─────────────────── Initialize date filters ─────────────────── */
   useEffect(() => {
-    // Set default date range to last 3 months
+    // Set default date range to last month
     const today = new Date()
-    const threeMonthsAgo = new Date(today)
-    threeMonthsAgo.setMonth(today.getMonth() - 3)
+    const oneMonthAgo = new Date(today)
+    oneMonthAgo.setMonth(today.getMonth() - 1)
 
-    setFromDate(formatDate(threeMonthsAgo))
+    setFromDate(formatDate(oneMonthAgo))
     setToDate(formatDate(today))
   }, [])
 
@@ -79,56 +97,196 @@ const DeletedAppointments: React.FC = () => {
     return date.toISOString().split("T")[0]
   }
 
-  /* ─────────────────── Derived ─────────────────── */
-  const filteredPatients = useMemo(() => {
-    return patients.filter((patient) => {
-      // Only include deleted patients
-      if (!patient.deleted) return false
+  /* ─────────────────── Data fetching ─────────────────── */
+  const fetchDeletedPatients = useCallback(() => {
+    setIsLoading(true)
 
-      // Search filter
-      const matchesSearch =
-        patient.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (patient.contact && patient.contact.includes(searchTerm))
+    // Reset pagination
+    setLastKey(null)
 
-      // Date range filter
-      let matchesDate = true
-      // Use deletedAt date for filtering if available, otherwise fall back to registration date
-      const patientDate = patient.deletedAt
-        ? patient.deletedAt.split("T")[0]
-        : patient.registrationDate || (patient.createdAt ? patient.createdAt.split("T")[0] : "")
+    // Create a query that only gets deleted patients within date range
+    const patientsRef = ref(database, "patients")
+    
+    // First, filter by deleted=true
+    const deletedQuery = query(
+      patientsRef,
+      orderByChild("deleted"),
+      equalTo(true),
+      limitToFirst(pageSize)
+    )
 
-      if (fromDate && patientDate) {
-        matchesDate = matchesDate && patientDate >= fromDate
+    // Initialize listeners array to clean up later
+    const listeners: any[] = []
+
+    // Set up listener for real-time updates
+    const childAddedListener = onChildAdded(deletedQuery, (snapshot) => {
+      const patientId = snapshot.key
+      const patientData = snapshot.val()
+
+      if (patientId && patientData) {
+        // Apply date filtering client-side
+        const deletionDate = patientData.deletedAt ? patientData.deletedAt.split("T")[0] : ""
+        
+        // Skip if outside date range
+        if (
+          (fromDate && deletionDate && deletionDate < fromDate) ||
+          (toDate && deletionDate && deletionDate > toDate)
+        ) {
+          return
+        }
+
+        const patient: Patient = {
+          id: patientId,
+          ...patientData,
+          age: Number(patientData.age),
+          discountAmount: Number(patientData.discountAmount) || 0,
+        }
+
+        // Update state
+        setPatients(prevPatients => {
+          // Check if patient already exists
+          const exists = prevPatients.some(p => p.id === patientId)
+          if (exists) {
+            return prevPatients.map(p => p.id === patientId ? patient : p)
+          } else {
+            return [...prevPatients, patient]
+          }
+        })
+
+        // Track last key for pagination
+        if (!lastKey || patientId > lastKey) {
+          setLastKey(patientId)
+        }
       }
-
-      if (toDate && patientDate) {
-        matchesDate = matchesDate && patientDate <= toDate
-      }
-
-      return matchesSearch && matchesDate
     })
-  }, [patients, searchTerm, fromDate, toDate])
+    listeners.push({ event: "child_added", listener: childAddedListener })
+
+    const childChangedListener = onChildChanged(deletedQuery, (snapshot) => {
+      const patientId = snapshot.key
+      const patientData = snapshot.val()
+
+      if (patientId && patientData) {
+        const patient: Patient = {
+          id: patientId,
+          ...patientData,
+          age: Number(patientData.age),
+          discountAmount: Number(patientData.discountAmount) || 0,
+        }
+
+        setPatients(prevPatients => 
+          prevPatients.map(p => p.id === patientId ? patient : p)
+        )
+      }
+    })
+    listeners.push({ event: "child_changed", listener: childChangedListener })
+
+    const childRemovedListener = onChildRemoved(deletedQuery, (snapshot) => {
+      const patientId = snapshot.key
+
+      if (patientId) {
+        setPatients(prevPatients => 
+          prevPatients.filter(p => p.id !== patientId)
+        )
+      }
+    })
+    listeners.push({ event: "child_removed", listener: childRemovedListener })
+
+    // Check if we have more data to load
+    get(deletedQuery)
+      .then((snapshot) => {
+        setIsLoading(false)
+        setHasMore(snapshot.size >= pageSize)
+      })
+      .catch((err) => {
+        console.error("Error checking pagination:", err)
+        setIsLoading(false)
+      })
+
+    // Cleanup function
+    return () => {
+      listeners.forEach(({ event, listener }) => {
+        off(deletedQuery, event, listener)
+      })
+    }
+  }, [fromDate, toDate, pageSize])
+
+  // Load more data for pagination
+  const loadMoreDeletedPatients = useCallback(() => {
+    if (!lastKey || !hasMore) return
+
+    setIsLoading(true)
+
+    // Query for more data, starting after the last key
+    const patientsRef = ref(database, "patients")
+    const moreDeletedQuery = query(
+      patientsRef,
+      orderByChild("deleted"),
+      equalTo(true),
+      limitToFirst(pageSize)
+    )
+
+    get(moreDeletedQuery)
+      .then((snapshot) => {
+        const newPatients: Patient[] = []
+        let newLastKey = lastKey
+        let count = 0
+
+        snapshot.forEach((childSnapshot) => {
+          const patientId = childSnapshot.key
+          const patientData = childSnapshot.val()
+
+          // Skip patients we already have
+          if (patientId && patientId > lastKey && patientData) {
+            // Apply date filtering
+            const deletionDate = patientData.deletedAt ? patientData.deletedAt.split("T")[0] : ""
+            
+            if (
+              (!fromDate || !deletionDate || deletionDate >= fromDate) &&
+              (!toDate || !deletionDate || deletionDate <= toDate)
+            ) {
+              const patient: Patient = {
+                id: patientId,
+                ...patientData,
+                age: Number(patientData.age),
+                discountAmount: Number(patientData.discountAmount) || 0,
+              }
+              
+              newPatients.push(patient)
+              count++
+
+              if (!newLastKey || patientId > newLastKey) {
+                newLastKey = patientId
+              }
+            }
+          }
+        })
+
+        setPatients(prevPatients => [...prevPatients, ...newPatients])
+        setLastKey(newLastKey)
+        setHasMore(count >= pageSize)
+        setIsLoading(false)
+      })
+      .catch((err) => {
+        console.error("Error loading more deleted patients:", err)
+        setIsLoading(false)
+      })
+  }, [lastKey, hasMore, fromDate, toDate, pageSize])
 
   /* ─────────────────── Effects ─────────────────── */
   useEffect(() => {
-    const patientsRef = ref(database, "patients")
+    const cleanup = fetchDeletedPatients()
+    return cleanup
+  }, [fetchDeletedPatients])
 
-    get(patientsRef)
-      .then((snapshot) => {
-        if (snapshot.exists()) {
-          const dataObj = snapshot.val()
-          /* Convert the object keyed by Firebase IDs into an array */
-          const dataArray: Patient[] = Object.keys(dataObj).map((key) => ({
-            id: key,
-            ...dataObj[key],
-            age: Number(dataObj[key].age),
-            discountAmount: Number(dataObj[key].discountAmount) || 0,
-          }))
-          setPatients(dataArray)
-        }
-      })
-      .catch((err) => console.error("Error fetching patients:", err))
-  }, [])
+  /* ─────────────────── Derived values ─────────────────── */
+  const filteredPatients = useMemo(() => {
+    return patients.filter((patient) => {
+      // Search filter - match name or contact
+      return searchTerm === "" || 
+        patient.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (patient.contact && patient.contact.includes(searchTerm))
+    })
+  }, [patients, searchTerm])
 
   /* ─────────────────── Render ─────────────────── */
   return (
@@ -192,6 +350,16 @@ const DeletedAppointments: React.FC = () => {
           </div>
         </div>
 
+        <div className="flex justify-end mb-4">
+          <button
+            onClick={() => fetchDeletedPatients()}
+            className="flex items-center space-x-1 text-sm text-red-600 hover:text-red-800"
+          >
+            <ArrowPathIcon className="h-4 w-4" />
+            <span>Apply Date Filters</span>
+          </button>
+        </div>
+
         {/* ───── Advanced Filters ───── */}
         <div className="mb-8">
           <button
@@ -205,6 +373,23 @@ const DeletedAppointments: React.FC = () => {
           {isFilterOpen && (
             <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-100 mb-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Records Per Page</label>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value))
+                      // Reset and refetch when page size changes
+                      setLastKey(null)
+                      fetchDeletedPatients()
+                    }}
+                    className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-red-500 focus:ring-2 focus:ring-red-200 transition-colors"
+                  >
+                    <option value={25}>25 records</option>
+                    <option value={50}>50 records</option>
+                    <option value={100}>100 records</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Deletion Date Range</label>
                   <p className="text-sm text-gray-500">Filter by when appointments were deleted from the system</p>
@@ -230,9 +415,17 @@ const DeletedAppointments: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
             <h3 className="text-base font-semibold text-gray-900">Deleted Appointment Records</h3>
-            <p className="text-sm text-gray-500">
-              {filteredPatients.length} {filteredPatients.length === 1 ? "record" : "records"} found
-            </p>
+            <div className="flex items-center">
+              {isLoading && (
+                <span className="inline-flex items-center mr-3 text-sm text-gray-500">
+                  <ArrowPathIcon className="h-4 w-4 mr-1 animate-spin" />
+                  Loading...
+                </span>
+              )}
+              <p className="text-sm text-gray-500">
+                {filteredPatients.length} {filteredPatients.length === 1 ? "record" : "records"} found
+              </p>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -279,13 +472,26 @@ const DeletedAppointments: React.FC = () => {
                 ) : (
                   <tr>
                     <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
-                      No deleted appointments found matching your filters.
+                      {isLoading ? "Loading deleted appointments..." : "No deleted appointments found matching your filters."}
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
+
+          {/* Load More Button */}
+          {hasMore && filteredPatients.length > 0 && (
+            <div className="flex justify-center p-4 border-t border-gray-100">
+              <button
+                onClick={loadMoreDeletedPatients}
+                disabled={isLoading}
+                className="px-4 py-2 bg-red-50 text-red-600 rounded-md hover:bg-red-100 transition-colors disabled:opacity-50"
+              >
+                {isLoading ? "Loading..." : "Load More Records"}
+              </button>
+            </div>
+          )}
         </div>
       </main>
 
