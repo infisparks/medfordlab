@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useMemo, useCallback } from "react"
+import React, { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react"
 import Link from "next/link"
 import { database, auth } from "../firebase"
 import { toWords } from "number-to-words"
@@ -21,7 +21,6 @@ import { ref as dbRef, onValue as onValueDb } from "firebase/database"
 import { onAuthStateChanged } from "firebase/auth"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
-import FakeBill from "./component/FakeBill"
 import {
   UserIcon,
   ChartBarIcon,
@@ -45,6 +44,9 @@ import {
   CreditCardIcon,
 } from "@heroicons/react/24/outline"
 import letterhead from "../../public/bill.png"
+
+// Lazy load the FakeBill component to reduce initial bundle size
+const FakeBill = lazy(() => import("./component/FakeBill"))
 
 /* --------------------  Types  -------------------- */
 interface BloodTest {
@@ -149,6 +151,7 @@ export default function Dashboard() {
   const [selectAll, setSelectAll] = useState(false)
   const [showCheckboxes, setShowCheckboxes] = useState<boolean>(false)
   const [isFiltersExpanded, setIsFiltersExpanded] = useState<boolean>(false)
+  const [isFilterContentMounted, setIsFilterContentMounted] = useState<boolean>(false)
 
   // Pagination state
   const [isLoading, setIsLoading] = useState(false)
@@ -157,7 +160,7 @@ export default function Dashboard() {
   const [initialLoadComplete, setInitialLoadComplete] = useState(false)
 
   // Date range for filtering
-  const todayStr = new Date().toLocaleDateString("en-CA");
+  const todayStr = new Date().toLocaleDateString("en-CA")
   const [startDate, setStartDate] = useState<string>(todayStr)
   const [endDate, setEndDate] = useState<string>(todayStr)
 
@@ -172,8 +175,21 @@ export default function Dashboard() {
   const [deleteRequestModalPatient, setDeleteRequestModalPatient] = useState<Patient | null>(null)
   const [tempDiscount, setTempDiscount] = useState<string>("")
 
+  // Refs for optimization
+  const filterContentRef = useRef<HTMLDivElement>(null)
+
   /* --- helpers --- */
   const getRank = (p: Patient) => (!p.sampleCollectedAt ? 1 : isAllTestsComplete(p) ? 3 : 2)
+
+  // Pre-mount filter content after initial render to prevent lag
+  useEffect(() => {
+    // Wait for initial render to complete
+    const timer = setTimeout(() => {
+      setIsFilterContentMounted(true)
+    }, 500)
+
+    return () => clearTimeout(timer)
+  }, [])
 
   // Enable offline persistence
   useEffect(() => {
@@ -489,9 +505,9 @@ export default function Dashboard() {
       if (!matchesSearch) return false
 
       // 3. Date-range filter (registration date)
-      const regDateStr = new Date(p.createdAt).toLocaleDateString("en-CA"); // YYYY-MM-DD
-      if (startDate && regDateStr < startDate) return false;
-      if (endDate   && regDateStr > endDate)   return false;
+      const regDateStr = new Date(p.createdAt).toLocaleDateString("en-CA") // YYYY-MM-DD
+      if (startDate && regDateStr < startDate) return false
+      if (endDate && regDateStr > endDate) return false
 
       // 4. Status filter
       const sampleCollected = !!p.sampleCollectedAt
@@ -592,6 +608,20 @@ export default function Dashboard() {
       prev.includes(patientId) ? prev.filter((id) => id !== patientId) : [...prev, patientId],
     )
   }
+
+  // Optimized filter toggle handler
+  const handleToggleFilters = useCallback(() => {
+    // If filters are not expanded and content is not mounted yet, mount it first
+    if (!isFiltersExpanded && !isFilterContentMounted) {
+      setIsFilterContentMounted(true)
+      // Small delay to ensure content is mounted before animation
+      setTimeout(() => {
+        setIsFiltersExpanded(true)
+      }, 50)
+    } else {
+      setIsFiltersExpanded(!isFiltersExpanded)
+    }
+  }, [isFiltersExpanded, isFilterContentMounted])
 
   /* --- download bill (real) --- */
   const handleDownloadBill = () => {
@@ -1075,7 +1105,7 @@ export default function Dashboard() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <div
                 className="p-4 border-b border-gray-100 flex justify-between items-center cursor-pointer"
-                onClick={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                onClick={handleToggleFilters}
               >
                 <h2 className="text-base font-semibold flex items-center text-gray-800">
                   <AdjustmentsHorizontalIcon className="h-4 w-4 mr-2 text-teal-600" />
@@ -1088,66 +1118,63 @@ export default function Dashboard() {
                 )}
               </div>
 
-              <AnimatePresence>
-                {isFiltersExpanded && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.3 }}
-                  >
-                    <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <MagnifyingGlassIcon className="h-4 w-4 text-gray-400" />
-                        </div>
-                        <input
-                          type="text"
-                          placeholder="Search name or phone..."
-                          value={searchTerm}
-                          onChange={(e) => setSearchTerm(e.target.value)}
-                          className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                        />
+              {/* Pre-mount filter content but keep it hidden */}
+              <div
+                ref={filterContentRef}
+                className={`${isFiltersExpanded ? "block" : "hidden"} transition-all duration-300`}
+              >
+                {isFilterContentMounted && (
+                  <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <MagnifyingGlassIcon className="h-4 w-4 text-gray-400" />
                       </div>
-
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <CalendarIcon className="h-4 w-4 text-gray-400" />
-                        </div>
-                        <input
-                          type="date"
-                          value={startDate}
-                          onChange={(e) => setStartDate(e.target.value)}
-                          className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                        />
-                      </div>
-
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <CalendarIcon className="h-4 w-4 text-gray-400" />
-                        </div>
-                        <input
-                          type="date"
-                          value={endDate}
-                          onChange={(e) => setEndDate(e.target.value)}
-                          className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                        />
-                      </div>
-
-                      <select
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value)}
-                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
-                      >
-                        <option value="all">All Statuses</option>
-                        <option value="notCollected">Not Collected</option>
-                        <option value="sampleCollected">Pending</option>
-                        <option value="completed">Completed</option>
-                      </select>
+                      <input
+                        type="text"
+                        placeholder="Search name or phone..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                      />
                     </div>
-                  </motion.div>
+
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <CalendarIcon className="h-4 w-4 text-gray-400" />
+                      </div>
+                      <input
+                        type="date"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                      />
+                    </div>
+
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <CalendarIcon className="h-4 w-4 text-gray-400" />
+                      </div>
+                      <input
+                        type="date"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="pl-10 w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                      />
+                    </div>
+
+                    <select
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
+                      className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="notCollected">Not Collected</option>
+                      <option value="sampleCollected">Pending</option>
+                      <option value="completed">Completed</option>
+                    </select>
+                  </div>
                 )}
-              </AnimatePresence>
+              </div>
             </div>
           </motion.div>
 
@@ -1896,8 +1923,20 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* Fake Bill modal */}
-      {fakeBillPatient && <FakeBill patient={fakeBillPatient} onClose={() => setFakeBillPatient(null)} />}
+      {/* Fake Bill modal - Lazy loaded */}
+      {fakeBillPatient && (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+              <div className="bg-white p-8 rounded-lg shadow-lg">
+                <p className="text-gray-700">Loading bill generator...</p>
+              </div>
+            </div>
+          }
+        >
+          <FakeBill patient={fakeBillPatient} onClose={() => setFakeBillPatient(null)} />
+        </Suspense>
+      )}
     </div>
   )
 }
