@@ -753,7 +753,7 @@ useEffect(() => {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="MEDFORD HOSPITAL">MEDFORD HOSPITAL</SelectItem>
-                          <SelectItem value="Other">Other</SelectItem>
+                          <SelectItem value="Gautami Medford NX Hospital">Gautami Medford NX Hospital</SelectItem>
                         </SelectContent>
                       </Select>
                       <BuildingOfficeIcon className="h-3.5 w-3.5 absolute left-2 top-[7px] text-gray-400 z-10" />
