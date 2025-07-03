@@ -510,6 +510,7 @@ await update(ref(database, `patients/${patientIdQuery}`), {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="MEDFORD HOSPITAL">MEDFORD HOSPITAL</SelectItem>
+                          <SelectItem value="Gautami Medford NX Hospital">Gautami Medford NX Hospital</SelectItem>
                           <SelectItem value="Other">Other</SelectItem>
                         </SelectContent>
                       </Select>
