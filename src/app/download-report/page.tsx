@@ -1072,29 +1072,46 @@ function DownloadReport() {
     }
 
     const addStamp = async () => {
-      const sw = 40,
-        sh = 30
-      const sx = w - left - sw // right-aligned
-      const cx = (w - sw) / 2 // centered
-      const sy = h - sh - 23
-
+      const targetWidth = 40; // mm, fixed width for both stamps
+    
       try {
-        // load both as compressed JPEG
-        const img1 = await loadImageAsCompressedJPEG(stamp2.src, 0.5)
-        const img2 = await loadImageAsCompressedJPEG(stamp.src, 0.5)
-
-        // bottom-right stamp
-        doc.addImage(img1, "JPEG", sx, sy, sw, sh)
-        // centered stamp
-        doc.addImage(img2, "JPEG", cx, sy, sw, sh)
+        // Load image elements to get their natural sizes
+        const imgElem1 = new window.Image();
+        imgElem1.src = stamp2.src;
+        await new Promise((res) => (imgElem1.onload = res));
+        const aspect1 = imgElem1.naturalHeight / imgElem1.naturalWidth;
+        const sh1 = targetWidth * aspect1;
+    
+        const imgElem2 = new window.Image();
+        imgElem2.src = stamp.src;
+        await new Promise((res) => (imgElem2.onload = res));
+        const aspect2 = imgElem2.naturalHeight / imgElem2.naturalWidth;
+        const sh2 = targetWidth * aspect2;
+    
+        // Compressed images
+        const img1 = await loadImageAsCompressedJPEG(stamp2.src, 0.5);
+        const img2 = await loadImageAsCompressedJPEG(stamp.src, 0.5);
+    
+        // Define BOTTOM Y position for stamps (e.g., 23mm from bottom)
+        const bottomMargin = 23; // mm
+        const sy1 = h - bottomMargin - sh1; // stamp2 (right), aligns bottom at (h - bottomMargin)
+        const sy2 = h - bottomMargin - sh2; // stamp (centered), aligns bottom at (h - bottomMargin)
+    
+        const sx = w - left - targetWidth; // right-aligned
+        const cx = (w - targetWidth) / 2; // centered
+    
+        // Draw both images
+        doc.addImage(img1, "JPEG", sx, sy1, targetWidth, sh1); // Right
+        doc.addImage(img2, "JPEG", cx, sy2, targetWidth, sh2); // Centered
+    
+        // "Printed by" text: 5mm above the bottom margin
+        doc.setFont("helvetica", "normal").setFontSize(10);
+        doc.text(`Printed by ${printedBy}`, left, h - bottomMargin - 5);
       } catch (e) {
-        console.error("Stamp load error:", e)
+        console.error("Stamp load error:", e);
       }
-
-      doc.setFont("helvetica", "normal").setFontSize(10)
-      doc.text(`Printed by ${printedBy}`, left, sy + sh)
-    }
-
+    };
+    
     const headerY = (reportedOnRaw?: string) => {
       const gap = 7
       let y = 50
