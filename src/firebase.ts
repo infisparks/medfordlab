@@ -9,7 +9,7 @@ const firebaseConfig = {
   databaseURL: "https://labmedford-default-rtdb.firebaseio.com",
   projectId: "labmedford",
   storageBucket: "labmedford.firebasestorage.app",
-  messagingSenderId: "787673985451",
+  messagingSenderId: "787673985451", 
   appId: "1:787673985451:web:ac407eb19cfbe3e54022ee",
   measurementId: "G-B5WWS1F1CR"
 };
