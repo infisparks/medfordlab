@@ -517,7 +517,7 @@ useEffect(() => {
         `Thank you for choosing us.\nRegards,\nMedBliss`
 
       try {
-        const r = await fetch("https://wa.medblisss.com/send-text", {
+        const r = await fetch("https://a.infispark.in/send-text", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
