@@ -426,7 +426,7 @@ const sendReportToWhatsApp = async (patientData: PatientData, pdfBlob: Blob): Pr
       caption: `Dear ${patientData.name},\n\nYour blood test report is now available:\n${url}\n\nRegards,\nYour Lab Team`,
     }
 
-    const res = await fetch("https://wa.medblisss.com/send-image-url", {
+    const res = await fetch("https://a.infispark.in/send-image-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
