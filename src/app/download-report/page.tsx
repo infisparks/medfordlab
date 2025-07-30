@@ -1102,7 +1102,7 @@ function DownloadReport() {
     
         // Draw both images
         doc.addImage(img1, "JPEG", sx, sy1, targetWidth, sh1); // Right
-        doc.addImage(img2, "JPEG", cx, sy2, targetWidth, sh2); // Centered
+        // doc.addImage(img2, "JPEG", cx, sy2, targetWidth, sh2); // Centered
     
         // "Printed by" text: 5mm above the bottom margin
         doc.setFont("helvetica", "normal").setFontSize(10);
